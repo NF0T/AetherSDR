@@ -80,7 +80,7 @@ sudo apt install qt6-base-dev qt6-multimedia-dev cmake ninja-build pkg-config
 ### Configure & build
 
 ```bash
-git clone https://github.com/yourname/AetherSDR.git
+git clone https://github.com/ten9876/AetherSDR.git
 cd AetherSDR
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
