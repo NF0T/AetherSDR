@@ -23,6 +23,23 @@ static QFrame* hLine()
     return f;
 }
 
+// Gradient title bar that heads each applet section (matches SmartSDR style).
+static QWidget* appletTitleBar(const QString& text)
+{
+    auto* bar = new QWidget;
+    bar->setFixedHeight(16);
+    bar->setStyleSheet(
+        "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+        "stop:0 #3a4a5a, stop:0.5 #2a3a4a, stop:1 #1a2a38); "
+        "border-bottom: 1px solid #0a1a28; }");
+
+    auto* lbl = new QLabel(text, bar);
+    lbl->setStyleSheet("QLabel { background: transparent; color: #8aa8c0; "
+                       "font-size: 10px; font-weight: bold; }");
+    lbl->setGeometry(6, 1, 200, 14);
+    return bar;
+}
+
 // Small checkable flat button used throughout the applet.
 static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
 {
@@ -69,9 +86,17 @@ RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
 
 void RxApplet::buildUI()
 {
-    auto* root = new QVBoxLayout(this);
+    // Outer layout: title bar flush to edges, then padded content below.
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+    outer->addWidget(appletTitleBar("RX"));
+
+    auto* inner = new QWidget;
+    auto* root = new QVBoxLayout(inner);
     root->setContentsMargins(4, 4, 4, 4);
     root->setSpacing(3);
+    outer->addWidget(inner);
 
     // ── Header: slice badge | lock | RX ant | TX ant | filter width | QSK ──
     {
