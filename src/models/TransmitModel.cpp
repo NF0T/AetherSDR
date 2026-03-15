@@ -183,6 +183,35 @@ void TransmitModel::applyAtuStatus(const QMap<QString, QString>& kvs)
     if (changed) emit atuStateChanged();
 }
 
+void TransmitModel::applyApdStatus(const QMap<QString, QString>& kvs)
+{
+    bool changed = false;
+
+    if (kvs.contains("enable")) {
+        bool v = kvs["enable"] == "1";
+        if (m_apdEnabled != v) { m_apdEnabled = v; changed = true; }
+    }
+    if (kvs.contains("configurable")) {
+        bool v = kvs["configurable"] == "1";
+        if (m_apdConfigurable != v) { m_apdConfigurable = v; changed = true; }
+    }
+    if (kvs.contains("equalizer_active")) {
+        bool v = kvs["equalizer_active"] == "1";
+        if (m_apdEqActive != v) { m_apdEqActive = v; changed = true; }
+    }
+
+    if (changed) emit apdStateChanged();
+}
+
+void TransmitModel::setApdEnabled(bool on)
+{
+    if (m_apdEnabled != on) {
+        m_apdEnabled = on;
+        emit apdStateChanged();
+    }
+    emit commandReady(QString("apd enable=%1").arg(on ? 1 : 0));
+}
+
 void TransmitModel::setProfileList(const QStringList& profiles)
 {
     if (m_profileList != profiles) {

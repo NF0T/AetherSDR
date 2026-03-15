@@ -111,6 +111,10 @@ MainWindow::MainWindow(QWidget* parent)
             spectrum(), &SpectrumWidget::setFrequencyRange);
     connect(&m_radioModel, &RadioModel::panadapterLevelChanged,
             spectrum(), &SpectrumWidget::setDbmRange);
+    connect(spectrum(), &SpectrumWidget::bandwidthChangeRequested,
+            &m_radioModel, &RadioModel::setPanBandwidth);
+    connect(spectrum(), &SpectrumWidget::centerChangeRequested,
+            &m_radioModel, &RadioModel::setPanCenter);
 
     // ── Click-to-tune on the spectrum ─────────────────────────────────────
     connect(spectrum(), &SpectrumWidget::frequencyClicked,

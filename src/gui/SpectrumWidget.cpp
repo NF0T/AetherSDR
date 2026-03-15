@@ -5,6 +5,7 @@
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QSettings>
 #include <cmath>
 #include <cstring>
 
@@ -18,6 +19,12 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setAutoFillBackground(false);
     setAttribute(Qt::WA_OpaquePaintEvent);
     setCursor(Qt::CrossCursor);
+    setMouseTracking(true);
+
+    // Restore saved FFT/waterfall split ratio
+    QSettings settings;
+    m_spectrumFrac = std::clamp(
+        settings.value("spectrum/splitRatio", 0.40).toFloat(), 0.10f, 0.90f);
 }
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
@@ -96,22 +103,162 @@ static double snapToStep(double mhz, int stepHz)
 
 void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 {
-    // Skip clicks on the freq scale bar between spectrum and waterfall.
-    const int contentH = height() - FREQ_SCALE_H;
-    const int specH = static_cast<int>(contentH * SPECTRUM_FRAC);
-    if (ev->position().y() >= specH && ev->position().y() < specH + FREQ_SCALE_H) return;
+    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
+    const int y = static_cast<int>(ev->position().y());
 
+    // Click on the divider bar → start split drag
+    if (y >= specH && y < specH + DIVIDER_H) {
+        m_draggingDivider = true;
+        setCursor(Qt::SplitVCursor);
+        ev->accept();
+        return;
+    }
+
+    // Click on the freq scale bar → start bandwidth drag
+    const int scaleY = specH + DIVIDER_H;
+    if (y >= scaleY && y < scaleY + FREQ_SCALE_H) {
+        m_draggingBandwidth = true;
+        m_bwDragStartX = static_cast<int>(ev->position().x());
+        m_bwDragStartBw = m_bandwidthMhz;
+        setCursor(Qt::SizeHorCursor);
+        ev->accept();
+        return;
+    }
+
+    // Click in waterfall area → start pan drag (tune on double-click only)
+    const int wfY = scaleY + FREQ_SCALE_H;
+    if (y >= wfY) {
+        m_draggingPan = true;
+        m_panDragStartX = static_cast<int>(ev->position().x());
+        m_panDragStartCenter = m_centerMhz;
+        setCursor(Qt::ClosedHandCursor);
+        ev->accept();
+        return;
+    }
+
+    // Click in FFT area → tune immediately
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
     const double rawMhz = startMhz + (ev->position().x() / width()) * m_bandwidthMhz;
     emit frequencyClicked(snapToStep(rawMhz, m_stepHz));
 }
 
+void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
+{
+    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    const int y = static_cast<int>(ev->position().y());
+
+    if (m_draggingDivider) {
+        // Clamp the divider position: 10%–90% of content area
+        float frac = static_cast<float>(y) / contentH;
+        m_spectrumFrac = std::clamp(frac, 0.10f, 0.90f);
+        // Rebuild waterfall image for new size
+        const int wfHeight = static_cast<int>(contentH * (1.0f - m_spectrumFrac));
+        if (wfHeight > 0 && width() > 0) {
+            QImage newWf(width(), wfHeight, QImage::Format_RGB32);
+            newWf.fill(Qt::black);
+            if (!m_waterfall.isNull())
+                newWf = m_waterfall.scaled(width(), wfHeight, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+            m_waterfall = std::move(newWf);
+        }
+        update();
+        ev->accept();
+        return;
+    }
+
+    if (m_draggingBandwidth) {
+        const int dx = static_cast<int>(ev->position().x()) - m_bwDragStartX;
+        // Drag right = zoom in (narrower BW), drag left = zoom out (wider BW)
+        // 4x multiplier: dragging 1/4 of widget width doubles/halves bandwidth
+        const double scale = std::pow(2.0, static_cast<double>(-dx) / (width() / 4.0));
+        const double newBw = std::clamp(m_bwDragStartBw * scale, 0.004, 14.0);
+        // Update local display immediately for responsive feel
+        m_bandwidthMhz = newBw;
+        update();
+        emit bandwidthChangeRequested(newBw);
+        ev->accept();
+        return;
+    }
+
+    if (m_draggingPan) {
+        const int dx = static_cast<int>(ev->position().x()) - m_panDragStartX;
+        // Dragging right moves the view right → center shifts left
+        const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
+        const double newCenter = m_panDragStartCenter + deltaMhz;
+        m_centerMhz = newCenter;
+        update();
+        emit centerChangeRequested(newCenter);
+        ev->accept();
+        return;
+    }
+
+    // Update cursor based on hover position
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
+    const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+    if (y >= specH && y < specH + DIVIDER_H)
+        setCursor(Qt::SplitVCursor);
+    else if (y >= specH + DIVIDER_H && y < wfY)
+        setCursor(Qt::SizeHorCursor);
+    else if (y >= wfY)
+        setCursor(Qt::CrossCursor);
+    else
+        setCursor(Qt::CrossCursor);
+}
+
+void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
+{
+    if (m_draggingDivider) {
+        m_draggingDivider = false;
+        setCursor(Qt::CrossCursor);
+        QSettings settings;
+        settings.setValue("spectrum/splitRatio", static_cast<double>(m_spectrumFrac));
+        ev->accept();
+        return;
+    }
+    if (m_draggingBandwidth) {
+        m_draggingBandwidth = false;
+        setCursor(Qt::CrossCursor);
+        ev->accept();
+        return;
+    }
+    if (m_draggingPan) {
+        m_draggingPan = false;
+        setCursor(Qt::CrossCursor);
+        ev->accept();
+    }
+}
+
+void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
+{
+    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
+    const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+    const int y = static_cast<int>(ev->position().y());
+
+    // Double-click in waterfall → tune to clicked frequency
+    if (y >= wfY) {
+        const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+        const double rawMhz = startMhz + (ev->position().x() / width()) * m_bandwidthMhz;
+        emit frequencyClicked(snapToStep(rawMhz, m_stepHz));
+        ev->accept();
+        return;
+    }
+
+    QWidget::mouseDoubleClickEvent(ev);
+}
+
 void SpectrumWidget::wheelEvent(QWheelEvent* ev)
 {
-    // Skip scroll on the freq scale bar.
-    const int contentH2 = height() - FREQ_SCALE_H;
-    const int specH2 = static_cast<int>(contentH2 * SPECTRUM_FRAC);
-    if (ev->position().y() >= specH2 && ev->position().y() < specH2 + FREQ_SCALE_H) {
+    // Skip scroll on the divider + freq scale bar.
+    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int contentH2 = height() - chromeH;
+    const int specH2 = static_cast<int>(contentH2 * m_spectrumFrac);
+    const int chromeTop = specH2;
+    const int chromeBot = specH2 + chromeH;
+    if (ev->position().y() >= chromeTop && ev->position().y() < chromeBot) {
         ev->ignore();
         return;
     }
@@ -129,8 +276,9 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 {
     QWidget::resizeEvent(ev);
 
-    const int contentH = height() - FREQ_SCALE_H;
-    const int wfHeight = static_cast<int>(contentH * (1.0f - SPECTRUM_FRAC));
+    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    const int wfHeight = static_cast<int>(contentH * (1.0f - m_spectrumFrac));
     if (wfHeight > 0 && width() > 0) {
         QImage newWf(width(), wfHeight, QImage::Format_RGB32);
         newWf.fill(Qt::black);
@@ -203,18 +351,30 @@ void SpectrumWidget::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, false);
 
-    const int contentH = height() - FREQ_SCALE_H;
-    const int specH    = static_cast<int>(contentH * SPECTRUM_FRAC);
+    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    const int specH    = static_cast<int>(contentH * m_spectrumFrac);
     const int wfH      = contentH - specH;
 
-    const QRect specRect (0, 0,                      width(), specH);
-    const QRect scaleRect(0, specH,                  width(), FREQ_SCALE_H);
-    const QRect wfRect   (0, specH + FREQ_SCALE_H,  width(), wfH);
+    const int divY     = specH;
+    const int scaleY   = specH + DIVIDER_H;
+    const int wfY      = scaleY + FREQ_SCALE_H;
+
+    const QRect specRect (0, 0,       width(), specH);
+    const QRect divRect  (0, divY,    width(), DIVIDER_H);
+    const QRect scaleRect(0, scaleY,  width(), FREQ_SCALE_H);
+    const QRect wfRect   (0, wfY,     width(), wfH);
 
     p.fillRect(specRect, QColor(0x0a, 0x0a, 0x14));
 
     drawGrid(p, specRect);
     drawSpectrum(p, specRect);
+
+    // Draggable divider bar
+    p.fillRect(divRect, QColor(0x18, 0x28, 0x38));
+    p.setPen(QColor(m_draggingDivider ? 0x00b4d8 : 0x304050));
+    p.drawLine(divRect.left(), divRect.center().y(), divRect.right(), divRect.center().y());
+
     drawFreqScale(p, scaleRect);
     drawWaterfall(p, wfRect);
     drawSliceOverlay(p, specRect, wfRect);
@@ -239,14 +399,20 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
         p.drawText(2, y + 12, QString("%1").arg(static_cast<int>(dbm)));
     }
 
-    // Vertical frequency grid lines (no labels — scale bar handles those)
+    // Vertical frequency grid lines — adaptive step matching the scale bar
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
     const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
-    const double stepMhz  = 0.050;
-    const double firstLine = std::ceil(startMhz / stepMhz) * stepMhz;
+    const double rawStep  = m_bandwidthMhz / 5.0;
+    const double gridMag  = std::pow(10.0, std::floor(std::log10(rawStep)));
+    const double gridNorm = rawStep / gridMag;
+    double gridStep;
+    if      (gridNorm >= 5.0) gridStep = 5.0 * gridMag;
+    else if (gridNorm >= 2.0) gridStep = 2.0 * gridMag;
+    else                      gridStep = 1.0 * gridMag;
+    const double firstLine = std::ceil(startMhz / gridStep) * gridStep;
 
     p.setPen(QPen(QColor(0x20, 0x30, 0x40), 1, Qt::DotLine));
-    for (double f = firstLine; f <= endMhz; f += stepMhz)
+    for (double f = firstLine; f <= endMhz; f += gridStep)
         p.drawLine(mhzToX(f), r.top(), mhzToX(f), r.bottom());
 }
 
@@ -264,7 +430,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     const int h = r.height();
     const int n = m_smoothed.size();
 
-    QPainterPath path;
+    // Build the spectrum line path (data points only)
+    QPainterPath linePath;
     bool first = true;
 
     for (int i = 0; i < n; ++i) {
@@ -273,22 +440,25 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
         const int   x    = r.left() + static_cast<int>(static_cast<float>(i) / n * w);
         const int   y    = r.top()  + qMin(static_cast<int>(norm * h), h - 1);
 
-        if (first) { path.moveTo(x, y); first = false; }
-        else        path.lineTo(x, y);
+        if (first) { linePath.moveTo(x, y); first = false; }
+        else        linePath.lineTo(x, y);
     }
 
-    path.lineTo(r.right(), r.bottom());
-    path.lineTo(r.left(),  r.bottom());
-    path.closeSubpath();
+    // Closed fill path (line + bottom edges) for gradient fill only
+    QPainterPath fillPath(linePath);
+    fillPath.lineTo(r.right(), r.bottom());
+    fillPath.lineTo(r.left(),  r.bottom());
+    fillPath.closeSubpath();
 
     QLinearGradient grad(0, r.top(), 0, r.bottom());
     grad.setColorAt(0.0, QColor(0x00, 0xe5, 0xff, 200));
     grad.setColorAt(1.0, QColor(0x00, 0x40, 0x60,  60));
 
     p.setRenderHint(QPainter::Antialiasing, true);
-    p.fillPath(path, grad);
+    p.fillPath(fillPath, grad);
+    // Stroke only the spectrum line, not the fill closure
     p.setPen(QPen(QColor(0x00, 0xe5, 0xff), 1.5));
-    p.drawPath(path);
+    p.drawPath(linePath);
     p.setRenderHint(QPainter::Antialiasing, false);
 }
 
@@ -358,15 +528,14 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
     const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
 
-    // Pick a step that gives roughly 5–10 labels across the visible bandwidth.
-    // Candidate steps in MHz; pick the first that gives ≥ 5 divisions.
-    static constexpr double kSteps[] = {
-        0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000
-    };
-    double stepMhz = 0.050;
-    for (double s : kSteps) {
-        if (m_bandwidthMhz / s >= 5.0) { stepMhz = s; break; }
-    }
+    // Pick a step using 1-2-5 sequence to give ~5-10 labels at any zoom level.
+    double rawStep = m_bandwidthMhz / 5.0;
+    const double mag = std::pow(10.0, std::floor(std::log10(rawStep)));
+    const double norm = rawStep / mag;
+    double stepMhz;
+    if      (norm >= 5.0) stepMhz = 5.0 * mag;
+    else if (norm >= 2.0) stepMhz = 2.0 * mag;
+    else                  stepMhz = 1.0 * mag;
 
     const double firstLine = std::ceil(startMhz / stepMhz) * stepMhz;
 
@@ -375,6 +544,14 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
     p.setFont(f);
     const QFontMetrics fm(f);
 
+    // Decimal places: enough to distinguish labels at this step size
+    int decimals;
+    if      (stepMhz < 0.0001) decimals = 6;
+    else if (stepMhz < 0.001)  decimals = 5;
+    else if (stepMhz < 0.01)   decimals = 4;
+    else if (stepMhz < 1.0)    decimals = 3;
+    else                        decimals = 2;
+
     for (double freq = firstLine; freq <= endMhz; freq += stepMhz) {
         const int x = mhzToX(freq);
 
@@ -382,8 +559,6 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
         p.setPen(QColor(0x40, 0x60, 0x80));
         p.drawLine(x, r.top(), x, r.top() + 4);
 
-        // Label: show MHz with enough decimal places for the step size
-        const int decimals = (stepMhz < 0.050) ? 4 : 3;
         const QString label = QString::number(freq, 'f', decimals);
         const int tw = fm.horizontalAdvance(label);
         const int lx = qBound(0, x - tw / 2, width() - tw);

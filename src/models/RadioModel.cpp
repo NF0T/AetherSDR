@@ -87,6 +87,22 @@ void RadioModel::setTransmit(bool tx)
     m_connection.sendCommand(QString("xmit %1").arg(tx ? 1 : 0));
 }
 
+void RadioModel::setPanBandwidth(double bandwidthMhz)
+{
+    if (m_panId.isEmpty()) return;
+    m_connection.sendCommand(
+        QString("display pan set %1 bandwidth=%2")
+            .arg(m_panId).arg(bandwidthMhz, 0, 'f', 6));
+}
+
+void RadioModel::setPanCenter(double centerMhz)
+{
+    if (m_panId.isEmpty()) return;
+    m_connection.sendCommand(
+        QString("display pan set %1 center=%2")
+            .arg(m_panId).arg(centerMhz, 0, 'f', 6));
+}
+
 // ─── Connection slots ─────────────────────────────────────────────────────────
 
 void RadioModel::onConnected()
@@ -107,6 +123,7 @@ void RadioModel::onConnected()
           m_connection.sendCommand("sub meter all", [this](int, const QString&) {
             m_connection.sendCommand("sub audio all", [this](int, const QString&) {
             m_connection.sendCommand("sub gps all", [this](int, const QString&) {
+            m_connection.sendCommand("sub apd all", [this](int, const QString&) {
             // EQ status arrives automatically — no subscription needed on fw v1.4.0.0
             m_connection.sendCommand("client gui", [this](int code, const QString&) {
         if (code != 0)
@@ -175,6 +192,7 @@ void RadioModel::onConnected()
                     });
             });
     }); // client gui
+            }); // sub apd all
             }); // sub gps all
             }); // sub audio all
           }); // sub meter all
@@ -435,6 +453,12 @@ void RadioModel::onStatusReceived(const QString& object,
         m_transmitModel.applyAtuStatus(kvs);
         if (m_tunerModel.isPresent())
             m_tunerModel.applyStatus(kvs);
+        return;
+    }
+
+    // APD status: "apd enable=1 ..."
+    if (object == "apd") {
+        m_transmitModel.applyApdStatus(kvs);
         return;
     }
 

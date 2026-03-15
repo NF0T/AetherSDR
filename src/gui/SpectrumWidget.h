@@ -54,11 +54,18 @@ public:
 signals:
     // Emitted when the user clicks or scrolls in the panadapter area.
     void frequencyClicked(double mhz);
+    // Emitted when the user drags the frequency scale bar to change bandwidth.
+    void bandwidthChangeRequested(double newBandwidthMhz);
+    // Emitted when the user drags the waterfall to pan the center frequency.
+    void centerChangeRequested(double newCenterMhz);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
 private:
@@ -105,9 +112,21 @@ private:
 
     static constexpr float SMOOTH_ALPHA    = 0.35f;
     // Fraction of the panadapter area (above freq scale) used for spectrum
-    static constexpr float SPECTRUM_FRAC   = 0.40f;
-    // Height of the frequency scale bar at the bottom
+    float m_spectrumFrac{0.40f};
+    // Height of the frequency scale bar
     static constexpr int   FREQ_SCALE_H    = 20;
+    // Height of the draggable divider between FFT and freq scale
+    static constexpr int   DIVIDER_H       = 4;
+    // Divider drag state
+    bool m_draggingDivider{false};
+    // Bandwidth drag state (freq scale bar)
+    bool m_draggingBandwidth{false};
+    int  m_bwDragStartX{0};
+    double m_bwDragStartBw{0.0};
+    // Waterfall pan drag state
+    bool m_draggingPan{false};
+    int  m_panDragStartX{0};
+    double m_panDragStartCenter{0.0};
 };
 
 } // namespace AetherSDR

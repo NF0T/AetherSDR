@@ -77,6 +77,11 @@ public:
     bool    cwlEnabled()    const { return m_cwlEnabled; }
     int     monGainCw()     const { return m_monGainCw; }
 
+    // ── APD getters ─────────────────────────────────────────────────────────
+    bool    apdEnabled()        const { return m_apdEnabled; }
+    bool    apdConfigurable()   const { return m_apdConfigurable; }
+    bool    apdEqualizerActive()const { return m_apdEqActive; }
+
     // ── ATU getters ─────────────────────────────────────────────────────────
     bool      atuEnabled()      const { return m_atuEnabled; }
     ATUStatus atuStatus()       const { return m_atuStatus; }
@@ -93,6 +98,7 @@ public:
     // ── Status parsing (called from RadioModel) ─────────────────────────────
     void applyTransmitStatus(const QMap<QString, QString>& kvs);
     void applyAtuStatus(const QMap<QString, QString>& kvs);
+    void applyApdStatus(const QMap<QString, QString>& kvs);
     void setProfileList(const QStringList& profiles);
     void setActiveProfile(const QString& profile);
     void setMicProfileList(const QStringList& profiles);
@@ -109,6 +115,7 @@ public:
     void atuBypass();
     void setAtuMemories(bool on);
     void loadProfile(const QString& name);
+    void setApdEnabled(bool on);
 
     // ── Mic / monitor / processor commands ────────────────────────────────
     void setMicSelection(const QString& input);
@@ -154,10 +161,16 @@ signals:
     void micProfileListChanged();
     void micInputListChanged();
     void phoneStateChanged();       // VOX or CW property changed
+    void apdStateChanged();
     void commandReady(const QString& cmd);
 
 private:
     static ATUStatus parseAtuTuneStatus(const QString& s);
+
+    // APD state
+    bool m_apdEnabled{false};
+    bool m_apdConfigurable{false};
+    bool m_apdEqActive{false};
 
     // Transmit state
     int  m_rfPower{100};

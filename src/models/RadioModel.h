@@ -58,6 +58,8 @@ public:
     void connectToRadio(const RadioInfo& info);
     void disconnectFromRadio();
     void setTransmit(bool tx);
+    void setPanBandwidth(double bandwidthMhz);
+    void setPanCenter(double centerMhz);
 
 signals:
     void infoChanged();

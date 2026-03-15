@@ -345,6 +345,18 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     // ATU state changes → indicators
     connect(m_model, &TransmitModel::atuStateChanged, this, &TxApplet::syncAtuIndicators);
 
+    // APD button + indicators
+    connect(m_apdBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_updatingFromModel && m_model)
+            m_model->setApdEnabled(on);
+    });
+    connect(m_model, &TransmitModel::apdStateChanged, this, [this] {
+        m_updatingFromModel = true;
+        m_apdBtn->setChecked(m_model->apdEnabled());
+        m_updatingFromModel = false;
+        syncAtuIndicators();  // also refreshes APD indicators
+    });
+
     // Profile list changes → populate combo
     connect(m_model, &TransmitModel::profileListChanged, this, [this]() {
         m_updatingFromModel = true;
@@ -407,14 +419,14 @@ void TxApplet::syncAtuIndicators()
     // Mem — green when using memory
     setIndicatorActive(m_memInd, m_model->usingMemory());
 
-    // Active — green when tuning in progress
-    setIndicatorActive(m_activeInd, status == ATUStatus::InProgress);
-
-    // Cal — placeholder, not yet mapped
-    setIndicatorActive(m_calInd, false);
-
-    // Avail — green when ATU is enabled/available
-    setIndicatorActive(m_availInd, m_model->atuEnabled());
+    // APD indicators — mutually exclusive states, all off when APD disabled
+    // Progression: Cal (calibrating) → Avail (calibration ready) → Active (applied)
+    const bool apdOn  = m_model->apdEnabled();
+    const bool eqActv = m_model->apdEqualizerActive();
+    const bool config = m_model->apdConfigurable();
+    setIndicatorActive(m_activeInd, apdOn && eqActv);
+    setIndicatorActive(m_availInd,  apdOn && !eqActv && config);
+    setIndicatorActive(m_calInd,    apdOn && !eqActv && !config);
 
     // MEM button — sync checked state
     {
