@@ -1,6 +1,7 @@
 #pragma once
 
 #include "models/RadioModel.h"
+#include "models/BandSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 
@@ -42,10 +43,14 @@ private:
     SliceModel* activeSlice() const;
     SpectrumWidget* spectrum() const;
 
+    BandSnapshot captureCurrentBandState() const;
+    void restoreBandState(const BandSnapshot& snap);
+
     // Core objects
     RadioDiscovery m_discovery;
     RadioModel     m_radioModel;
     AudioEngine    m_audio;
+    BandSettings   m_bandSettings;
 
     // GUI — left sidebar
     ConnectionPanel* m_connPanel{nullptr};

@@ -1,5 +1,6 @@
 #include "SpectrumOverlayMenu.h"
 #include "models/SliceModel.h"
+#include "models/BandDefs.h"
 
 #include <QPushButton>
 #include <QComboBox>
@@ -9,6 +10,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QEvent>
 
 namespace AetherSDR {
 
@@ -62,30 +64,32 @@ static QPushButton* makeMenuBtn(const QString& text, QWidget* parent)
     return btn;
 }
 
-// SSB center frequencies per band (ARRL band plan).
-struct BandEntry {
+// Band button grid uses shared BandDefs + special entries.
+// Index into this array for the grid layout below.
+struct BandGridEntry {
     const char* label;
+    const char* bandName;  // key for BandSettings (e.g. "20m")
     double freqMhz;
     const char* mode;
 };
 
-static constexpr BandEntry BANDS[] = {
-    {"160",   1.900, "LSB"},
-    {"80",    3.800, "LSB"},
-    {"60",    5.357, "USB"},
-    {"40",    7.200, "LSB"},
-    {"30",   10.125, "DIGU"},
-    {"20",   14.225, "USB"},
-    {"17",   18.130, "USB"},
-    {"15",   21.300, "USB"},
-    {"12",   24.950, "USB"},
-    {"10",   28.400, "USB"},
-    {"6",    50.150, "USB"},
-    {"WWV",  10.000, "AM"},
-    {"GEN",   0.500, "AM"},
-    {"2200",  0.1375,"CW"},
-    {"630",   0.475, "CW"},
-    {"XVTR",  0.0,   ""},
+static constexpr BandGridEntry BAND_GRID[] = {
+    {"160",  "160m",  1.900,  "LSB"},   // 0
+    {"80",   "80m",   3.800,  "LSB"},   // 1
+    {"60",   "60m",   5.357,  "USB"},   // 2
+    {"40",   "40m",   7.200,  "LSB"},   // 3
+    {"30",   "30m",  10.125,  "DIGU"},  // 4
+    {"20",   "20m",  14.225,  "USB"},   // 5
+    {"17",   "17m",  18.130,  "USB"},   // 6
+    {"15",   "15m",  21.300,  "USB"},   // 7
+    {"12",   "12m",  24.950,  "USB"},   // 8
+    {"10",   "10m",  28.400,  "USB"},   // 9
+    {"6",    "6m",   50.150,  "USB"},   // 10
+    {"WWV",  "WWV",  10.000,  "AM"},    // 11
+    {"GEN",  "GEN",   0.500,  "AM"},    // 12
+    {"2200", "2200m", 0.1375, "CW"},    // 13
+    {"630",  "630m",  0.475,  "CW"},    // 14
+    {"XVTR", "",      0.0,    ""},      // 15
 };
 
 SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
@@ -106,15 +110,16 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         "border: 1px solid #0090e0; }");
     connect(m_toggleBtn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggle);
 
-    // Menu buttons — Band and ANT handled specially
+    // Menu buttons — Band, ANT, DSP handled specially (sub-panels)
     struct BtnDef { QString text; int specialIdx; void (SpectrumOverlayMenu::*sig)(); };
     const BtnDef defs[] = {
-        {"+RX",      -1, &SpectrumOverlayMenu::addRxClicked},
-        {"+TNF",     -1, &SpectrumOverlayMenu::addTnfClicked},
-        {"Band",      0, nullptr},   // toggleBandPanel
-        {"ANT",       1, nullptr},   // toggleAntPanel
-        {"Display",  -1, &SpectrumOverlayMenu::displayClicked},
-        {"DAX",      -1, &SpectrumOverlayMenu::daxClicked},
+        {"+RX",      -1, &SpectrumOverlayMenu::addRxClicked},   // 0
+        {"+TNF",     -1, &SpectrumOverlayMenu::addTnfClicked},  // 1
+        {"Band",      0, nullptr},   // 2 — toggleBandPanel
+        {"ANT",       1, nullptr},   // 3 — toggleAntPanel
+        {"DSP",       2, nullptr},   // 4 — toggleDspPanel
+        {"Display",  -1, &SpectrumOverlayMenu::displayClicked}, // 5
+        {"DAX",      -1, &SpectrumOverlayMenu::daxClicked},     // 6
     };
 
     for (const auto& def : defs) {
@@ -123,6 +128,8 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleBandPanel);
         else if (def.specialIdx == 1)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleAntPanel);
+        else if (def.specialIdx == 2)
+            connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleDspPanel);
         else
             connect(btn, &QPushButton::clicked, this, def.sig);
         m_menuBtns.append(btn);
@@ -130,6 +137,7 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
 
     buildBandPanel();
     buildAntPanel();
+    buildDspPanel();
     updateLayout();
 }
 
@@ -167,17 +175,18 @@ void SpectrumOverlayMenu::buildBandPanel()
             int idx = layout[row][col];
             if (idx < 0) continue;
 
-            auto* btn = new QPushButton(BANDS[idx].label, m_bandPanel);
+            auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
             btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
             btn->setStyleSheet(bandBtnStyle);
 
-            double freq = BANDS[idx].freqMhz;
-            QString mode = QString::fromLatin1(BANDS[idx].mode);
-            if (mode.isEmpty()) {
+            QString bandName = QString::fromLatin1(BAND_GRID[idx].bandName);
+            double freq = BAND_GRID[idx].freqMhz;
+            QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
+            if (bandName.isEmpty()) {
                 btn->setEnabled(false);
             } else {
-                connect(btn, &QPushButton::clicked, this, [this, freq, mode]() {
-                    emit bandSelected(freq, mode);
+                connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
+                    emit bandSelected(bandName, freq, mode);
                 });
             }
 
@@ -314,7 +323,79 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
         m_updatingFromModel = false;
     });
 
+    // DSP toggle connections
+    using S = SliceModel;
+    struct DspToggleDef {
+        void (S::*setter)(bool);
+        void (S::*signal)(bool);
+    };
+    const DspToggleDef toggleDefs[] = {
+        {&S::setNb,   &S::nbChanged},    // 0
+        {&S::setNr,   &S::nrChanged},    // 1
+        {&S::setAnf,  &S::anfChanged},   // 2
+        {&S::setNrl,  &S::nrlChanged},   // 3
+        {&S::setNrs,  &S::nrsChanged},   // 4
+        {&S::setRnn,  &S::rnnChanged},   // 5
+        {&S::setNrf,  &S::nrfChanged},   // 6
+        {&S::setAnfl, &S::anflChanged},  // 7
+        {&S::setAnft, &S::anftChanged},  // 8
+    };
+
+    for (int i = 0; i < 9; ++i) {
+        auto* btn = m_dspRows[i].btn;
+        auto setter = toggleDefs[i].setter;
+        auto signal = toggleDefs[i].signal;
+
+        connect(btn, &QPushButton::toggled, this, [this, setter](bool on) {
+            if (!m_updatingFromModel && m_slice)
+                (m_slice->*setter)(on);
+        });
+        connect(m_slice, signal, this, [this, i](bool on) {
+            m_updatingFromModel = true;
+            QSignalBlocker sb(m_dspRows[i].btn);
+            m_dspRows[i].btn->setChecked(on);
+            m_updatingFromModel = false;
+        });
+    }
+
+    // DSP level connections (only for features with sliders)
+    struct DspLevelDef {
+        int row;
+        void (S::*setter)(int);
+        void (S::*signal)(int);
+    };
+    const DspLevelDef levelDefs[] = {
+        {0, &S::setNbLevel,   &S::nbLevelChanged},
+        {1, &S::setNrLevel,   &S::nrLevelChanged},
+        {2, &S::setAnfLevel,  &S::anfLevelChanged},
+        {3, &S::setNrlLevel,  &S::nrlLevelChanged},
+        {4, &S::setNrsLevel,  &S::nrsLevelChanged},
+        {6, &S::setNrfLevel,  &S::nrfLevelChanged},
+        {7, &S::setAnflLevel, &S::anflLevelChanged},
+    };
+
+    for (const auto& ld : levelDefs) {
+        auto* slider = m_dspRows[ld.row].slider;
+        auto* lbl = m_dspRows[ld.row].valueLbl;
+        auto setter = ld.setter;
+        int row = ld.row;
+
+        connect(slider, &QSlider::valueChanged, this, [this, setter, lbl](int v) {
+            lbl->setText(QString::number(v));
+            if (!m_updatingFromModel && m_slice)
+                (m_slice->*setter)(v);
+        });
+        connect(m_slice, ld.signal, this, [this, row](int v) {
+            m_updatingFromModel = true;
+            QSignalBlocker sb(m_dspRows[row].slider);
+            m_dspRows[row].slider->setValue(v);
+            m_dspRows[row].valueLbl->setText(QString::number(v));
+            m_updatingFromModel = false;
+        });
+    }
+
     syncAntPanel();
+    syncDspPanel();
 }
 
 void SpectrumOverlayMenu::syncAntPanel()
@@ -325,14 +406,144 @@ void SpectrumOverlayMenu::syncAntPanel()
     m_updatingFromModel = false;
 }
 
+// ── DSP sub-panel ─────────────────────────────────────────────────────────────
+
+void SpectrumOverlayMenu::buildDspPanel()
+{
+    m_dspPanel = new QWidget(parentWidget());
+    m_dspPanel->setStyleSheet(kPanelStyle);
+    m_dspPanel->hide();
+
+    auto* vbox = new QVBoxLayout(m_dspPanel);
+    vbox->setContentsMargins(6, 6, 6, 6);
+    vbox->setSpacing(3);
+
+    const QString dspBtnStyle =
+        "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
+        "border-radius: 2px; color: #c8d8e8; font-size: 10px; font-weight: bold; "
+        "padding: 1px 2px; }"
+        "QPushButton:checked { background: #1a6030; color: #ffffff; "
+        "border: 1px solid #20a040; }"
+        "QPushButton:hover { border: 1px solid #0090e0; }";
+
+    // DSP feature definitions
+    struct DspDef {
+        const char* label;
+        bool hasLevel;
+    };
+    const DspDef defs[] = {
+        {"NB",   true},   // 0
+        {"NR",   true},   // 1
+        {"ANF",  true},   // 2
+        {"NRL",  true},   // 3
+        {"NRS",  true},   // 4
+        {"RNN",  false},  // 5
+        {"NRF",  true},   // 6
+        {"ANFL", true},   // 7
+        {"ANFT", false},  // 8
+    };
+
+    for (const auto& def : defs) {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        auto* btn = new QPushButton(def.label);
+        btn->setCheckable(true);
+        btn->setFixedSize(40, 20);
+        btn->setStyleSheet(dspBtnStyle);
+        row->addWidget(btn);
+
+        DspRow dspRow;
+        dspRow.btn = btn;
+
+        if (def.hasLevel) {
+            auto* slider = new QSlider(Qt::Horizontal);
+            slider->setRange(0, 100);
+            slider->setValue(50);
+            slider->setStyleSheet(kSliderStyle);
+            row->addWidget(slider, 1);
+
+            auto* lbl = new QLabel("50");
+            lbl->setStyleSheet(kLabelStyle);
+            lbl->setFixedWidth(22);
+            lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            row->addWidget(lbl);
+
+            slider->installEventFilter(this);
+            dspRow.slider = slider;
+            dspRow.valueLbl = lbl;
+        } else {
+            row->addStretch(1);
+        }
+
+        vbox->addLayout(row);
+        m_dspRows.append(dspRow);
+    }
+
+    m_dspPanel->setFixedWidth(200);
+    m_dspPanel->adjustSize();
+
+    // Wiring is done in setSlice() since we need the slice model
+}
+
+void SpectrumOverlayMenu::syncDspPanel()
+{
+    if (!m_slice) return;
+    m_updatingFromModel = true;
+
+    // Toggle states
+    m_dspRows[0].btn->setChecked(m_slice->nbOn());
+    m_dspRows[1].btn->setChecked(m_slice->nrOn());
+    m_dspRows[2].btn->setChecked(m_slice->anfOn());
+    m_dspRows[3].btn->setChecked(m_slice->nrlOn());
+    m_dspRows[4].btn->setChecked(m_slice->nrsOn());
+    m_dspRows[5].btn->setChecked(m_slice->rnnOn());
+    m_dspRows[6].btn->setChecked(m_slice->nrfOn());
+    m_dspRows[7].btn->setChecked(m_slice->anflOn());
+    m_dspRows[8].btn->setChecked(m_slice->anftOn());
+
+    // Level values (only for features that have sliders)
+    auto syncSlider = [](DspRow& r, int v) {
+        if (r.slider) { r.slider->setValue(v); r.valueLbl->setText(QString::number(v)); }
+    };
+    syncSlider(m_dspRows[0], m_slice->nbLevel());
+    syncSlider(m_dspRows[1], m_slice->nrLevel());
+    syncSlider(m_dspRows[2], m_slice->anfLevel());
+    syncSlider(m_dspRows[3], m_slice->nrlLevel());
+    syncSlider(m_dspRows[4], m_slice->nrsLevel());
+    syncSlider(m_dspRows[6], m_slice->nrfLevel());
+    syncSlider(m_dspRows[7], m_slice->anflLevel());
+
+    m_updatingFromModel = false;
+}
+
+void SpectrumOverlayMenu::toggleDspPanel()
+{
+    bool wasVisible = m_dspPanelVisible;
+    hideAllSubPanels();
+    if (!wasVisible) {
+        syncDspPanel();
+        m_dspPanelVisible = true;
+        // Center vertically on the DSP button (index 4)
+        int btnCenterY = m_menuBtns[4]->y() + m_menuBtns[4]->height() / 2;
+        int panelY = y() + btnCenterY - m_dspPanel->sizeHint().height() / 2;
+        m_dspPanel->move(x() + width(), std::max(0, panelY));
+        m_dspPanel->raise();
+        m_dspPanel->show();
+        m_menuBtns[4]->setStyleSheet(kMenuBtnActive);
+    }
+}
+
 // ── Sub-panel toggle helpers ──────────────────────────────────────────────────
 
 void SpectrumOverlayMenu::hideAllSubPanels()
 {
     if (m_bandPanelVisible) { m_bandPanelVisible = false; m_bandPanel->hide(); }
     if (m_antPanelVisible)  { m_antPanelVisible = false;  m_antPanel->hide(); }
-    m_menuBtns[2]->setStyleSheet(kMenuBtnNormal);
-    m_menuBtns[3]->setStyleSheet(kMenuBtnNormal);
+    if (m_dspPanelVisible)  { m_dspPanelVisible = false;  m_dspPanel->hide(); }
+    m_menuBtns[2]->setStyleSheet(kMenuBtnNormal);  // Band
+    m_menuBtns[3]->setStyleSheet(kMenuBtnNormal);  // ANT
+    m_menuBtns[4]->setStyleSheet(kMenuBtnNormal);  // DSP
 }
 
 void SpectrumOverlayMenu::toggleBandPanel()
@@ -395,6 +606,17 @@ void SpectrumOverlayMenu::updateLayout()
     int totalH = m_expanded ? (pad + BTN_H + gap + m_menuBtns.size() * (BTN_H + gap))
                             : (pad + BTN_H + pad);
     setFixedSize(pad + BTN_W + pad, totalH);
+}
+
+bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        if (auto* slider = qobject_cast<QSlider*>(obj)) {
+            slider->setValue(50);
+            return true;
+        }
+    }
+    return QWidget::eventFilter(obj, event);
 }
 
 } // namespace AetherSDR

@@ -48,6 +48,13 @@ public:
     bool    nrfOn()       const { return m_nrf; }
     bool    anflOn()      const { return m_anfl; }
     bool    anftOn()      const { return m_anft; }
+    int     nbLevel()     const { return m_nbLevel; }
+    int     nrLevel()     const { return m_nrLevel; }
+    int     anfLevel()    const { return m_anfLevel; }
+    int     nrlLevel()    const { return m_nrlLevel; }
+    int     nrsLevel()    const { return m_nrsLevel; }
+    int     nrfLevel()    const { return m_nrfLevel; }
+    int     anflLevel()   const { return m_anflLevel; }
     QString agcMode()      const { return m_agcMode; }
     int     agcThreshold() const { return m_agcThreshold; }
     bool    audioMute()   const { return m_audioMute; }
@@ -87,6 +94,13 @@ public:
     void setNrf(bool on);
     void setAnfl(bool on);
     void setAnft(bool on);
+    void setNbLevel(int v);
+    void setNrLevel(int v);
+    void setAnfLevel(int v);
+    void setNrlLevel(int v);
+    void setNrsLevel(int v);
+    void setNrfLevel(int v);
+    void setAnflLevel(int v);
     void setAgcMode(const QString& mode);
     void setAgcThreshold(int value);
     void setSquelch(bool on, int level);
@@ -128,6 +142,13 @@ signals:
     void nrfChanged(bool on);
     void anflChanged(bool on);
     void anftChanged(bool on);
+    void nbLevelChanged(int v);
+    void nrLevelChanged(int v);
+    void anfLevelChanged(int v);
+    void nrlLevelChanged(int v);
+    void nrsLevelChanged(int v);
+    void nrfLevelChanged(int v);
+    void anflLevelChanged(int v);
     void agcModeChanged(const QString& mode);
     void agcThresholdChanged(int value);
     void audioMuteChanged(bool mute);
@@ -173,6 +194,13 @@ private:
     bool    m_nrf{false};
     bool    m_anfl{false};
     bool    m_anft{false};
+    int     m_nbLevel{50};
+    int     m_nrLevel{50};
+    int     m_anfLevel{50};
+    int     m_nrlLevel{50};
+    int     m_nrsLevel{50};
+    int     m_nrfLevel{50};
+    int     m_anflLevel{50};
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
     bool    m_squelchOn{false};

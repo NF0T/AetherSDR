@@ -129,11 +129,23 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── Band selection from overlay menu ───────────────────────────────────
     connect(spectrum()->overlayMenu(), &SpectrumOverlayMenu::bandSelected,
-            this, [this](double freqMhz, const QString& mode) {
-        if (auto* s = activeSlice()) {
-            s->setMode(mode);
+            this, [this](const QString& bandName, double freqMhz, const QString& mode) {
+        // Save current band state before switching
+        const QString oldBand = m_bandSettings.currentBand();
+        if (!oldBand.isEmpty() && activeSlice()) {
+            m_bandSettings.saveBandState(oldBand, captureCurrentBandState());
         }
-        onFrequencyChanged(freqMhz);
+
+        // Load saved state for the new band (or defaults)
+        m_bandSettings.setCurrentBand(bandName);
+        if (m_bandSettings.hasSavedState(bandName)) {
+            restoreBandState(m_bandSettings.loadBandState(bandName));
+        } else {
+            // First visit — use band defaults
+            if (auto* s = activeSlice())
+                s->setMode(mode);
+            onFrequencyChanged(freqMhz);
+        }
     });
 
     // ── WNB toggle from overlay menu → panadapter + indicator ──────────────
@@ -263,6 +275,9 @@ MainWindow::MainWindow(QWidget* parent)
     restoreState(settings.value("windowState").toByteArray());
     if (settings.contains("splitterState"))
         m_splitter->restoreState(settings.value("splitterState").toByteArray());
+
+    // Load per-band settings
+    m_bandSettings.loadFromFile();
 }
 
 MainWindow::~MainWindow() = default;
@@ -273,6 +288,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
     settings.setValue("geometry",      saveGeometry());
     settings.setValue("windowState",   saveState());
     settings.setValue("splitterState", m_splitter->saveState());
+    // Save current band state before exit
+    const QString curBand = m_bandSettings.currentBand();
+    if (!curBand.isEmpty() && activeSlice())
+        m_bandSettings.saveBandState(curBand, captureCurrentBandState());
+    m_bandSettings.saveToFile();
+
     m_discovery.stopListening();
     m_radioModel.disconnectFromRadio();
     m_audio.stopRxStream();
@@ -506,6 +527,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_panApplet->setSliceId(s->sliceId());
         m_appletPanel->setSlice(s);
         spectrum()->overlayMenu()->setSlice(s);
+
+        // Detect initial band from radio's frequency
+        if (m_bandSettings.currentBand().isEmpty())
+            m_bandSettings.setCurrentBand(BandSettings::bandForFrequency(s->frequency()));
     }
 
     // Forward slice frequency/mode changes → spectrum
@@ -513,6 +538,14 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_updatingFromModel = true;
         spectrum()->setVfoFrequency(mhz);
         m_updatingFromModel = false;
+
+        // Band-crossing detection: save old band state when tuning out
+        const QString newBand = BandSettings::bandForFrequency(mhz);
+        const QString oldBand = m_bandSettings.currentBand();
+        if (!oldBand.isEmpty() && newBand != oldBand) {
+            m_bandSettings.saveBandState(oldBand, captureCurrentBandState());
+            m_bandSettings.setCurrentBand(newBand);
+        }
     });
     connect(s, &SliceModel::filterChanged, spectrum(), &SpectrumWidget::setVfoFilter);
 
@@ -552,6 +585,54 @@ SliceModel* MainWindow::activeSlice() const
 SpectrumWidget* MainWindow::spectrum() const
 {
     return m_panApplet->spectrumWidget();
+}
+
+// ─── Band settings capture / restore ──────────────────────────────────────────
+
+BandSnapshot MainWindow::captureCurrentBandState() const
+{
+    BandSnapshot snap;
+    if (auto* s = activeSlice()) {
+        snap.frequencyMhz  = s->frequency();
+        snap.mode          = s->mode();
+        snap.rxAntenna     = s->rxAntenna();
+        snap.filterLow     = s->filterLow();
+        snap.filterHigh    = s->filterHigh();
+        snap.agcMode       = s->agcMode();
+        snap.agcThreshold  = s->agcThreshold();
+    }
+    snap.panCenterMhz    = m_radioModel.panCenterMhz();
+    snap.panBandwidthMhz = m_radioModel.panBandwidthMhz();
+    snap.minDbm          = spectrum()->refLevel() - spectrum()->dynamicRange();
+    snap.maxDbm          = spectrum()->refLevel();
+    snap.spectrumFrac    = spectrum()->spectrumFrac();
+    snap.rfGain          = spectrum()->rfGainValue();
+    snap.wnbOn           = spectrum()->wnbActive();
+    return snap;
+}
+
+void MainWindow::restoreBandState(const BandSnapshot& snap)
+{
+    m_updatingFromModel = true;
+    if (auto* s = activeSlice()) {
+        s->setMode(snap.mode);
+        s->setFrequency(snap.frequencyMhz);
+        if (!snap.rxAntenna.isEmpty())
+            s->setRxAntenna(snap.rxAntenna);
+        s->setFilterWidth(snap.filterLow, snap.filterHigh);
+        if (!snap.agcMode.isEmpty())
+            s->setAgcMode(snap.agcMode);
+        s->setAgcThreshold(snap.agcThreshold);
+    }
+    m_radioModel.setPanCenter(snap.panCenterMhz);
+    m_radioModel.setPanBandwidth(snap.panBandwidthMhz);
+    m_radioModel.setPanDbmRange(snap.minDbm, snap.maxDbm);
+    m_radioModel.setPanRfGain(snap.rfGain);
+    m_radioModel.setPanWnb(snap.wnbOn);
+    spectrum()->setSpectrumFrac(snap.spectrumFrac);
+    spectrum()->setRfGain(snap.rfGain);
+    spectrum()->setWnbActive(snap.wnbOn);
+    m_updatingFromModel = false;
 }
 
 // ─── GUI control handlers ─────────────────────────────────────────────────────

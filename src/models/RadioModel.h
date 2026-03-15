@@ -50,6 +50,8 @@ public:
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     QStringList antennaList() const { return m_antList; }
+    double panCenterMhz()    const { return m_panCenterMhz; }
+    double panBandwidthMhz() const { return m_panBandwidthMhz; }
 
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;

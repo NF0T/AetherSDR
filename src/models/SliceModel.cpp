@@ -140,6 +140,69 @@ void SliceModel::setAnft(bool on)
     emit anftChanged(on);
 }
 
+void SliceModel::setNbLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_nbLevel == v) return;
+    m_nbLevel = v;
+    sendCommand(QString("slice set %1 nb_level=%2").arg(m_id).arg(v));
+    emit nbLevelChanged(v);
+}
+
+void SliceModel::setNrLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_nrLevel == v) return;
+    m_nrLevel = v;
+    sendCommand(QString("slice set %1 nr_level=%2").arg(m_id).arg(v));
+    emit nrLevelChanged(v);
+}
+
+void SliceModel::setAnfLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_anfLevel == v) return;
+    m_anfLevel = v;
+    sendCommand(QString("slice set %1 anf_level=%2").arg(m_id).arg(v));
+    emit anfLevelChanged(v);
+}
+
+void SliceModel::setNrlLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_nrlLevel == v) return;
+    m_nrlLevel = v;
+    sendCommand(QString("slice set %1 lms_nr_level=%2").arg(m_id).arg(v));
+    emit nrlLevelChanged(v);
+}
+
+void SliceModel::setNrsLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_nrsLevel == v) return;
+    m_nrsLevel = v;
+    sendCommand(QString("slice set %1 speex_nr_level=%2").arg(m_id).arg(v));
+    emit nrsLevelChanged(v);
+}
+
+void SliceModel::setNrfLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_nrfLevel == v) return;
+    m_nrfLevel = v;
+    sendCommand(QString("slice set %1 nrf_level=%2").arg(m_id).arg(v));
+    emit nrfLevelChanged(v);
+}
+
+void SliceModel::setAnflLevel(int v)
+{
+    v = std::clamp(v, 0, 100);
+    if (m_anflLevel == v) return;
+    m_anflLevel = v;
+    sendCommand(QString("slice set %1 lms_anf_level=%2").arg(m_id).arg(v));
+    emit anflLevelChanged(v);
+}
+
 void SliceModel::setAgcMode(const QString& mode)
 {
     if (m_agcMode == mode) return;
@@ -381,6 +444,35 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains("anft")) {
         m_anft = kvs["anft"] == "1";
         emit anftChanged(m_anft);
+    }
+    // DSP level parsing
+    if (kvs.contains("nb_level")) {
+        int v = kvs["nb_level"].toInt();
+        if (m_nbLevel != v) { m_nbLevel = v; emit nbLevelChanged(v); }
+    }
+    if (kvs.contains("nr_level")) {
+        int v = kvs["nr_level"].toInt();
+        if (m_nrLevel != v) { m_nrLevel = v; emit nrLevelChanged(v); }
+    }
+    if (kvs.contains("anf_level")) {
+        int v = kvs["anf_level"].toInt();
+        if (m_anfLevel != v) { m_anfLevel = v; emit anfLevelChanged(v); }
+    }
+    if (kvs.contains("lms_nr_level")) {
+        int v = kvs["lms_nr_level"].toInt();
+        if (m_nrlLevel != v) { m_nrlLevel = v; emit nrlLevelChanged(v); }
+    }
+    if (kvs.contains("speex_nr_level")) {
+        int v = kvs["speex_nr_level"].toInt();
+        if (m_nrsLevel != v) { m_nrsLevel = v; emit nrsLevelChanged(v); }
+    }
+    if (kvs.contains("nrf_level")) {
+        int v = kvs["nrf_level"].toInt();
+        if (m_nrfLevel != v) { m_nrfLevel = v; emit nrfLevelChanged(v); }
+    }
+    if (kvs.contains("lms_anf_level")) {
+        int v = kvs["lms_anf_level"].toInt();
+        if (m_anflLevel != v) { m_anflLevel = v; emit anflLevelChanged(v); }
     }
     if (kvs.contains("agc_mode")) {
         m_agcMode = kvs["agc_mode"];

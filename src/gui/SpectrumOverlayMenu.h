@@ -28,13 +28,16 @@ public:
     // Connect/disconnect the ANT panel to a slice model.
     void setSlice(SliceModel* slice);
 
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 signals:
     void addRxClicked();
     void addTnfClicked();
     void displayClicked();
     void daxClicked();
     // Emitted when user selects a band from the sub-panel.
-    void bandSelected(double freqMhz, const QString& mode);
+    void bandSelected(const QString& bandName, double freqMhz, const QString& mode);
     // Emitted when WNB toggle changes.
     void wnbToggled(bool on);
     // Emitted when WNB level slider changes (0–100).
@@ -49,6 +52,9 @@ private:
     void buildBandPanel();
     void toggleAntPanel();
     void buildAntPanel();
+    void toggleDspPanel();
+    void buildDspPanel();
+    void syncDspPanel();
     void hideAllSubPanels();
     void syncAntPanel();
 
@@ -69,6 +75,16 @@ private:
     QPushButton* m_wnbBtn{nullptr};
     QSlider*     m_wnbSlider{nullptr};
     QLabel*      m_wnbLabel{nullptr};
+
+    // DSP sub-panel
+    QWidget* m_dspPanel{nullptr};
+    bool     m_dspPanelVisible{false};
+    struct DspRow {
+        QPushButton* btn{nullptr};
+        QSlider*     slider{nullptr};
+        QLabel*      valueLbl{nullptr};
+    };
+    QVector<DspRow> m_dspRows;
 
     QStringList  m_antList;
     SliceModel*  m_slice{nullptr};

@@ -39,6 +39,14 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     update();
 }
 
+void SpectrumWidget::setSpectrumFrac(float f)
+{
+    m_spectrumFrac = std::clamp(f, 0.10f, 0.90f);
+    QSettings settings;
+    settings.setValue("spectrum/splitRatio", static_cast<double>(m_spectrumFrac));
+    update();
+}
+
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 {
     m_refLevel     = maxDbm;

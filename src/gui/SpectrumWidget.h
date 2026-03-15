@@ -50,6 +50,14 @@ public:
     // Set the filter edges (Hz offsets from VFO frequency).
     void setVfoFilter(int lowHz, int highHz);
 
+    // Getters for band settings capture.
+    float spectrumFrac()  const { return m_spectrumFrac; }
+    float refLevel()      const { return m_refLevel; }
+    float dynamicRange()  const { return m_dynamicRange; }
+
+    // Set the FFT/waterfall split ratio programmatically.
+    void setSpectrumFrac(float f);
+
     // Set the click/scroll tuning step size in Hz (default 100).
     void setStepSize(int hz) { m_stepHz = hz; }
 
@@ -62,7 +70,9 @@ public:
     // Access the floating overlay menu (for wiring signals).
     SpectrumOverlayMenu* overlayMenu() const { return m_overlayMenu; }
 
-    // Set WNB and RF gain state for on-screen indicators.
+    // WNB and RF gain state for on-screen indicators.
+    bool wnbActive()   const { return m_wnbActive; }
+    int  rfGainValue() const { return m_rfGainValue; }
     void setWnbActive(bool on) { m_wnbActive = on; update(); }
     void setRfGain(int gain) { m_rfGainValue = gain; update(); }
 

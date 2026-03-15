@@ -43,6 +43,11 @@ Current version: **0.1.10**
 | RX applet — antenna select (RX/TX), filter presets, AGC mode+threshold | ✅ |
 | RX applet — AF gain, audio pan (L/R balance), squelch | ✅ |
 | RX applet — NB / NR / ANF + NRL / NRS / RNN / NRF / ANFL / ANFT DSP toggles | ✅ |
+| RX applet — per-mode filter presets and step sizes (from CSV) | ✅ |
+| RX applet — AM/SAM double-sideband filter, CW filter centered on pitch | ✅ |
+| RX applet — FM duplex controls (CTCSS tone, offset, simplex/duplex, REV) | ✅ |
+| RX applet — DSP/AGC-T/RIT/XIT hidden for FM modes | ✅ |
+| RX applet — QSK read-only indicator (driven by TransmitModel break-in state) | ✅ |
 | RX applet — RIT / XIT with zero-reset, ± step buttons | ✅ |
 | RX applet — tuning step size stepper (10 Hz – 10 kHz) | ✅ |
 | RX applet — tune lock (slice lock/unlock) | ✅ |
@@ -88,6 +93,20 @@ Current version: **0.1.10**
 | Audio TX (microphone → radio) | ⚠️ stub |
 | Volume / mute control | ✅ |
 | TX button | ✅ |
+| Spectrum — draggable FFT/waterfall split divider | ✅ |
+| Spectrum — bandwidth zoom (drag frequency scale bar) | ✅ |
+| Spectrum — waterfall/FFT pan (click-drag), double-click to tune | ✅ |
+| Spectrum — draggable filter edges with per-mode limits | ✅ |
+| Spectrum — dBm scale strip with drag-to-pan and arrows | ✅ |
+| Spectrum — off-screen VFO indicator with double-click to recenter | ✅ |
+| Spectrum — zoom centers on filter midpoint for SSB/digital modes | ✅ |
+| Spectrum — adaptive 1-2-5 grid labels for frequency and dBm | ✅ |
+| Spectrum overlay menu — collapsible left-side menu (+RX, +TNF, Band, ANT, DSP, Display, DAX) | ✅ |
+| Spectrum overlay menu — band sub-panel with auto mode selection per band | ✅ |
+| Spectrum overlay menu — ANT sub-panel (RX antenna, RF gain, WNB + level) | ✅ |
+| Spectrum overlay menu — DSP sub-panel (toggle + level sliders, 0–100) | ✅ |
+| Spectrum overlay menu — WNB/RF gain on-screen FFT indicators | ✅ |
+| Per-band settings persistence (band memory) — saves/restores all settings per band | ✅ |
 | Persistent window geometry | ✅ |
 
 ---
@@ -108,7 +127,9 @@ src/
 │   ├── SliceModel.h/.cpp        # Per-slice receiver state
 │   ├── MeterModel.h/.cpp        # Meter definition registry + value conversion
 │   ├── TransmitModel.h/.cpp     # Transmit state, ATU, TX profiles
-│   └── EqualizerModel.h/.cpp   # 8-band EQ state (TX + RX)
+│   ├── EqualizerModel.h/.cpp   # 8-band EQ state (TX + RX)
+│   ├── BandDefs.h               # Shared band table (ARRL band plan, header-only)
+│   └── BandSettings.h/.cpp     # Per-band settings persistence (band memory)
 └── gui/
     ├── MainWindow.h/.cpp        # Main application window
     ├── ConnectionPanel.h/.cpp   # Radio list + connect/disconnect
@@ -122,6 +143,7 @@ src/
     ├── PhoneCwApplet.h/.cpp     # P/CW mic controls applet
     ├── PhoneApplet.h/.cpp       # PHONE applet (VOX, AM carrier, TX filter)
     ├── EqApplet.h/.cpp          # 8-band graphic equalizer applet
+    ├── SpectrumOverlayMenu.h/.cpp # Floating overlay menu (Band/ANT/DSP sub-panels)
     └── HGauge.h                 # Shared horizontal gauge widget (header-only)
 ```
 
@@ -471,10 +493,12 @@ model-driven dial updates back to the radio.
 
 ## Next Steps
 
-- [ ] Slice filter passband shading on the spectrum
 - [ ] Multi-slice support (slice tabs or overlaid markers)
 - [ ] Audio TX (microphone → radio, full VITA-49 framing)
-- [ ] Band stacking / band map
+- [ ] XVTR band sub-menu (issue #5)
+- [ ] TNF (tracking notch filter) management
+- [ ] Display sub-menu (overlay menu)
+- [ ] DAX sub-menu (overlay menu)
 
 ---
 
