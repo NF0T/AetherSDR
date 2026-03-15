@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.jpg" alt="AetherSDR Logo" width="400">
+  <img src="docs/logo-circle.png" alt="AetherSDR Logo" width="200">
 </p>
 
 # AetherSDR Linux Native SDR Client for FlexRadios

@@ -37,7 +37,7 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle("AetherSDR");
-    setWindowIcon(QIcon(":/icon.jpg"));
+    setWindowIcon(QIcon(":/icon.png"));
     setMinimumSize(1024, 600);
     resize(1400, 800);
 
@@ -252,7 +252,7 @@ void MainWindow::buildMenuBar()
             ).arg(QCoreApplication::applicationVersion());
         QMessageBox about(this);
         about.setWindowTitle("About AetherSDR");
-        about.setIconPixmap(QPixmap(":/icon.jpg").scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        about.setIconPixmap(QPixmap(":/icon.png").scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         about.setText(text);
         about.exec();
     });
