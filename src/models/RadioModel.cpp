@@ -931,6 +931,11 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
 {
     bool changed = false;
     if (kvs.contains("model"))    { m_model = kvs["model"]; changed = true; }
+    if (kvs.contains("slices")) {
+        int n = kvs["slices"].toInt();
+        if (n > m_maxSlices) m_maxSlices = n;  // track highest seen
+        changed = true;
+    }
     if (kvs.contains("callsign")) { m_callsign = kvs["callsign"]; changed = true; }
     if (kvs.contains("nickname")) { m_nickname = kvs["nickname"]; changed = true; }
     if (kvs.contains("region"))   { m_region = kvs["region"]; changed = true; }

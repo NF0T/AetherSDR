@@ -2,16 +2,16 @@
 #include "core/RigctlServer.h"
 #include "core/RigctlPty.h"
 #include "core/AudioEngine.h"
+#include "ComboStyle.h"
 #include "models/RadioModel.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QSpinBox>
+#include <QLineEdit>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QClipboard>
 #include <QApplication>
 #include "core/AppSettings.h"
 #include <QFrame>
@@ -21,18 +21,10 @@ namespace AetherSDR {
 
 static constexpr const char* kSectionStyle =
     "QWidget { background: transparent; }"
-    "QLabel { color: #8090a0; font-size: 10px; }"
-    "QCheckBox { color: #c8d8e8; font-size: 11px; spacing: 4px; }"
-    "QCheckBox::indicator { width: 14px; height: 14px; }"
-    "QSpinBox { background: #182028; color: #c8d8e8; border: 1px solid #304050;"
-    "  padding: 1px 4px; font-size: 11px; }"
-    "QComboBox { background: #182028; color: #c8d8e8; border: 1px solid #304050;"
-    "  padding: 1px 4px; font-size: 11px; }"
-    "QComboBox::drop-down { border: none; }"
-    "QComboBox QAbstractItemView { background: #182028; color: #c8d8e8;"
-    "  selection-background-color: #00b4d8; }"
-    "QPushButton { background: #1a2a3a; border: 1px solid #203040;"
-    "  border-radius: 3px; padding: 2px 8px; font-size: 10px; color: #c8d8e8; }";
+    "QLabel { color: #8090a0; font-size: 11px; }"
+    "QPushButton { background: #1a2a3a; border: 1px solid #205070;"
+    "  border-radius: 3px; padding: 2px 8px; font-size: 11px; font-weight: bold; color: #c8d8e8; }"
+    "QPushButton:hover { background: #204060; }";
 
 static QWidget* appletTitleBar(const QString& text)
 {
@@ -69,94 +61,82 @@ void CatApplet::buildUI()
 {
     setStyleSheet(kSectionStyle);
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(6, 4, 6, 4);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    outer->addWidget(appletTitleBar("CAT Control"));
+
+    auto* content = new QWidget;
+    auto* root = new QVBoxLayout(content);
+    root->setContentsMargins(4, 2, 4, 2);
     root->setSpacing(4);
+    outer->addWidget(content);
 
     auto& settings = AppSettings::instance();
 
-    // ── TCP Section ─────────────────────────────────────────────────────────
-    root->addWidget(appletTitleBar("rigctld TCP Server"));
-
     static const QString kGreenToggle =
         "QPushButton { background: #1a2a3a; border: 1px solid #205070; border-radius: 3px;"
-        " color: #c8d8e8; font-size: 10px; font-weight: bold; padding: 2px 8px; }"
+        " color: #c8d8e8; font-size: 11px; font-weight: bold; padding: 2px 8px; }"
         "QPushButton:hover { background: #204060; }"
         "QPushButton:checked { background: #006040; color: #00ff88; border: 1px solid #00a060; }";
 
-    auto* tcpRow = new QHBoxLayout;
-    m_tcpEnable = new QPushButton("Enable");
-    m_tcpEnable->setCheckable(true);
-    // Don't restore checked state — CAT auto-start is controlled by the
-    // "Autostart CAT with AetherSDR" menu item, not per-button state.
-    m_tcpEnable->setStyleSheet(kGreenToggle);
-    m_tcpEnable->setFixedHeight(22);
-    tcpRow->addWidget(m_tcpEnable);
+    static constexpr const char* kDimLabel =
+        "QLabel { color: #8090a0; font-size: 11px; }";
 
-    auto* portLabel = new QLabel("Port:");
-    tcpRow->addWidget(portLabel);
-    m_tcpPort = new QSpinBox;
-    m_tcpPort->setRange(1024, 65535);
-    m_tcpPort->setValue(settings.value("CatTcpPort", "4532").toInt());
-    m_tcpPort->setFixedWidth(70);
-    tcpRow->addWidget(m_tcpPort);
-    tcpRow->addStretch();
-    root->addLayout(tcpRow);
+    static constexpr int kLabelW = 40;
 
-    m_tcpStatus = new QLabel("Status: stopped");
-    root->addWidget(m_tcpStatus);
+    static constexpr const char* kInsetStyle =
+        "QLineEdit { font-size: 11px; background: #0a0a18; border: 1px solid #1e2e3e;"
+        " border-radius: 3px; padding: 1px 4px; color: #c8d8e8; }";
 
-    connect(m_tcpEnable, &QPushButton::toggled, this, [this](bool on) {
-        // State managed by Autostart CAT menu item
-        if (!m_server) return;
-        if (on) {
-            int port = m_tcpPort->value();
-            auto& ss = AppSettings::instance(); ss.setValue("CatTcpPort", QString::number(port)); ss.save();
-            m_server->start(static_cast<quint16>(port));
-        } else {
-            m_server->stop();
-        }
-        updateTcpStatus();
-    });
+    // ── Slice selector ──────────────────────────────────────────────────────
+    auto* sliceRow = new QHBoxLayout;
+    sliceRow->setSpacing(4);
+    auto* sliceLabel = new QLabel("Slice:");
+    sliceLabel->setStyleSheet(kDimLabel);
+    sliceLabel->setFixedWidth(kLabelW);
+    sliceRow->addWidget(sliceLabel);
+    m_sliceSelect = new QComboBox;
+    // Populated dynamically in setRadioModel()
+    m_sliceSelect->setCurrentIndex(0);
+    AetherSDR::applyComboStyle(m_sliceSelect);
+    sliceRow->addWidget(m_sliceSelect, 1);
+    root->addLayout(sliceRow);
 
-    connect(m_tcpPort, &QSpinBox::editingFinished, this, [this]() {
-        { auto& ss = AppSettings::instance(); ss.setValue("CatTcpPort", QString::number(m_tcpPort->value())); ss.save(); }
-        // Restart if running
-        if (m_server && m_server->isRunning()) {
-            m_server->stop();
-            m_server->start(static_cast<quint16>(m_tcpPort->value()));
-            updateTcpStatus();
-        }
-    });
-
-    root->addWidget(separator());
-
-    // ── PTY Section ─────────────────────────────────────────────────────────
-    root->addWidget(appletTitleBar("Virtual Serial Port"));
+    // ── Virtual Serial Port ──────────────────────────────────────────────────
+    auto* ptyRow1 = new QHBoxLayout;
+    ptyRow1->setSpacing(4);
+    auto* ttyLabel = new QLabel("TTY:");
+    ttyLabel->setStyleSheet(kDimLabel);
+    ttyLabel->setFixedWidth(kLabelW);
+    ptyRow1->addWidget(ttyLabel);
 
     m_ptyEnable = new QPushButton("Enable");
     m_ptyEnable->setCheckable(true);
-    // Don't restore checked state — controlled by Autostart CAT menu item.
     m_ptyEnable->setStyleSheet(kGreenToggle);
-    m_ptyEnable->setFixedHeight(22);
-    root->addWidget(m_ptyEnable);
+    m_ptyEnable->setFixedSize(60, 22);
+    ptyRow1->addWidget(m_ptyEnable);
 
-    auto* ptyRow = new QHBoxLayout;
-    m_ptyPath = new QLabel("Path: —");
-    m_ptyPath->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    ptyRow->addWidget(m_ptyPath, 1);
+    auto* pathLabel = new QLabel("Path:");
+    pathLabel->setStyleSheet(kDimLabel);
+    ptyRow1->addWidget(pathLabel);
+    m_ptyPath = new QLineEdit(
+        settings.value("CatTtyPath", "/tmp/AetherSDR-CAT").toString());
+    m_ptyPath->setStyleSheet(
+        "QLineEdit { font-size: 10px; background: #0a0a18; border: 1px solid #1e2e3e;"
+        " border-radius: 3px; padding: 0px 2px; color: #c8d8e8; }");
+    ptyRow1->addWidget(m_ptyPath, 1);
 
-    m_ptyCopy = new QPushButton("Copy");
-    m_ptyCopy->setFixedWidth(42);
-    ptyRow->addWidget(m_ptyCopy);
-    root->addLayout(ptyRow);
-
-    connect(m_ptyCopy, &QPushButton::clicked, this, [this]() {
-        QApplication::clipboard()->setText(m_ptyPath->text().replace("Path: ", ""));
+    connect(m_ptyPath, &QLineEdit::editingFinished, this, [this]() {
+        auto& ss = AppSettings::instance();
+        ss.setValue("CatTtyPath", m_ptyPath->text());
+        ss.save();
     });
 
+    root->addLayout(ptyRow1);
+
     connect(m_ptyEnable, &QPushButton::toggled, this, [this](bool on) {
-        // State managed by Autostart CAT menu item
         if (!m_pty) return;
         if (on)
             m_pty->start();
@@ -165,29 +145,90 @@ void CatApplet::buildUI()
         updatePtyStatus();
     });
 
-    root->addWidget(separator());
+    // ── rigctld TCP ──────────────────────────────────────────────────────────
+    auto* tcpRow = new QHBoxLayout;
+    tcpRow->setSpacing(4);
+    auto* tcpLabel = new QLabel("rigctld:");
+    tcpLabel->setStyleSheet(kDimLabel);
+    tcpLabel->setFixedWidth(kLabelW);
+    tcpRow->addWidget(tcpLabel);
 
-    // ── Slice selector ──────────────────────────────────────────────────────
-    auto* sliceRow = new QHBoxLayout;
-    sliceRow->addWidget(new QLabel("Control Slice:"));
-    m_sliceSelect = new QComboBox;
-    m_sliceSelect->addItems({"A (Slice 0)", "B (Slice 1)"});
-    m_sliceSelect->setCurrentIndex(0);
-    sliceRow->addWidget(m_sliceSelect, 1);
-    root->addLayout(sliceRow);
+    m_tcpEnable = new QPushButton("Enable");
+    m_tcpEnable->setCheckable(true);
+    m_tcpEnable->setStyleSheet(kGreenToggle);
+    m_tcpEnable->setFixedSize(60, 22);
+    tcpRow->addWidget(m_tcpEnable);
 
-    root->addWidget(separator());
+    auto* portLabel = new QLabel("Port:");
+    portLabel->setStyleSheet(kDimLabel);
+    tcpRow->addWidget(portLabel);
+
+    // Port + status in a single inset container (matches TTY path inset)
+    auto* portContainer = new QWidget;
+    portContainer->setStyleSheet(
+        "QWidget#portInset { background: #0a0a18; border: 1px solid #1e2e3e;"
+        " border-radius: 3px; }");
+    portContainer->setObjectName("portInset");
+    auto* portLayout = new QHBoxLayout(portContainer);
+    portLayout->setContentsMargins(2, 0, 4, 0);
+    portLayout->setSpacing(0);
+
+    m_tcpPort = new QLineEdit(settings.value("CatTcpPort", "4532").toString());
+    m_tcpPort->setFixedWidth(36);
+    m_tcpPort->setAlignment(Qt::AlignCenter);
+    m_tcpPort->setStyleSheet(
+        "QLineEdit { font-size: 10px; background: transparent; border: none;"
+        " padding: 0px; color: #c8d8e8; }");
+    portLayout->addWidget(m_tcpPort);
+
+    portLayout->addStretch();
+    m_tcpStatus = new QLabel("(stopped)");
+    m_tcpStatus->setStyleSheet("QLabel { font-size: 10px; color: #506070; }");
+    m_tcpStatus->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    portLayout->addWidget(m_tcpStatus);
+
+    tcpRow->addWidget(portContainer, 1);
+    root->addLayout(tcpRow);
+
+    connect(m_tcpEnable, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_server) return;
+        if (on) {
+            int port = m_tcpPort->text().toInt();
+            if (port < 1024 || port > 65535) port = 4532;
+            auto& ss = AppSettings::instance();
+            ss.setValue("CatTcpPort", QString::number(port));
+            ss.save();
+            m_server->start(static_cast<quint16>(port));
+        } else {
+            m_server->stop();
+        }
+        updateTcpStatus();
+    });
+
+    connect(m_tcpPort, &QLineEdit::editingFinished, this, [this]() {
+        int port = m_tcpPort->text().toInt();
+        if (port < 1024 || port > 65535) {
+            port = 4532;
+            m_tcpPort->setText("4532");
+        }
+        auto& ss = AppSettings::instance();
+        ss.setValue("CatTcpPort", QString::number(port));
+        ss.save();
+        if (m_server && m_server->isRunning()) {
+            m_server->stop();
+            m_server->start(static_cast<quint16>(port));
+            updateTcpStatus();
+        }
+    });
 
     // ── DAX Section (placeholder) ───────────────────────────────────────────
-    root->addWidget(appletTitleBar("DAX Audio Channels"));
+    outer->addWidget(appletTitleBar("DAX Audio Channels"));
 
     m_daxPlaceholder = new QLabel("DAX virtual audio requires PipeWire\n"
                                    "integration — coming soon (issue #15)");
     m_daxPlaceholder->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
     m_daxPlaceholder->setAlignment(Qt::AlignCenter);
-    root->addWidget(m_daxPlaceholder);
-
-    root->addStretch();
+    outer->addWidget(m_daxPlaceholder);
 }
 
 void CatApplet::setRadioModel(RadioModel* model)
@@ -196,6 +237,15 @@ void CatApplet::setRadioModel(RadioModel* model)
     if (model) {
         connect(model, &RadioModel::connectionStateChanged,
                 this, &CatApplet::onConnectionStateChanged);
+        connect(model, &RadioModel::infoChanged,
+                this, [this]() {
+            // Rebuild slice list from radio's max slices
+            int maxSlices = m_model->maxSlices();
+            m_sliceSelect->clear();
+            static const char letters[] = "ABCDEFGH";
+            for (int i = 0; i < maxSlices && i < 8; ++i)
+                m_sliceSelect->addItem(QString("Slice %1").arg(letters[i]));
+        });
     }
 }
 
@@ -207,7 +257,7 @@ void CatApplet::setRigctlServer(RigctlServer* server)
 
         // Auto-start if was enabled
         if (m_tcpEnable->isChecked()) {
-            server->start(static_cast<quint16>(m_tcpPort->value()));
+            server->start(static_cast<quint16>(m_tcpPort->text().toInt()));
             updateTcpStatus();
         }
     }
@@ -218,10 +268,10 @@ void CatApplet::setRigctlPty(RigctlPty* pty)
     m_pty = pty;
     if (pty) {
         connect(pty, &RigctlPty::started, this, [this](const QString& path) {
-            m_ptyPath->setText("Path: " + path);
+            m_ptyPath->setText(path);
         });
         connect(pty, &RigctlPty::stopped, this, [this]() {
-            m_ptyPath->setText("Path: —");
+            m_ptyPath->setText("—");
         });
 
         // Auto-start handled by MainWindow via Autostart menu items
@@ -241,12 +291,11 @@ void CatApplet::onConnectionStateChanged(bool /*connected*/)
 void CatApplet::updateTcpStatus()
 {
     if (!m_server || !m_server->isRunning()) {
-        m_tcpStatus->setText("Status: stopped");
+        m_tcpStatus->setText("(stopped)");
         return;
     }
     int n = m_server->clientCount();
-    m_tcpStatus->setText(QStringLiteral("Status: listening on port %1 (%2 client%3)")
-                             .arg(m_server->port())
+    m_tcpStatus->setText(QStringLiteral("(%1 client%2)")
                              .arg(n)
                              .arg(n == 1 ? "" : "s"));
 }
@@ -254,9 +303,9 @@ void CatApplet::updateTcpStatus()
 void CatApplet::updatePtyStatus()
 {
     if (!m_pty || !m_pty->isRunning()) {
-        m_ptyPath->setText("Path: —");
+        m_ptyPath->setText("—");
     } else {
-        m_ptyPath->setText("Path: " + m_pty->symlinkPath());
+        m_ptyPath->setText(m_pty->symlinkPath());
     }
 }
 

@@ -13,9 +13,9 @@
 
 AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 0.2.7** | [Releases](https://github.com/ten9876/AetherSDR/releases) | [Discussions](https://github.com/ten9876/AetherSDR/discussions)
+**Current version: 0.2.8** | [Releases](https://github.com/ten9876/AetherSDR/releases) | [Discussions](https://github.com/ten9876/AetherSDR/discussions)
 
-![AetherSDR Screenshot](docs/screenshot-v3.png)
+![AetherSDR Screenshot](docs/screenshot-v4.png)
 
 ---
 
@@ -34,7 +34,10 @@ Tested with the **FLEX-8600** running v4.1.5 software. Should work with other Fl
 - dBm scale with drag-to-adjust
 - Floating VFO widget with S-meter, frequency, and quick controls
 - Band selector with ARRL band plan defaults
-- Per-band settings memory (antenna, filter, zoom, dBm range persisted per band)
+- Display sub-menu: AVG, FPS, FFT fill (opacity + color), weighted average
+- Waterfall controls: gain, black level (+ auto), scroll rate
+- Native VITA-49 waterfall tiles (PCC 0x8004) with full frame assembly
+- FFT and waterfall rendering fully decoupled
 
 ### Receiver Controls
 - Full RX controls: antenna, filter presets, AGC, AF gain, pan, squelch
@@ -63,12 +66,29 @@ Tested with the **FLEX-8600** running v4.1.5 software. Should work with other Fl
 - Repeater offset with simplex/up/down direction
 - REV (reverse) toggle
 
+### CAT Control & Integration
+- Hamlib rigctld-compatible TCP server (port 4532) for WSJT-X, fldigi, N1MM
+- Virtual serial port (PTY) at `/tmp/AetherSDR-CAT`
+- Autostart options for rigctld and TTY
+- Supports: get/set frequency, get/set mode, PTT, split, dump_state
+
+### Radio Setup
+- Full settings dialog (8 tabs): Radio, Network, GPS, TX, Phone/CW, RX, Filters, XVTR
+- Per-band TX settings: RF power, tune power, PTT inhibit, interlock routing
+- TX profile management
+- XVTR transverter configuration
+- Network diagnostics, memory channels, spot settings
+
 ### General
 - Auto-discovery of radios on the network
 - Auto-reconnect on connection loss
 - Auto-connect to last used radio on launch
 - Click-to-tune and scroll-wheel tuning on spectrum
-- Persistent window layout
+- Multi-Flex support (independent operation alongside SmartSDR/Maestro)
+- XML settings persistence (SSDR-compatible format)
+- Persistent window layout and display preferences
+- Desktop integration (`.desktop` file, icon, `cmake --install`)
+- PC audio TX via DAX stream (mic TX also supported)
 
 ---
 
@@ -117,7 +137,6 @@ This places `AetherSDR` in `/usr/local/bin`, the `.desktop` file in the app laun
 ## Roadmap
 
 - [ ] DAX audio channels — PipeWire virtual devices for digital mode apps (FreeDV, WSJT-X, fldigi, JS8Call)
-- [ ] Hamlib/rigctld interface — TCP CAT/PTT control (port 4532) for third-party apps
 - [ ] Multi-slice support
 - [ ] TNF (tracking notch filter) management
 - [ ] Band stacking registers

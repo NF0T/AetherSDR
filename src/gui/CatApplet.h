@@ -4,7 +4,7 @@
 
 class QPushButton;
 class QLabel;
-class QSpinBox;
+class QLineEdit;
 class QComboBox;
 class QSlider;
 
@@ -45,13 +45,12 @@ private:
 
     // TCP section
     QPushButton* m_tcpEnable{nullptr};
-    QSpinBox*    m_tcpPort{nullptr};
+    QLineEdit*   m_tcpPort{nullptr};
     QLabel*      m_tcpStatus{nullptr};
 
     // PTY section
     QPushButton* m_ptyEnable{nullptr};
-    QLabel*      m_ptyPath{nullptr};
-    QPushButton* m_ptyCopy{nullptr};
+    QLineEdit*   m_ptyPath{nullptr};
 
     // Slice selector
     QComboBox*   m_sliceSelect{nullptr};

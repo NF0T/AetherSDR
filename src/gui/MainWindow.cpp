@@ -559,10 +559,10 @@ void MainWindow::buildUI()
     splitter->setStretchFactor(2, 0);
     splitter->setCollapsible(2, false);
 
-    // Set initial splitter sizes: left=260, center=stretch, right=260
+    // Set initial splitter sizes: left=260, center=stretch, right=310
     // The center pane gets whatever is left after the fixed-width sidebars.
-    const int centerWidth = qMax(400, width() - 260 - 260);
-    splitter->setSizes({260, centerWidth, 260});
+    const int centerWidth = qMax(400, width() - 260 - 310);
+    splitter->setSizes({260, centerWidth, 310});
 
     // ── Status bar ─────────────────────────────────────────────────────────
     const QString statusStyle = "QLabel { color: #8aa8c0; font-size: 11px; background: transparent; }";

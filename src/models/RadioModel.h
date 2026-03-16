@@ -101,6 +101,9 @@ public:
     QString gpsSpeed()     const { return m_gpsSpeed; }
     QString gpsFreqError() const { return m_gpsFreqError; }
 
+    // Max slices reported by radio
+    int maxSlices() const { return m_maxSlices; }
+
     // Oscillator / RX settings
     QString oscState()     const { return m_oscState; }
     QString oscSetting()   const { return m_oscSetting; }
@@ -226,6 +229,7 @@ private:
 
     QString     m_name;
     QString     m_model;
+    int         m_maxSlices{4};
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
     QString     m_protocolVersion;  // protocol version from V line (e.g. "1.4.0.0")
     float       m_paTemp{0.0f};
