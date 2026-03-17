@@ -100,9 +100,10 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manRow->setContentsMargins(0, 0, 0, 0);
     m_manualIpEdit = new QLineEdit(m_manualGroup);
     m_manualIpEdit->setPlaceholderText("IP address");
+    m_manualIpEdit->setFixedWidth(150);
     m_manualProbeBtn = new QPushButton("Go", m_manualGroup);
-    m_manualProbeBtn->setFixedWidth(30);
-    manRow->addWidget(m_manualIpEdit, 1);
+    m_manualProbeBtn->setFixedWidth(100);
+    manRow->addWidget(m_manualIpEdit);
     manRow->addWidget(m_manualProbeBtn);
     manBox->addLayout(manRow);
 
