@@ -79,6 +79,12 @@ void TnfModel::setTnfDepth(int id, int depthDb)
 void TnfModel::setTnfPermanent(int id, bool on)
 {
     emit commandReady(QString("tnf set %1 permanent=%2").arg(id).arg(on ? 1 : 0));
+    // Radio doesn't send status update — update locally
+    auto it = m_tnfs.find(id);
+    if (it != m_tnfs.end()) {
+        it->permanent = on;
+        emit tnfChanged(id);
+    }
 }
 
 void TnfModel::requestRemoveTnf(int id)
