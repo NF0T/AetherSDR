@@ -1200,20 +1200,25 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         p.setPen(QColor(0x0f, 0x0f, 0x1a, 200));
         p.drawLine(x1, bandY, x1, bandY + bandH);
 
-        // Label with license class when there's room
+        // Label: mode + lowest license class allowed
         if (x2 - x1 > 20) {
             QFont f = p.font();
             f.setPointSize(6);
             f.setBold(true);
             p.setFont(f);
 
-            QString label = seg.label;
-            if (!lic.isEmpty() && x2 - x1 > 50)
-                label = QString("%1 (%2)").arg(seg.label, seg.license);
-            else if (!lic.isEmpty() && x2 - x1 > 35)
-                label = QString("%1 %2").arg(seg.label).arg(lic.left(1));
+            // Determine lowest (least restrictive) license class
+            QString lowestClass;
+            if (lic.contains("T"))       lowestClass = "Tech";
+            else if (lic.contains("N"))  lowestClass = "Tech";  // Novice grandfathered
+            else if (lic.contains("G"))  lowestClass = "General";
+            else if (lic == "E" || lic == "E,A") lowestClass = "Extra";
 
-            p.setPen(QColor(seg.r, seg.g, seg.b, 255));
+            QString label = seg.label;
+            if (!lowestClass.isEmpty() && x2 - x1 > 60)
+                label = QString("%1 %2").arg(seg.label, lowestClass);
+
+            p.setPen(Qt::white);
             p.drawText(QRect(x1, bandY, x2 - x1, bandH),
                        Qt::AlignCenter, label);
         }
