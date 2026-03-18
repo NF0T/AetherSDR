@@ -7,6 +7,8 @@
 #include <QPushButton>
 #include <QSlider>
 #include <QLabel>
+#include <QLineEdit>
+#include <QStackedWidget>
 #include <QComboBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -376,17 +378,50 @@ void RxApplet::buildUI()
         });
         m_freqRow->addWidget(m_modeCombo);
 
+        m_freqStack = new QStackedWidget;
+        m_freqStack->setFixedHeight(34);
+
         m_freqLabel = new QLabel("0.000.000");
-        m_freqLabel->setFixedHeight(24);
         m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_freqLabel->setStyleSheet(
             "QLabel { color: #c8d8e8; font-size: 28px; font-weight: bold;"
-            " background: transparent; padding: 0 1px 0 0; }");
-
+            " background: transparent; padding: 0; margin: 0; }");
         m_freqLabel->installEventFilter(this);
+        m_freqStack->addWidget(m_freqLabel);
+
+        m_freqEdit = new QLineEdit;
+        m_freqEdit->setStyleSheet(
+            "QLineEdit { background: #0a0a18; border: 1px solid #00b4d8;"
+            " border-radius: 3px; color: #00e5ff; font-size: 20px;"
+            " font-weight: bold; padding: 0 4px; }");
+        m_freqEdit->setAlignment(Qt::AlignRight);
+        m_freqEdit->setPlaceholderText("MHz");
+        m_freqStack->addWidget(m_freqEdit);
+        m_freqStack->setCurrentIndex(0);
+
+        connect(m_freqEdit, &QLineEdit::returnPressed, this, [this] {
+            const QString text = m_freqEdit->text().trimmed();
+            if (!text.isEmpty() && m_slice) {
+                QString clean = text;
+                int firstDot = clean.indexOf('.');
+                if (firstDot >= 0) {
+                    clean = clean.left(firstDot) + "." + clean.mid(firstDot + 1).remove('.');
+                }
+                bool ok = false;
+                double freqMhz = clean.toDouble(&ok);
+                if (ok && freqMhz > 54000.0) freqMhz /= 1e6;
+                else if (ok && freqMhz > 54.0 && freqMhz < 54000.0) freqMhz /= 1e3;
+                if (ok && freqMhz >= 0.001 && freqMhz <= 54.0)
+                    m_slice->setFrequency(freqMhz);
+            }
+            m_freqStack->setCurrentIndex(0);
+        });
+        connect(m_freqEdit, &QLineEdit::editingFinished, this, [this] {
+            m_freqStack->setCurrentIndex(0);
+        });
 
         m_freqRow->addStretch(1);
-        m_freqRow->addWidget(m_freqLabel);
+        m_freqRow->addWidget(m_freqStack);
         root->addLayout(m_freqRow);
     }
 
@@ -1527,6 +1562,17 @@ void RxApplet::applyOffsetDir(const QString& dir)
 
 bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
 {
+    // Double-click frequency label → inline edit
+    if (obj == m_freqLabel && ev->type() == QEvent::MouseButtonDblClick) {
+        if (m_slice) {
+            m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
+            m_freqEdit->selectAll();
+        }
+        m_freqStack->setCurrentIndex(1);
+        m_freqEdit->setFocus();
+        return true;
+    }
+
     if (obj == m_freqLabel && ev->type() == QEvent::Wheel) {
         auto* we = static_cast<QWheelEvent*>(ev);
         const int steps = we->angleDelta().y() / 120;

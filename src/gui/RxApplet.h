@@ -8,6 +8,8 @@ class QGridLayout;
 class QPushButton;
 class QSlider;
 class QLabel;
+class QLineEdit;
+class QStackedWidget;
 class QComboBox;
 class QDoubleSpinBox;
 
@@ -92,6 +94,8 @@ private:
     QPushButton* m_txBadge{nullptr};       // TX slice indicator (click to set as TX slice)
     QComboBox*   m_modeCombo{nullptr};     // mode selector (USB, LSB, CW, etc.)
     QLabel*      m_freqLabel{nullptr};     // frequency readout e.g. "14.289.510"
+    QLineEdit*   m_freqEdit{nullptr};
+    QStackedWidget* m_freqStack{nullptr};
 
     // Filter presets (Hz widths) — per-mode, swapped on mode change
     QVector<int>            m_filterWidths{1800, 2100, 2400, 2700, 3300, 6000};

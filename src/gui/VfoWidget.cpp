@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QSlider>
+#include <QLineEdit>
 #include <QComboBox>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -248,12 +249,69 @@ void VfoWidget::buildUI()
         emit lockToggled(locked);
     });
 
-    // ── Frequency row (right-aligned) ─────────────────────────────────────
+    // ── Frequency row (right-aligned, double-click to edit) ────────────────
+    m_freqStack = new QStackedWidget;
+    m_freqStack->setFixedHeight(30);
+
     m_freqLabel = new QLabel("14.225.000");
-    m_freqLabel->setStyleSheet("QLabel { background: transparent; border: none; "
-                                "color: #c8d8e8; font-size: 24px; font-weight: bold; }");
+    m_freqLabel->setStyleSheet("QLabel { background: transparent;"
+                                " border: 1px solid rgba(255,255,255,80);"
+                                " border-radius: 3px;"
+                                " color: #c8d8e8; font-size: 24px; font-weight: bold;"
+                                " padding: 0 2px; }");
     m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    root->addWidget(m_freqLabel);
+    m_freqLabel->installEventFilter(this);
+    m_freqStack->addWidget(m_freqLabel);
+
+    m_freqEdit = new QLineEdit;
+    m_freqEdit->setStyleSheet(
+        "QLineEdit { background: #0a0a18; border: 1px solid #00b4d8;"
+        " border-radius: 3px; color: #00e5ff; font-size: 22px;"
+        " font-weight: bold; padding: 0 2px 0 0; }");
+    m_freqEdit->setAlignment(Qt::AlignRight);
+    // Size to fit "000.000.000" at the label font size
+    QFont labelFont;
+    labelFont.setPixelSize(24);
+    labelFont.setBold(true);
+    const int stackW = QFontMetrics(labelFont).horizontalAdvance("000.000.000") + 8;
+    m_freqStack->setFixedWidth(stackW);
+    m_freqEdit->setPlaceholderText("MHz (e.g. 14.225)");
+    m_freqStack->addWidget(m_freqEdit);
+    m_freqStack->setCurrentIndex(0);  // show label by default
+
+    connect(m_freqEdit, &QLineEdit::returnPressed, this, [this] {
+        const QString text = m_freqEdit->text().trimmed();
+        if (!text.isEmpty()) {
+            bool ok = false;
+            double freqMhz = 0.0;
+
+            // Try parsing as MHz (e.g. "14.225", "14.225.000", "14225", "14225.0")
+            QString clean = text;
+            // Handle "14.225.000" format — remove dots beyond the first
+            int firstDot = clean.indexOf('.');
+            if (firstDot >= 0) {
+                QString beforeDot = clean.left(firstDot);
+                QString afterDot = clean.mid(firstDot + 1).remove('.');
+                clean = beforeDot + "." + afterDot;
+            }
+            freqMhz = clean.toDouble(&ok);
+
+            // If value looks like Hz or kHz (> 54 MHz is out of HF range)
+            if (ok && freqMhz > 54000.0)
+                freqMhz /= 1e6;  // treat as Hz
+            else if (ok && freqMhz > 54.0 && freqMhz < 54000.0)
+                freqMhz /= 1e3;  // treat as kHz
+
+            if (ok && freqMhz >= 0.001 && freqMhz <= 54.0 && m_slice)
+                m_slice->setFrequency(freqMhz);
+        }
+        m_freqStack->setCurrentIndex(0);  // back to label
+    });
+    connect(m_freqEdit, &QLineEdit::editingFinished, this, [this] {
+        m_freqStack->setCurrentIndex(0);
+    });
+
+    root->addWidget(m_freqStack, 0, Qt::AlignRight);
 
     // ── S-meter + dBm row (75/25 split) ────────────────────────────────────
     // S-meter bar is painted in paintEvent; spacer reserves its space.
@@ -1707,6 +1765,18 @@ void VfoWidget::setTransmitModel(TransmitModel* txModel)
 
 bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
 {
+    // Double-click on frequency label → open inline edit
+    if (obj == m_freqLabel && event->type() == QEvent::MouseButtonDblClick) {
+        // Pre-fill with current frequency in MHz (e.g. "14.225000")
+        if (m_slice) {
+            m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
+            m_freqEdit->selectAll();
+        }
+        m_freqStack->setCurrentIndex(1);  // show edit
+        m_freqEdit->setFocus();
+        return true;
+    }
+
     if (event->type() == QEvent::MouseButtonPress) {
         auto* lbl = qobject_cast<QLabel*>(obj);
         if (lbl) {

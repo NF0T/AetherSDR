@@ -8,6 +8,7 @@
 
 class QPushButton;
 class QLabel;
+class QLineEdit;
 class QStackedWidget;
 class QSlider;
 class QComboBox;
@@ -83,6 +84,8 @@ private:
 
     // Frequency / meter
     QLabel* m_freqLabel{nullptr};
+    QLineEdit* m_freqEdit{nullptr};
+    QStackedWidget* m_freqStack{nullptr};
     QLabel* m_dbmLabel{nullptr};
 
     // Sub-menu tabs (QLabels with click via event filter)
