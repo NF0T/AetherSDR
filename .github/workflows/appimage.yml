@@ -13,31 +13,46 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-22.04
             arch: x86_64
-          - runner: ubuntu-24.04-arm
+            qt_arch: linux_gcc_64
+          - runner: ubuntu-22.04-arm
             arch: aarch64
+            qt_arch: linux_gcc_arm64
 
     runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config \
-            qt6-base-dev qt6-multimedia-dev libgl1-mesa-dev \
-            qml6-module-qtmultimedia libqt6multimedia6 \
+            libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-            gstreamer1.0-pulseaudio gstreamer1.0-pipewire \
-            libfuse2 file desktop-file-utils imagemagick
+            gstreamer1.0-pulseaudio \
+            libfuse2 file desktop-file-utils imagemagick \
+            python3-pip
+
+      - name: Install Qt 6.7 via aqtinstall
+        run: |
+          pip3 install aqtinstall
+          aqt install-qt linux desktop 6.7.3 ${{ matrix.qt_arch }} \
+            -m qtmultimedia \
+            --outputdir ${{ github.workspace }}/Qt
+          echo "Qt6_DIR=${{ github.workspace }}/Qt/6.7.3/gcc_64/lib/cmake/Qt6" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/6.7.3/gcc_64" >> $GITHUB_ENV
+          echo "PATH=${{ github.workspace }}/Qt/6.7.3/gcc_64/bin:$PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=${{ github.workspace }}/Qt/6.7.3/gcc_64/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: Configure
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/6.7.3/gcc_64
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -49,11 +64,10 @@ jobs:
           convert AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
             -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
 
-          # Bundle Qt6 multimedia backend plugin (linuxdeploy-plugin-qt misses this)
-          QT_PLUGIN_PATH=$(qmake6 -query QT_INSTALL_PLUGINS 2>/dev/null || qmake -query QT_INSTALL_PLUGINS)
+          # Bundle Qt6 multimedia backend plugin
+          QT_PLUGIN_PATH=${{ github.workspace }}/Qt/6.7.3/gcc_64/plugins
           mkdir -p AppDir/usr/plugins/multimedia
-          cp -v "$QT_PLUGIN_PATH"/multimedia/libgstreamer* AppDir/usr/plugins/multimedia/ 2>/dev/null || true
-          cp -v "$QT_PLUGIN_PATH"/multimedia/libffmpeg* AppDir/usr/plugins/multimedia/ 2>/dev/null || true
+          cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/ 2>/dev/null || true
 
           # Bundle essential GStreamer plugins for audio
           GST_PATH=$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || echo "/usr/lib/$(uname -m)-linux-gnu/gstreamer-1.0")
@@ -74,20 +88,8 @@ jobs:
           LDAI_OUTPUT: AetherSDR-${{ github.ref_name }}-${{ matrix.arch }}.AppImage
           QT_SELECT: qt6
           EXTRA_QT_PLUGINS: multimedia
+          QMAKE: ${{ github.workspace }}/Qt/6.7.3/gcc_64/bin/qmake
         run: |
-          export QMAKE=$(which qmake6 2>/dev/null || which qmake)
-
-          # Create wrapper script that sets GST_PLUGIN_PATH for bundled plugins
-          mkdir -p AppDir/usr/bin
-          cat > AppDir/usr/bin/aethersdr-wrapper << 'WRAPPER'
-          #!/bin/bash
-          HERE="$(dirname "$(readlink -f "${0}")")"
-          export GST_PLUGIN_PATH="${HERE}/../lib/gstreamer-1.0:${GST_PLUGIN_PATH}"
-          export QT_PLUGIN_PATH="${HERE}/../plugins:${QT_PLUGIN_PATH}"
-          exec "${HERE}/AetherSDR" "$@"
-          WRAPPER
-          chmod +x AppDir/usr/bin/aethersdr-wrapper
-
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \
