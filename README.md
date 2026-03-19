@@ -13,7 +13,7 @@
 
 AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 0.4.13** | [Download](https://github.com/ten9876/AetherSDR/releases/latest) | [Discussions](https://github.com/ten9876/AetherSDR/discussions)
+**Current version: 0.4.14** | [Download](https://github.com/ten9876/AetherSDR/releases/latest) | [Discussions](https://github.com/ten9876/AetherSDR/discussions)
 
 > **Cross-platform downloads available:** Linux AppImage, macOS universal DMG, and Windows ZIP.
 > Linux is the primary supported platform. macOS and Windows builds are provided as a courtesy
@@ -107,6 +107,14 @@ Tested with the **FLEX-8600** running v4.1.5 software. Should work with other Fl
 - PTT auto TX-switch: keying a channel moves TX to that channel's slice
 - Autostart options for rigctld and TTY
 - Supports: get/set frequency, get/set mode, PTT, split, dump_state
+
+### Digital Voice (RADE)
+- **FreeDV RADE** (Radio Autoencoder) — AI-based digital voice codec (contributed by @pepefrog1234)
+- Client-side neural encoder/decoder — radio does SSB passthrough (DIGU/DIGL)
+- TX: mic → LPCNet feature extraction → RADE OFDM modulation → radio
+- RX: DAX audio → RADE demodulation → FARGAN neural vocoder → speaker
+- Bundled with Opus (auto-downloaded at build time) — no separate installation
+- Available on Linux and macOS; Windows support tracked in #87
 
 ### SmartLink Remote Operation (beta)
 - Log in with FlexRadio SmartSDR+ account (email/password via Auth0)
