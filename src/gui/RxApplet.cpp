@@ -808,7 +808,7 @@ void RxApplet::buildUI()
         row->addWidget(m_muteBtn);
 
         m_afSlider = new QSlider(Qt::Horizontal);
-        m_afSlider->setRange(0, 100);
+        m_afSlider->setRange(0, 200);  // 0–200% (up to +6 dB boost)
         m_afSlider->setValue(70);
         m_afSlider->setStyleSheet(kSliderStyle);
         m_afSlider->setToolTip("70");

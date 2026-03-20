@@ -235,6 +235,19 @@ void PipeWireAudioBridge::unloadModules()
 void PipeWireAudioBridge::setGain(float g)
 {
     m_gain = std::clamp(g, 0.0f, 1.0f);
+    for (int i = 0; i < NUM_CHANNELS; ++i)
+        m_channelGain[i] = m_gain;
+}
+
+void PipeWireAudioBridge::setChannelGain(int channel, float g)
+{
+    if (channel >= 1 && channel <= NUM_CHANNELS)
+        m_channelGain[channel - 1] = std::clamp(g, 0.0f, 1.0f);
+}
+
+void PipeWireAudioBridge::setTxGain(float g)
+{
+    m_txGain = std::clamp(g, 0.0f, 1.0f);
 }
 
 void PipeWireAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
@@ -248,14 +261,15 @@ void PipeWireAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
 
     const auto* src = reinterpret_cast<const int16_t*>(pcm.constData());
     int nSamples = pcm.size() / sizeof(int16_t);
+    float chGain = m_channelGain[channel - 1];
 
-    if (m_gain == 1.0f) {
+    if (chGain == 1.0f) {
         ::write(rx.fd, pcm.constData(), pcm.size());
     } else {
         QByteArray scaled(nSamples * sizeof(int16_t), Qt::Uninitialized);
         auto* dst = reinterpret_cast<int16_t*>(scaled.data());
         for (int i = 0; i < nSamples; ++i)
-            dst[i] = static_cast<int16_t>(src[i] * m_gain);
+            dst[i] = static_cast<int16_t>(src[i] * chGain);
         ::write(rx.fd, scaled.constData(), scaled.size());
     }
 
@@ -285,13 +299,13 @@ void PipeWireAudioBridge::readTxPipe()
     ssize_t n = ::read(m_tx.fd, buf, sizeof(buf));
     if (n <= 0) return;
 
-    // Convert int16 → float32
+    // Convert int16 → float32 with TX gain
     int nSamples = n / sizeof(int16_t);
     const auto* src = reinterpret_cast<const int16_t*>(buf);
     QByteArray out(nSamples * sizeof(float), Qt::Uninitialized);
     auto* dst = reinterpret_cast<float*>(out.data());
     for (int i = 0; i < nSamples; ++i)
-        dst[i] = src[i] / 32768.0f;
+        dst[i] = (src[i] / 32768.0f) * m_txGain;
 
     emit txAudioReady(out);
 

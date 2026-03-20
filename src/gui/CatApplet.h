@@ -42,6 +42,8 @@ public:
 
 signals:
     void daxToggled(bool on);
+    void daxRxGainChanged(int channel, float gain);  // 1-4, 0.0–1.0
+    void daxTxGainChanged(float gain);
 
 private:
     void buildUI();
@@ -66,11 +68,11 @@ private:
     };
     ChannelRow m_rows[kChannels];
 
-    // DAX section (unchanged from upstream)
+    // DAX section
     QPushButton*  m_daxEnable{nullptr};
-    QProgressBar* m_daxRxLevel[kChannels]{};
+    class MeterSlider* m_daxRxMeter[kChannels]{};
     QLabel*       m_daxRxStatus[kChannels]{};
-    QProgressBar* m_daxTxLevel{nullptr};
+    class MeterSlider* m_daxTxMeter{nullptr};
     QLabel*       m_daxTxStatus{nullptr};
 };
 

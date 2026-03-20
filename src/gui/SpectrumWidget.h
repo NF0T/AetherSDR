@@ -237,6 +237,7 @@ private:
     int   m_wfColorGain{50};         // 0-100, maps intensity to color range
     int   m_wfBlackLevel{15};        // 0-125, intensity floor (below = black)
     bool  m_wfAutoBlack{true};
+    float m_autoBlackThresh{145.0f}; // client-side auto-black: tracked noise floor
     int   m_wfLineDuration{100};     // ms per waterfall row
 
     // Waterfall colour range for FFT-derived fallback (dBm).

@@ -30,7 +30,9 @@ public:
     void close();
     bool isOpen() const { return m_open; }
 
-    void setGain(float g);
+    void setGain(float g);                     // global gain (all RX channels)
+    void setChannelGain(int channel, float g);  // per-channel RX gain (1-4)
+    void setTxGain(float g);                    // TX gain
     float gain() const { return m_gain; }
 
 public slots:
@@ -68,6 +70,8 @@ private:
 
     bool m_open{false};
     float m_gain{0.5f};
+    float m_channelGain[NUM_CHANNELS]{0.5f, 0.5f, 0.5f, 0.5f};
+    float m_txGain{0.5f};
     bool m_transmitting{false};
 };
 

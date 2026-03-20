@@ -15,7 +15,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
-#include <QProgressBar>
+#include "MeterSlider.h"
 #include <QApplication>
 #include "core/AppSettings.h"
 #include <QFrame>
@@ -223,11 +223,7 @@ void CatApplet::buildUI()
         emit daxToggled(on);
     });
 
-    // RX channel meters (DAX 1-4)
-    const QString kMeterStyle =
-        "QProgressBar { background: #0a0a18; border: 1px solid #1e2e3e;"
-        "  border-radius: 2px; max-height: 10px; }"
-        "QProgressBar::chunk { background: #00b4d8; border-radius: 1px; }";
+    // RX channel meter/sliders (DAX 1-4)
     const QString kStatusLabel = "QLabel { color: #506070; font-size: 11px; }";
 
     for (int i = 0; i < 4; ++i) {
@@ -244,17 +240,24 @@ void CatApplet::buildUI()
         m_daxRxStatus[i]->setFixedWidth(40);
         row->addWidget(m_daxRxStatus[i]);
 
-        m_daxRxLevel[i] = new QProgressBar;
-        m_daxRxLevel[i]->setRange(0, 100);
-        m_daxRxLevel[i]->setValue(0);
-        m_daxRxLevel[i]->setTextVisible(false);
-        m_daxRxLevel[i]->setStyleSheet(kMeterStyle);
-        row->addWidget(m_daxRxLevel[i], 1);
+        m_daxRxMeter[i] = new MeterSlider;
+        {
+            auto key = QStringLiteral("DaxRxGain%1").arg(i + 1);
+            float saved = settings.value(key, "0.5").toString().toFloat();
+            m_daxRxMeter[i]->setGain(std::clamp(saved, 0.0f, 1.0f));
+        }
+        connect(m_daxRxMeter[i], &MeterSlider::gainChanged, this, [this, i](float g) {
+            auto& ss = AppSettings::instance();
+            ss.setValue(QStringLiteral("DaxRxGain%1").arg(i + 1), QString::number(g, 'f', 2));
+            ss.save();
+            emit daxRxGainChanged(i + 1, g);
+        });
+        row->addWidget(m_daxRxMeter[i], 1);
 
         outer->addLayout(row);
     }
 
-    // TX meter
+    // TX meter/slider
     auto* txRow = new QHBoxLayout;
     txRow->setContentsMargins(4, 1, 4, 1);
     txRow->setSpacing(4);
@@ -268,12 +271,18 @@ void CatApplet::buildUI()
     m_daxTxStatus->setFixedWidth(40);
     txRow->addWidget(m_daxTxStatus);
 
-    m_daxTxLevel = new QProgressBar;
-    m_daxTxLevel->setRange(0, 100);
-    m_daxTxLevel->setValue(0);
-    m_daxTxLevel->setTextVisible(false);
-    m_daxTxLevel->setStyleSheet(kMeterStyle);
-    txRow->addWidget(m_daxTxLevel, 1);
+    m_daxTxMeter = new MeterSlider;
+    {
+        float saved = settings.value("DaxTxGain", "0.5").toString().toFloat();
+        m_daxTxMeter->setGain(std::clamp(saved, 0.0f, 1.0f));
+    }
+    connect(m_daxTxMeter, &MeterSlider::gainChanged, this, [this](float g) {
+        auto& ss = AppSettings::instance();
+        ss.setValue("DaxTxGain", QString::number(g, 'f', 2));
+        ss.save();
+        emit daxTxGainChanged(g);
+    });
+    txRow->addWidget(m_daxTxMeter, 1);
 
     outer->addLayout(txRow);
 }
@@ -414,17 +423,12 @@ void CatApplet::setDaxRxLevel(int channel, float rms)
     float& s = smoothed[channel - 1];
     float alpha = (rms > s) ? 0.4f : 0.08f;
     s = alpha * rms + (1.0f - alpha) * s;
-    int val = static_cast<int>(std::clamp(s * 200.0f, 0.0f, 100.0f));
-    m_daxRxLevel[channel - 1]->setValue(val);
+    m_daxRxMeter[channel - 1]->setLevel(std::clamp(s * 2.0f, 0.0f, 1.0f));
 }
 
 void CatApplet::setDaxTxLevel(float rms)
 {
-    static float smoothed = 0;
-    float alpha = (rms > smoothed) ? 0.4f : 0.08f;
-    smoothed = alpha * rms + (1.0f - alpha) * smoothed;
-    int val = static_cast<int>(std::clamp(smoothed * 200.0f, 0.0f, 100.0f));
-    m_daxTxLevel->setValue(val);
+    m_daxTxMeter->setLevel(std::clamp(rms * 2.0f, 0.0f, 1.0f));
 }
 
 } // namespace AetherSDR

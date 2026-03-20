@@ -159,6 +159,7 @@ set(GUI_SOURCES
     src/gui/PhoneApplet.cpp
     src/gui/EqApplet.cpp
     src/gui/CatApplet.cpp
+    src/gui/MeterSlider.cpp
     src/gui/AntennaGeniusApplet.cpp
 )
 

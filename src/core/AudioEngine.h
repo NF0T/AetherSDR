@@ -120,6 +120,7 @@ private slots:
 private:
     QAudioFormat makeFormat() const;
     float computeRMS(const QByteArray& pcm) const;
+    QByteArray applyBoost(const QByteArray& pcm, float gain) const;
     QByteArray buildVitaTxPacket(const float* samples, int numStereoSamples);
     QByteArray resampleStereo(const QByteArray& pcm);
     void processNr2(const QByteArray& stereoPcm);

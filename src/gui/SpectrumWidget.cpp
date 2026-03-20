@@ -280,6 +280,32 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // Native waterfall tiles carry intensity values (int16/128.0f, ~96-120 on HF).
     if (binsIntensity.isEmpty() || m_waterfall.isNull()) return;
 
+    // Client-side auto-black: track the noise floor from tile data and adjust
+    // the black threshold to sit just above it. This replaces the radio's
+    // auto_black which targets SmartSDR's different rendering engine.
+    if (m_wfAutoBlack) {
+        // Estimate noise floor as the 25th percentile of intensity values.
+        // Cheaper than full sort: sample every 8th bin.
+        float sum = 0;
+        float minVal = 1e9f, maxVal = -1e9f;
+        int count = 0;
+        for (int i = 0; i < binsIntensity.size(); i += 8) {
+            float v = binsIntensity[i];
+            sum += v;
+            if (v < minVal) minVal = v;
+            if (v > maxVal) maxVal = v;
+            count++;
+        }
+        if (count > 0) {
+            float mean = sum / count;
+            // Use mean as noise floor estimate (most bins are noise)
+            // Set threshold below mean so noise shows as faint dark blue
+            float target = mean - 3.0f;
+            // Smooth to prevent jitter
+            m_autoBlackThresh = 0.95f * m_autoBlackThresh + 0.05f * target;
+        }
+    }
+
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
 
     // Measure actual row interval for time scale
@@ -957,10 +983,14 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
 QRgb SpectrumWidget::intensityToRgb(float intensity) const
 {
     // Map black_level (0-100) to an intensity threshold.
-    // 0 = darkest (max noise suppression), 100 = brightest (everything visible).
-    // Observed noise floor: ~141-148 on HF. Threshold must exceed that at slider 0.
-    // Slider 0 → thresh 160 (well above noise), slider 100 → thresh 60.
-    const float blackThresh = 160.0f - m_wfBlackLevel * 1.0f;
+    // When auto-black is on, use the measured noise floor instead.
+    float blackThresh;
+    if (m_wfAutoBlack) {
+        blackThresh = m_autoBlackThresh;
+    } else {
+        // Manual: slider 0 → thresh 160 (well above noise), slider 100 → thresh 60.
+        blackThresh = 160.0f - m_wfBlackLevel * 1.0f;
+    }
 
     // Map color_gain (0-100) to the visible range width.
     // Higher gain = narrower range = more color contrast.

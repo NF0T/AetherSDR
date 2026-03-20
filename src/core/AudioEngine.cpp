@@ -84,9 +84,9 @@ void AudioEngine::stopRxStream()
 
 void AudioEngine::setRxVolume(float v)
 {
-    m_rxVolume = qBound(0.0f, v, 1.0f);
+    m_rxVolume = qBound(0.0f, v, 2.0f);  // allow up to +6 dB boost
     if (m_audioSink)
-        m_audioSink->setVolume(m_rxVolume);
+        m_audioSink->setVolume(std::min(m_rxVolume, 1.0f));
 }
 
 void AudioEngine::setMuted(bool muted)
@@ -112,10 +112,11 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
 
     auto writeAudio = [this](const QByteArray& data) {
         if (!m_audioDevice || !m_audioDevice->isOpen()) return;
+        const QByteArray& out = (m_rxVolume > 1.0f) ? applyBoost(data, m_rxVolume) : data;
         if (m_resampleTo48k)
-            m_audioDevice->write(resampleStereo(data));
+            m_audioDevice->write(resampleStereo(out));
         else
-            m_audioDevice->write(data);
+            m_audioDevice->write(out);
     };
 
     if (m_rn2Enabled && m_rn2) {
@@ -218,6 +219,22 @@ void AudioEngine::processNr2(const QByteArray& stereoPcm)
         dst[2 * i]     = m_nr2Processed[i];
         dst[2 * i + 1] = m_nr2Processed[i];
     }
+}
+
+QByteArray AudioEngine::applyBoost(const QByteArray& pcm, float gain) const
+{
+    const int nSamples = pcm.size() / sizeof(int16_t);
+    const auto* src = reinterpret_cast<const int16_t*>(pcm.constData());
+    QByteArray out(pcm.size(), Qt::Uninitialized);
+    auto* dst = reinterpret_cast<int16_t*>(out.data());
+    for (int i = 0; i < nSamples; ++i) {
+        float s = src[i] * gain;
+        // Soft clamp to avoid harsh digital clipping
+        if (s > 32767.0f) s = 32767.0f;
+        else if (s < -32767.0f) s = -32767.0f;
+        dst[i] = static_cast<int16_t>(s);
+    }
+    return out;
 }
 
 float AudioEngine::computeRMS(const QByteArray& pcm) const

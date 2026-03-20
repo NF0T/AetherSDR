@@ -245,9 +245,12 @@ void RadioModel::setWaterfallBlackLevel(int level)
 
 void RadioModel::setWaterfallAutoBlack(bool on)
 {
+    Q_UNUSED(on);
+    // Auto-black is handled client-side. Always keep radio's auto_black off
+    // because its algorithm targets SmartSDR's rendering, not ours.
     if (m_waterfallId.isEmpty()) return;
     sendCmd(
-        QString("display panafall set %1 auto_black=%2").arg(m_waterfallId).arg(on ? 1 : 0));
+        QString("display panafall set %1 auto_black=0").arg(m_waterfallId));
 }
 
 void RadioModel::setWaterfallLineDuration(int ms)

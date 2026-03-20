@@ -31,7 +31,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_table->setHorizontalHeaderLabels(COLUMNS);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_table->setEditTriggers(QAbstractItemView::DoubleClicked);
     m_table->horizontalHeader()->setStretchLastSection(true);
     m_table->verticalHeader()->setVisible(false);
     m_table->setAlternatingRowColors(true);
@@ -62,6 +62,17 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
             populateTable();  // refresh from cache
     });
 
+    // Send name edits to the radio
+    connect(m_table, &QTableWidget::cellChanged, this, [this](int row, int col) {
+        if (col != 3) return;  // only Name column
+        auto* indexItem = m_table->item(row, 0);
+        if (!indexItem) return;
+        int memIdx = indexItem->data(Qt::UserRole).toInt();
+        QString name = m_table->item(row, col)->text().replace(' ', '\x7f');
+        m_model->sendCommand(
+            QString("memory set %1 name=%2").arg(memIdx).arg(name));
+    });
+
     // The radio doesn't support "sub memory all" or "memory list".
     // Populate from RadioModel cache (filled from status pushes during connect).
     // If cache is empty, memories may not have been pushed yet. As a fallback,
@@ -71,6 +82,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
 
 void MemoryDialog::populateTable()
 {
+    const QSignalBlocker blocker(m_table);
     m_table->setRowCount(0);
     const auto& memories = m_model->memories();
 
@@ -117,6 +129,13 @@ void MemoryDialog::populateTable()
 
         // Store memory index in first column's data for retrieval
         m_table->item(row, 0)->setData(Qt::UserRole, m.index);
+
+        // Make all columns read-only except Name (column 3)
+        for (int c = 0; c < m_table->columnCount(); ++c) {
+            auto* item = m_table->item(row, c);
+            if (item && c != 3)
+                item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+        }
     }
 
     m_table->resizeColumnsToContents();

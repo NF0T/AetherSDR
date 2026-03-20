@@ -1648,6 +1648,18 @@ void MainWindow::startDax()
     connect(m_daxBridge, &DaxBridge::daxTxLevel,
             m_appletPanel->catApplet(), &CatApplet::setDaxTxLevel);
 
+    // Wire DAX gain sliders
+    connect(m_appletPanel->catApplet(), &CatApplet::daxRxGainChanged,
+            m_daxBridge, &DaxBridge::setChannelGain);
+    connect(m_appletPanel->catApplet(), &CatApplet::daxTxGainChanged,
+            m_daxBridge, &DaxBridge::setTxGain);
+
+    // Apply saved gains to the bridge
+    auto& ss = AppSettings::instance();
+    for (int i = 1; i <= 4; ++i)
+        m_daxBridge->setChannelGain(i, ss.value(QStringLiteral("DaxRxGain%1").arg(i), "0.5").toString().toFloat());
+    m_daxBridge->setTxGain(ss.value("DaxTxGain", "0.5").toString().toFloat());
+
     // Wire DAX TX: apps → bridge → AudioEngine → VITA-49
     // feedDaxTxAudio blocks only when mic is actively sending (voice TX),
     // preventing dual-source jitter. During RX and digital TX, DAX flows
