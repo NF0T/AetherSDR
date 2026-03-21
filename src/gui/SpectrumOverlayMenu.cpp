@@ -942,8 +942,9 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     m_blackSlider->setValue(black);
     m_blackLabel->setText(QString::number(black));
     m_autoBlackBtn->setChecked(autoBlack);
-    m_rateSlider->setValue(rate);
-    m_rateLabel->setText(QString::number(rate));
+    int rateSliderVal = std::clamp(rate - 70, 1, 30);  // line_duration 71-100 → slider 1-30
+    m_rateSlider->setValue(rateSliderVal);
+    m_rateLabel->setText(QString::number(rateSliderVal));
 
     if (m_floorSlider) {
         QSignalBlocker bf(m_floorSlider), be(m_floorEnableBtn);

@@ -87,7 +87,7 @@ src/
     ├── PhoneCwApplet       — P/CW mic controls: level/compression gauges, mic profile, PROC/DAX/MON
     ├── PhoneApplet         — PHONE applet: VOX, AM carrier, DEXP, TX filter low/high
     ├── EqApplet            — 8-band graphic equalizer applet (TX/RX views)
-    ├── CatApplet           — CAT/DAX controls: rigctld, PTY, DAX enable, MeterSliders
+    ├── CatApplet           — DIGI applet: CAT/DAX controls, rigctld, PTY, DAX enable, MeterSliders
     ├── AntennaGeniusApplet — 4o3a Antenna Genius port/band display
     ├── PanadapterApplet    — Display settings: AVG, FPS, fill, gain, black level, DAX rate
     ├── RadioSetupDialog    — Radio setup (9 tabs): Radio, Network, GPS, Audio, TX, etc.

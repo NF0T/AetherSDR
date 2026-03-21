@@ -1438,7 +1438,7 @@ void RadioModel::configurePan()
         });
 
     sendCmd(
-        QString("display pan set %1 fps=25 average=0 min_dbm=-130 max_dbm=-40").arg(m_panId),
+        QString("display pan set %1 fps=25 min_dbm=-130 max_dbm=-40").arg(m_panId),
         [](int code, const QString&) {
             if (code != 0)
                 qCWarning(lcProtocol) << "RadioModel: display pan set fps/average/dbm failed, code" << Qt::hex << code;
