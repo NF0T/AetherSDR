@@ -15,6 +15,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
 {
     setAttribute(Qt::WA_TranslucentBackground);
     setStyleSheet("ConnectionPanel { background: transparent; }");
+    const QString editStyle =
+        "QLineEdit { border: 1px solid #304050; "
+        "border-radius: 3px; padding: 2px 4px; }";
 
     auto* vbox = new QVBoxLayout(this);
     vbox->setContentsMargins(8, 8, 8, 8);
@@ -53,6 +56,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* emailRow = new QHBoxLayout;
     emailRow->addWidget(new QLabel("Email:", m_loginForm));
     m_emailEdit = new QLineEdit(m_loginForm);
+    m_emailEdit->setStyleSheet(editStyle);
     m_emailEdit->setPlaceholderText("flexradio account email");
     emailRow->addWidget(m_emailEdit, 1);
     loginLayout->addLayout(emailRow);
@@ -60,6 +64,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* passRow = new QHBoxLayout;
     passRow->addWidget(new QLabel("Pass:", m_loginForm));
     m_passwordEdit = new QLineEdit(m_loginForm);
+    m_passwordEdit->setStyleSheet(editStyle);
     m_passwordEdit->setEchoMode(QLineEdit::Password);
     m_passwordEdit->setPlaceholderText("password");
     passRow->addWidget(m_passwordEdit, 1);
@@ -87,6 +92,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* manRow = new QHBoxLayout;
     manRow->setContentsMargins(0, 0, 0, 0);
     m_manualIpEdit = new QLineEdit(m_manualGroup);
+    m_manualIpEdit->setStyleSheet(editStyle);
     m_manualIpEdit->setPlaceholderText("IP address");
     m_manualIpEdit->setFixedWidth(150);
     m_manualProbeBtn = new QPushButton("Go", m_manualGroup);
@@ -279,6 +285,15 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
             m_radioList->addItem(item);
         }
     });
+}
+
+bool ConnectionPanel::event(QEvent* e)
+{
+    if (e->type() == QEvent::WindowDeactivate) {
+        hide();
+        return true;
+    }
+    return QWidget::event(e);
 }
 
 void ConnectionPanel::paintEvent(QPaintEvent*)

@@ -27,6 +27,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    bool event(QEvent* e) override;
 
 public slots:
     void onRadioDiscovered(const RadioInfo& radio);
