@@ -1555,6 +1555,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (m_splitActive && m_splitTxSliceId < 0 && s->sliceId() != m_splitRxSliceId) {
         m_splitTxSliceId = s->sliceId();
         s->setTxSlice(true);
+        s->setAudioMute(true);  // TX slice in split has no audio output
+        // Tune TX slice to match RX slice frequency
+        if (auto* rxSlice = m_radioModel.slice(m_splitRxSliceId))
+            s->setFrequency(rxSlice->frequency());
         spectrum()->setSplitPair(m_splitRxSliceId, m_splitTxSliceId);
         updateSplitState();
     }

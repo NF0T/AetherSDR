@@ -219,9 +219,11 @@ void VfoWidget::buildUI()
 
     m_splitBadge = new QPushButton("SPLIT");
     m_splitBadge->setFlat(true);
+    m_splitBadge->setFixedHeight(20);  // match TX badge height
     m_splitBadge->setStyleSheet(
         "QPushButton { background: transparent; border: none; "
-        "color: rgba(255,255,255,40); font-size: 16px; font-weight: bold; }"
+        "color: rgba(255,255,255,40); font-size: 11px; font-weight: bold; "
+        "padding: 0px 3px; }"
         "QPushButton:hover { color: rgba(255,255,255,80); }");
     m_splitBadge->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     connect(m_splitBadge, &QPushButton::clicked, this, [this]() {
@@ -1623,25 +1625,26 @@ void VfoWidget::updateTxBadgeStyle(bool isTx)
     }
 }
 
-void VfoWidget::updateSplitBadge(bool isTxSlice, bool splitActive)
+void VfoWidget::updateSplitBadge(bool isTxSlice, bool isRxSplit)
 {
-    if (splitActive && isTxSlice) {
-        // TX slice in split mode — hide SPLIT badge (TX badge is enough)
+    if (isTxSlice) {
+        // TX slice in split pair — hide SPLIT badge entirely
         m_splitBadge->hide();
-    } else if (splitActive && !isTxSlice) {
-        // RX slice in split mode — red badge, full opacity
+    } else if (isRxSplit) {
+        // RX slice that initiated split — red badge, full opacity
         m_splitBadge->show();
         m_splitBadge->setStyleSheet(
             "QPushButton { background: #cc0000; color: #ffffff; border: none; "
-            "border-radius: 2px; font-size: 16px; font-weight: bold; "
-            "padding: 1px 3px; }"
+            "border-radius: 2px; font-size: 11px; font-weight: bold; "
+            "padding: 0px 3px; }"
             "QPushButton:hover { background: #ee2222; }");
     } else {
         // Split not active — ghosted on all slices
         m_splitBadge->show();
         m_splitBadge->setStyleSheet(
             "QPushButton { background: transparent; border: none; "
-            "color: rgba(255,255,255,40); font-size: 16px; font-weight: bold; }"
+            "color: rgba(255,255,255,40); font-size: 11px; font-weight: bold; "
+            "padding: 0px 3px; }"
             "QPushButton:hover { color: rgba(255,255,255,80); }");
     }
 }
