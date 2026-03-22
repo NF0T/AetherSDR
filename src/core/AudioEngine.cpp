@@ -13,7 +13,7 @@
 #include <QDir>
 #include <QtEndian>
 #include <QThread>
-#include <cmath>
+#include <algorithm>
 #include <cstring>
 
 namespace AetherSDR {
@@ -606,7 +606,8 @@ void AudioEngine::onTxAudioReady()
         return;
     }
 
-    // DAX TX mode: VirtualAudioBridge is the TX audio source.
+    // DAX TX mode: VirtualAudioBridge handles TX audio via feedDaxTxAudio().
+    // Don't send mic audio — it would conflict with the DAX stream.
     if (m_daxTxMode) return;
 
     // ── Apply client-side PC mic gain ────────────────────────────────────
@@ -751,9 +752,10 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
         (static_cast<quint32>(FLEX_INFO_CLASS) << 16) | PCC_IF_NARROW);
 
     // ── Words 4-6: Timestamps ─────────────────────────────────────────────
+    // ── Words 4-6: Timestamps ─────────────────────────────────────────────
     words[4] = 0;  // integer timestamp
     words[5] = 0;  // fractional timestamp high
-    words[6] = 0;  // fractional timestamp low (sample count)
+    words[6] = 0;  // fractional timestamp low
 
     // ── Payload: float32 stereo, big-endian ───────────────────────────────
     quint32* payload = words + VITA_HEADER_WORDS;
@@ -850,21 +852,113 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     }
 }
 
+void AudioEngine::setDaxTxMode(bool on)
+{
+    m_daxTxMode = on;
+}
+
+void AudioEngine::setTransmitting(bool tx)
+{
+    if (m_transmitting == tx) return;
+    m_transmitting = tx;
+
+    if (!tx) {
+        // On unkey: drop any partial packet residue so next burst starts cleanly.
+        m_txAccumulator.clear();
+        m_txFloatAccumulator.clear();
+        m_daxPreTxBuffer.clear();
+    }
+}
+
+void AudioEngine::setDaxTxUseRadioRoute(bool on)
+{
+    if (m_daxTxUseRadioRoute == on) return;
+    m_daxTxUseRadioRoute = on;
+    // Switching route changes payload format; drop partial buffered samples.
+    m_txFloatAccumulator.clear();
+    m_daxPreTxBuffer.clear();
+}
+
 void AudioEngine::feedDaxTxAudio(const QByteArray& float32pcm)
 {
-    if (m_txStreamId == 0) return;
+    if (m_txStreamId == 0 || float32pcm.isEmpty()) return;
 
-    // Block DAX audio when mic is actively sending (voice mode TX).
-    // This prevents dual-source jitter on the same VITA-49 stream.
-    // During RX and digital TX, DAX flows freely.
+    if (!m_daxTxUseRadioRoute) {
+        // Low-latency route: keep radio on mic path (dax=0) and packetize
+        // exactly like voice TX (PCC 0x03E3 float32 stereo).
+        constexpr int FLOAT_BYTES_PER_PKT = TX_SAMPLES_PER_PACKET * 2 * sizeof(float);
+
+        if (!m_transmitting) {
+            // Deterministic edge behavior: do not carry pre-TX audio history.
+            // Any backlog here directly appears as TX start/stop mismatch.
+            m_daxPreTxBuffer.clear();
+            m_txFloatAccumulator.clear();
+            return;
+        }
+
+        m_txFloatAccumulator.append(float32pcm);
+        while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
+            auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
+            QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
+            emit txPacketReady(pkt);
+            m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
+        }
+        return;
+    }
+
+    // Radio-native DAX route (dax=1): block DAX audio only when mic voice TX is active.
     if (m_transmitting && !m_daxTxMode) return;
-    m_txFloatAccumulator.append(float32pcm);
-    constexpr int FLOAT_BYTES_PER_PKT = TX_SAMPLES_PER_PACKET * 2 * sizeof(float);
-    while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
-        auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
-        QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
+    m_daxPreTxBuffer.clear();
+
+    // Convert float32 stereo → int16 mono (reduced BW format, PCC 0x0123).
+    const auto* src = reinterpret_cast<const float*>(float32pcm.constData());
+    const int stereoSamples = float32pcm.size() / sizeof(float) / 2;
+
+    // Convert: average L+R channels, scale to int16 big-endian
+    QByteArray mono(stereoSamples * sizeof(qint16), Qt::Uninitialized);
+    auto* dst = reinterpret_cast<qint16*>(mono.data());
+    for (int i = 0; i < stereoSamples; ++i) {
+        float avg = (src[i * 2] + src[i * 2 + 1]) * 0.5f;
+        avg = std::clamp(avg, -1.0f, 1.0f);
+        dst[i] = qToBigEndian(static_cast<qint16>(avg * 32767.0f));
+    }
+
+    m_txFloatAccumulator.append(mono);
+
+    // Build and send VITA-49 packets: 128 mono int16 samples per packet
+    constexpr int MONO_BYTES_PER_PKT = TX_SAMPLES_PER_PACKET * sizeof(qint16);  // 256 bytes
+    while (m_txFloatAccumulator.size() >= MONO_BYTES_PER_PKT) {
+        const int payloadBytes = MONO_BYTES_PER_PKT;
+        const int packetWords = (payloadBytes / 4) + VITA_HEADER_WORDS;
+        const int packetBytes = packetWords * 4;
+
+        QByteArray pkt(packetBytes, '\0');
+        quint32* words = reinterpret_cast<quint32*>(pkt.data());
+
+        // Header: IFDataWithStream, C=1, TSI=3(Other), TSF=1(SampleCount)
+        quint32 hdr = 0;
+        hdr |= (0x1u << 28);          // pkt_type = IFDataWithStream
+        hdr |= (1u << 27);            // C = 1 (class ID present)
+        hdr |= (0x3u << 22);          // TSI = 3 (Other) — matches FlexLib/nDAX
+        hdr |= (0x1u << 20);          // TSF = 1 (SampleCount)
+        hdr |= ((m_txPacketCount & 0xF) << 16);
+        hdr |= (packetWords & 0xFFFF);
+        words[0] = qToBigEndian(hdr);
+        words[1] = qToBigEndian(m_txStreamId);
+        words[2] = qToBigEndian(FLEX_OUI);
+        words[3] = qToBigEndian(
+            (static_cast<quint32>(FLEX_INFO_CLASS) << 16) | PCC_DAX_REDUCED);
+        words[4] = 0;  // integer timestamp (zero)
+        words[5] = 0;  // fractional timestamp high (zero)
+        words[6] = 0;  // fractional timestamp low (zero)
+
+        // Copy pre-converted big-endian int16 mono payload
+        std::memcpy(pkt.data() + VITA_HEADER_BYTES,
+                    m_txFloatAccumulator.constData(), payloadBytes);
+
+        m_txPacketCount = (m_txPacketCount + 1) & 0xF;
         emit txPacketReady(pkt);
-        m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
+        m_txFloatAccumulator.remove(0, MONO_BYTES_PER_PKT);
     }
 }
 

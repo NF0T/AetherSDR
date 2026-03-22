@@ -35,6 +35,19 @@ RadioModel::RadioModel(QObject* parent)
 
     // Forward transmit model commands to the radio
     connect(&m_transmitModel, &TransmitModel::commandReady, this, [this](const QString& cmd){
+        // Keep txRequested in sync even when command comes directly from
+        // TransmitModel (e.g. TxApplet MOX button).
+        static const QRegularExpression xmitRe(R"(^xmit\s+([01])\s*$)", QRegularExpression::CaseInsensitiveOption);
+        const auto match = xmitRe.match(cmd.trimmed());
+        if (match.hasMatch()) {
+            const bool tx = (match.captured(1) == "1");
+            m_txRequested = tx;
+            if (!tx && m_txAudioGate) {
+                m_txAudioGate = false;
+                emit txAudioGateChanged(false);
+            }
+        }
+
         // Intercept TUNE start: inhibit ACC TX first to protect amplifier
         if (cmd == "transmit tune 1"
             && AppSettings::instance().value("TuneInhibitAmp", "False").toString() == "True") {
@@ -188,10 +201,18 @@ void RadioModel::forceDisconnect()
 
 void RadioModel::setTransmit(bool tx)
 {
-    // Immediately stop TX audio when unkeying — don't wait for radio's
-    // interlock state to transition through UNKEY_REQUESTED → READY.
-    if (!tx)
-        m_transmitModel.setTransmitting(false);
+    // Track local intent so we can keep TX gating aligned with user/PTT edges
+    // while radio interlock transitions through intermediate states.
+    m_txRequested = tx;
+
+    // Optimistic edge gating:
+    // - TX on: start immediately to keep modem waveform aligned with PTT edge.
+    // - TX off: stop immediately to avoid "stuck TX tail" during UNKEY_REQUESTED.
+    m_transmitModel.setTransmitting(tx);
+    if (!tx && m_txAudioGate) {
+        m_txAudioGate = false;
+        emit txAudioGateChanged(false);
+    }
 
     sendCmd(QString("xmit %1").arg(tx ? 1 : 0));
 }
@@ -506,6 +527,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("client program AetherSDR");
         QString station = AppSettings::instance().value("StationName", "AetherSDR").toString();
         sendCmd(QString("client station %1").arg(station));
+        sendCmd("client set send_reduced_bw_dax=1");
         // Set network MTU for VITA-49 packets (matches FlexLib behavior)
         int mtu = AppSettings::instance().value("NetworkMtu", "1500").toInt();
         sendCmd(QString("client set enforce_network_mtu=1 network_mtu=%1").arg(mtu));
@@ -666,7 +688,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             qCDebug(lcProtocol) << "RadioModel: PC audio disabled, skipping remote_audio_rx (using radio line out)";
                         }
 
-                        // Request DAX TX audio stream (PC mic → radio, DAX mode)
+        // Request DAX TX audio stream (PC mic → radio, DAX mode)
                         sendCmd(
                             "stream create type=dax_tx",
                             [this](int code, const QString& body) {
@@ -676,7 +698,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                                              << Qt::hex << id;
                                     emit txAudioStreamReady(id);
                                 } else {
-                                    qCWarning(lcProtocol) << "RadioModel: stream create dax_tx failed, code"
+                                    qCWarning(lcProtocol) << "RadioModel: dax_tx failed, code"
                                                << Qt::hex << code << "body:" << body;
                                 }
                             });
@@ -777,6 +799,12 @@ void RadioModel::onDisconnected()
         m_tuneInhibitBandId = -1;
     }
 
+    m_txRequested = false;
+    if (m_txAudioGate) {
+        m_txAudioGate = false;
+        emit txAudioGateChanged(false);
+    }
+    m_transmitModel.setTransmitting(false);
     stopNetworkMonitor();
     m_panStream.stop();
     m_panStream.clearRegisteredStreams();
@@ -1493,8 +1521,36 @@ void RadioModel::onStatusReceived(const QString& object,
             m_txOwnedByUs = (txOwner == clientHandle() || txOwner == 0);
         }
         if (kvs.contains("state")) {
-            bool tx = (kvs["state"] == "TRANSMITTING") && m_txOwnedByUs;
-            m_transmitModel.setTransmitting(tx);
+            const QString state = kvs["state"].toUpper();
+
+            if (!m_txOwnedByUs || !m_txRequested) {
+                // Another client owns TX, or local unkey requested:
+                // force local TX/audio gate off through all interlock states.
+                m_transmitModel.setTransmitting(false);
+                if (m_txAudioGate) {
+                    m_txAudioGate = false;
+                    emit txAudioGateChanged(false);
+                }
+            } else if (state == "TRANSMITTING") {
+                // Radio confirms RF is keyed.
+                m_transmitModel.setTransmitting(true);
+                if (!m_txAudioGate) {
+                    m_txAudioGate = true;
+                    emit txAudioGateChanged(true);
+                }
+            } else {
+                // Local key requested but radio is still in pre-TX transition
+                // (e.g. PTT/TX delay). Keep optimistic TX-on gating for
+                // modem/PTT edge alignment.
+                const bool transitioningToTx =
+                    state.contains("REQUESTED") || state.contains("DELAY");
+                if (!transitioningToTx)
+                    m_transmitModel.setTransmitting(false);
+                if (!transitioningToTx && m_txAudioGate) {
+                    m_txAudioGate = false;
+                    emit txAudioGateChanged(false);
+                }
+            }
         }
         // Emit TX ownership state for title bar indicator
         // txOwnerChanged(otherIsTx, stationName) — true when ANOTHER client has TX

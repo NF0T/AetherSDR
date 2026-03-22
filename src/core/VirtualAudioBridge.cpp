@@ -88,15 +88,16 @@ bool VirtualAudioBridge::open()
     }
     m_txBlock->active = 0;  // HAL plugin sets this to 1 when apps write
 
-    // Poll TX shared memory for incoming audio (10ms intervals, drain all available)
+    // Poll TX shared memory for incoming audio.
+    // Use a short interval and fixed-size reads so TX stays close to real-time.
     m_txPollTimer = new QTimer(this);
-    m_txPollTimer->setInterval(10);
+    m_txPollTimer->setInterval(2);
     connect(m_txPollTimer, &QTimer::timeout, this, [this]() {
         static int pollNum = 0;
         ++pollNum;
 
         // Diagnostic: log shm state every second regardless of data
-        if (m_txBlock && pollNum % 100 == 0) {
+        if (m_txBlock && pollNum % 500 == 0) {
             uint32_t wp = m_txBlock->writePos.load(std::memory_order_relaxed);
             uint32_t rp = m_txBlock->readPos.load(std::memory_order_relaxed);
             qCDebug(lcDax) << "TX shm poll#" << pollNum
@@ -104,13 +105,18 @@ bool VirtualAudioBridge::open()
                      << "avail=" << (wp - rp) << "active=" << m_txBlock->active;
         }
 
-        QByteArray audio = readTxAudio(0);  // 0 = drain all available
-        if (!audio.isEmpty()) {
+        // Drain multiple small chunks each tick to avoid stale backlog.
+        constexpr int FRAMES_PER_READ = 128;   // ~5.3ms @ 24kHz
+        constexpr int MAX_CHUNKS_PER_TICK = 8; // keep UI responsive under load
+        for (int i = 0; i < MAX_CHUNKS_PER_TICK; ++i) {
+            QByteArray audio = readTxAudio(FRAMES_PER_READ);
+            if (audio.isEmpty()) break;
+
             static int txPollCount = 0;
             ++txPollCount;
-            if (txPollCount <= 10 || txPollCount % 100 == 0)
+            if (txPollCount <= 10 || txPollCount % 200 == 0)
                 qCDebug(lcDax) << "VirtualAudioBridge: TX audio from shm, bytes=" << audio.size()
-                         << "(poll #" << txPollCount << ")"
+                         << "(chunk #" << txPollCount << ")"
                          << "wp=" << m_txBlock->writePos.load(std::memory_order_relaxed)
                          << "active=" << m_txBlock->active;
             emit txAudioReady(audio);
@@ -272,10 +278,16 @@ QByteArray VirtualAudioBridge::readTxAudio(int maxFrames)
         available = wp - rp;
     }
 
-    // Cap to ~20 ms worth of 24 kHz stereo (480 frames = 960 samples)
-    // to avoid sending a burst of packets that overwhelms the radio.
-    constexpr uint32_t MAX_SAMPLES_PER_POLL = 480 * 2;
-    uint32_t totalSamples = std::min(available, MAX_SAMPLES_PER_POLL);
+    // Low-latency guard: if backlog grows, skip stale audio and keep only
+    // a small recent window near the writer head.
+    constexpr uint32_t TARGET_BACKLOG_SAMPLES = 256 * 2; // 256 frames ≈ 10.7ms
+    constexpr uint32_t MAX_BACKLOG_SAMPLES = 768 * 2;    // 768 frames ≈ 32ms
+    if (available > MAX_BACKLOG_SAMPLES) {
+        rp = wp - TARGET_BACKLOG_SAMPLES;
+        available = wp - rp;
+    }
+
+    uint32_t totalSamples = available;
 
     if (maxFrames > 0)
         totalSamples = std::min(totalSamples, static_cast<uint32_t>(maxFrames * 2));

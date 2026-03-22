@@ -255,6 +255,8 @@ signals:
     void txAudioStreamReady(quint32 streamId);
     // Emitted when the radio assigns a remote audio TX stream ID (voice/VOX).
     void remoteTxStreamReady(quint32 streamId);
+    // Audio TX gate for sample pipeline (separate from optimistic MOX UI state).
+    void txAudioGateChanged(bool transmitting);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     // Emitted on each successful ping response from the radio.
@@ -366,6 +368,8 @@ private:
     bool        m_enforcePrivateIp{true};
     bool        m_remoteOnEnabled{false};
     bool        m_multiFlexEnabled{true};
+    bool        m_txRequested{false}; // local MOX command intent (for edge sync)
+    bool        m_txAudioGate{false}; // actual TX audio gate state
     QStringList m_antList;
 
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model

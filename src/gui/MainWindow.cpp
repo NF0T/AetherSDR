@@ -517,12 +517,18 @@ MainWindow::MainWindow(QWidget* parent)
             }
         }
 #endif
+#ifdef HAVE_SERIALPORT
+        m_serialPort.setTransmitting(tx);
+#endif
+    });
+
+    // Audio TX gate follows RF/interlock-aware signal from RadioModel.
+    connect(&m_radioModel, &RadioModel::txAudioGateChanged,
+            this, [this](bool tx) {
+        m_audio.setTransmitting(tx);
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         if (m_daxBridge)
             m_daxBridge->setTransmitting(tx);
-#endif
-#ifdef HAVE_SERIALPORT
-        m_serialPort.setTransmitting(tx);
 #endif
     });
 
@@ -1692,11 +1698,29 @@ void MainWindow::buildMenuBar()
         s.save();
     });
 
+    auto* lowLatencyDaxTxAction =
+        settingsMenu->addAction("Use low-latency DAX TX route (dax=0)");
+    lowLatencyDaxTxAction->setCheckable(true);
+    lowLatencyDaxTxAction->setChecked(
+        AppSettings::instance().value("DaxTxLowLatency", "True").toString() == "True");
+    connect(lowLatencyDaxTxAction, &QAction::toggled, this, [this](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("DaxTxLowLatency", on ? "True" : "False");
+        s.save();
+        m_audio.setDaxTxUseRadioRoute(!on);
+        m_audio.clearTxAccumulators();
+#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+        if (m_daxBridge)
+            m_radioModel.sendCommand(QString("transmit set dax=%1").arg(on ? 0 : 1));
+#endif
+    });
+
     // Connect placeholder items to show "not implemented" message
     for (auto* action : settingsMenu->actions()) {
         if (!action->isSeparator() && action != radioSetup && action != chooseRadio
             && action != networkAction && action != memoryAction && action != spotsAction
-            && action != autoRigctlAction && action != autoCatAction && action != autoDaxAction) {
+            && action != autoRigctlAction && action != autoCatAction
+            && action != autoDaxAction && action != lowLatencyDaxTxAction) {
             connect(action, &QAction::triggered, this, [this, action] {
                 statusBar()->showMessage(action->text().remove("...") + " — not yet implemented", 3000);
             });
@@ -2432,8 +2456,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Digital modes (DIGU/DIGL/RTTY) use DAX bridge; voice modes use mic.
     auto updateDaxTxMode = [this]() {
         bool isDigital = false;
+        int txSliceId = -1;
         for (auto* sl : m_radioModel.slices()) {
             if (sl->isTxSlice()) {
+                txSliceId = sl->sliceId();
                 const QString& m = sl->mode();
                 isDigital = (m == "DIGU" || m == "DIGL" || m == "RTTY"
                           || m == "DFM"  || m == "NFM");
@@ -2441,6 +2467,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
             }
         }
         m_audio.setDaxTxMode(isDigital);
+#ifdef HAVE_RADE
+        // RADE mode should only route mic→RADEEngine when the TX slice IS
+        // the RADE slice.  Otherwise a RADE slice running on a non-TX slice
+        // would hijack voice TX on the actual TX slice.
+        if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive())
+            m_audio.setRadeMode(txSliceId == m_radeSliceId);
+#endif
     };
     connect(s, &SliceModel::modeChanged, this, updateDaxTxMode);
     connect(s, &SliceModel::txSliceChanged, this, updateDaxTxMode);
@@ -2651,6 +2684,12 @@ void MainWindow::onSliceRemoved(int id)
 
     qDebug() << "MainWindow: slice removed" << id;
 
+#ifdef HAVE_RADE
+    // If the RADE slice was closed, deactivate RADE
+    if (id == m_radeSliceId)
+        deactivateRADE();
+#endif
+
     // If the split TX slice was closed, disable split
     if (m_splitActive && id == m_splitTxSliceId) {
         m_splitActive = false;
@@ -2786,14 +2825,9 @@ void MainWindow::setActiveSlice(int sliceId)
         m_bandSettings.setCurrentBand(BandSettings::bandForFrequency(s->frequency()));
 
 
-#ifdef HAVE_RADE
-    // Switch RADE audio mode based on whether the active slice is the RADE slice.
-    // When on the RADE slice: mic → RADEEngine, speaker blocked (muted at slice level).
-    // When on a non-RADE slice: mic → normal VITA-49, speaker plays normally.
-    if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
-        m_audio.setRadeMode(sliceId == m_radeSliceId);
-    }
-#endif
+    // NOTE: RADE audio mode is now driven by the TX slice (in updateDaxTxMode),
+    // not the active/selected slice. Switching which slice the user is looking at
+    // should not change the TX audio routing.
 
     updateSplitState();
 
@@ -3954,6 +3988,11 @@ void MainWindow::activateRADE(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
+    // RADE needs to be the TX slice so it can transmit modem audio.
+    // Move TX badge to the RADE slice automatically.
+    if (!s->isTxSlice())
+        s->setTxSlice(true);
+
     // Set radio mode to DIGU/DIGL (passthrough for OFDM modem)
     double freqMhz = s->frequency();
     QString mode = (freqMhz < 10.0) ? "DIGL" : "DIGU";
@@ -3987,7 +4026,9 @@ void MainWindow::activateRADE(int sliceId)
         return;
     }
 
-    m_audio.setRadeMode(true);
+    // Only route mic→RADE when the RADE slice IS the TX slice.
+    // If another slice is TX (e.g. USB voice), leave its audio path alone.
+    m_audio.setRadeMode(s->isTxSlice());
 
     // TX path: mic -> RADEEngine (worker) -> sendModemTxAudio (main)
     connect(&m_audio, &AudioEngine::txRawPcmReady,
@@ -4133,23 +4174,28 @@ void MainWindow::startDax()
         m_daxBridge->setChannelGain(i, ss.value(QStringLiteral("DaxRxGain%1").arg(i), "0.5").toString().toFloat());
     m_daxBridge->setTxGain(ss.value("DaxTxGain", "0.5").toString().toFloat());
 
-    // Wire DAX TX: apps → bridge → AudioEngine → VITA-49
-    // feedDaxTxAudio blocks only when mic is actively sending (voice TX),
-    // preventing dual-source jitter. During RX and digital TX, DAX flows
-    // freely — this keeps VARAC/WSJT-X pre-PTT audio in the radio's
-    // buffer so TX starts instantly with no delay.
+    // Wire DAX TX: apps → bridge → AudioEngine → VITA-49.
+    // AudioEngine chooses packet format/routing based on DaxTxLowLatency.
     connect(m_daxBridge, &DaxBridge::txAudioReady,
             this, [this](const QByteArray& pcm) {
         if (m_audio.isRadeMode()) return;
         m_audio.feedDaxTxAudio(pcm);
     });
 
-    // Save current mic selection and switch to PC + dax=1
+    // Save current TX routing state before forcing PC audio source.
     m_savedMicSelection = m_radioModel.transmitModel()->micSelection();
-    m_radioModel.sendCommand("transmit set mic_selection=PC");
-    m_radioModel.sendCommand("transmit set dax=1");
+    m_savedDaxEnabled = m_radioModel.transmitModel()->daxOn();
 
-    qInfo() << "MainWindow: starting DAX audio bridge";
+    const bool lowLatencyRoute =
+        AppSettings::instance().value("DaxTxLowLatency", "True").toString() == "True";
+    m_audio.setDaxTxUseRadioRoute(!lowLatencyRoute);
+    m_radioModel.sendCommand("transmit set mic_selection=PC");
+    m_radioModel.sendCommand(QString("transmit set dax=%1").arg(lowLatencyRoute ? 0 : 1));
+
+    qInfo() << "MainWindow: starting DAX audio bridge (TX route:"
+            << (lowLatencyRoute ? "low-latency PC mic path, dax=0"
+                                : "radio-native DAX path, dax=1")
+            << ")";
 }
 
 void MainWindow::stopDax()
@@ -4157,11 +4203,15 @@ void MainWindow::stopDax()
     if (!m_daxBridge) return;
 
     m_audio.setDaxTxMode(false);
+    m_audio.clearTxAccumulators();
 
     disconnect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
                m_daxBridge, nullptr);
     disconnect(m_daxBridge, &DaxBridge::txAudioReady,
                this, nullptr);
+
+    // Restore previous DAX TX routing state.
+    m_radioModel.sendCommand(QString("transmit set dax=%1").arg(m_savedDaxEnabled ? 1 : 0));
 
     // Restore original mic selection
     if (!m_savedMicSelection.isEmpty() && m_savedMicSelection != "PC")

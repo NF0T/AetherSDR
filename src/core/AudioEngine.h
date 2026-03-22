@@ -11,6 +11,7 @@
 #include <atomic>
 #include <QBuffer>
 #include <QByteArray>
+#include <QElapsedTimer>
 
 #include <functional>
 #include <memory>
@@ -83,10 +84,14 @@ public:
     void sendModemTxAudio(const QByteArray& float32pcm);
 
     // DAX TX: VirtualAudioBridge feeds float32 PCM for VITA-49 TX
-    void setDaxTxMode(bool on) { m_daxTxMode = on; }
+    void setDaxTxMode(bool on);
     bool isDaxTxMode() const { return m_daxTxMode; }
-    void setTransmitting(bool tx) { m_transmitting = tx; }
-    void clearTxAccumulators() { m_txAccumulator.clear(); m_txFloatAccumulator.clear(); }
+    // true: radio DAX TX route (transmit dax=1, PCC 0x0123 int16 mono)
+    // false: low-latency PC mic route (transmit dax=0, PCC 0x03E3 float32 stereo)
+    void setDaxTxUseRadioRoute(bool on);
+    bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute; }
+    void setTransmitting(bool tx);
+    void clearTxAccumulators() { m_txAccumulator.clear(); m_txFloatAccumulator.clear(); m_daxPreTxBuffer.clear(); }
     void feedDaxTxAudio(const QByteArray& float32pcm);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
@@ -169,9 +174,11 @@ private:
     QByteArray    m_txAccumulator;       // accumulate PCM until 128 stereo pairs
     QByteArray    m_voxAccumulator;     // accumulate PCM for VOX/met_in_rx stream
     QByteArray    m_txFloatAccumulator;  // accumulate float32 PCM for RADE modem TX
+    QByteArray    m_daxPreTxBuffer;      // short rolling pre-TX buffer for low-latency DAX mode
     std::atomic<bool> m_radeMode{false}; // RADE digital voice mode active (atomic: cross-thread)
     float         m_pcMicGain{1.0f};     // client-side PC mic gain (0.0-1.0)
     bool          m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
+    bool          m_daxTxUseRadioRoute{false}; // false = low-latency route (dax=0)
     bool          m_transmitting{false}; // true when radio is in TX (MOX on)
     bool          m_opusTxEnabled{false}; // Opus TX encoding for SmartLink
     std::unique_ptr<class OpusCodec> m_opusTxCodec; // lazy-init on first TX with Opus
@@ -215,13 +222,14 @@ private:
     QByteArray m_nr2Output;
 
     // VITA-49 TX constants
-    static constexpr int    TX_SAMPLES_PER_PACKET = 128;  // stereo pairs
-    static constexpr int    TX_PCM_BYTES_PER_PACKET = TX_SAMPLES_PER_PACKET * 2 * 2; // 128 pairs × 2ch × 2bytes
+    static constexpr int    TX_SAMPLES_PER_PACKET = 128;  // audio frames per packet
+    static constexpr int    TX_PCM_BYTES_PER_PACKET = TX_SAMPLES_PER_PACKET * 2 * 2; // 128 frames × 2ch × int16
     static constexpr int    VITA_HEADER_WORDS = 7;
     static constexpr int    VITA_HEADER_BYTES = VITA_HEADER_WORDS * 4;  // 28 bytes
     static constexpr quint32 FLEX_OUI = 0x001C2D;
     static constexpr quint16 FLEX_INFO_CLASS = 0x534C;
     static constexpr quint16 PCC_IF_NARROW = 0x03E3;
+    static constexpr quint16 PCC_DAX_REDUCED = 0x0123;  // reduced BW DAX (24kHz int16 mono)
 };
 
 } // namespace AetherSDR
