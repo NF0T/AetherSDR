@@ -161,9 +161,11 @@ void VfoWidget::mousePressEvent(QMouseEvent* ev)
 VfoWidget::~VfoWidget()
 {
     // Close/lock buttons are children of our parent (SpectrumWidget),
-    // not us, so we must delete them manually.
-    delete m_closeSliceBtn;
-    delete m_lockVfoBtn;
+    // not us. During widget tree teardown, Qt may destroy them before us
+    // (they're siblings, not children). QPointer auto-nulls when the
+    // target is deleted, preventing double-free.
+    delete m_closeSliceBtn.data();
+    delete m_lockVfoBtn.data();
 }
 
 void VfoWidget::buildUI()

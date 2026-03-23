@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QPointer>
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <QVector>
@@ -106,8 +107,8 @@ private:
     QPushButton* m_splitBadge{nullptr};
     QPushButton* m_txBadge{nullptr};
     QLabel*      m_sliceBadge{nullptr};
-    QPushButton* m_lockVfoBtn{nullptr};
-    QPushButton* m_closeSliceBtn{nullptr};
+    QPointer<QPushButton> m_lockVfoBtn;
+    QPointer<QPushButton> m_closeSliceBtn;
 
     // Frequency / meter
     QLabel* m_freqLabel{nullptr};
