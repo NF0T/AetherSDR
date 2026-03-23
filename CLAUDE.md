@@ -33,7 +33,7 @@ cmake --build build -j$(nproc)
 
 Dependencies (Arch): `qt6-base qt6-multimedia cmake ninja pkgconf autoconf automake libtool`
 
-Current version: **0.5.2** (set in both `CMakeLists.txt` and `README.md`).
+Current version: **0.5.6** (set in both `CMakeLists.txt` and `README.md`).
 
 ---
 
@@ -48,7 +48,7 @@ src/
 │   ├── RadioConnection     — TCP 4992 command channel, V/H/R/S/M SmartSDR protocol
 │   ├── CommandParser       — Stateless protocol line parser + command builder
 │   ├── PanadapterStream    — VITA-49 UDP receiver: routes FFT, waterfall, audio, meters by PCC
-│   ├── AudioEngine         — QAudioSink RX + QAudioSource TX, volume boost, NR2/RN2 pipeline
+│   ├── AudioEngine         — QAudioSink RX + QAudioSource TX, NR2/RN2 pipeline, Opus codec
 │   ├── SpectralNR          — NR2: Ephraim-Malah MMSE-LSA spectral noise reduction (FFTW3)
 │   ├── RNNoiseFilter       — RN2: Mozilla/Xiph RNNoise neural noise suppression
 │   ├── CwDecoder           — Real-time CW decode via ggmorse, confidence scoring
@@ -61,12 +61,18 @@ src/
 │   ├── RigctlPty           — Virtual serial port (PTY) for CAT control
 │   ├── PipeWireAudioBridge — Linux DAX: PulseAudio pipe modules (4 RX + 1 TX)
 │   ├── VirtualAudioBridge  — macOS DAX: CoreAudio HAL plugin shared memory bridge
+│   ├── SerialPortController— USB-serial PTT/CW keying (DTR/RTS out, CTS/DSR in)
+│   ├── OpusCodec           — Opus encode/decode for SmartLink WAN audio compression
+│   ├── LogManager          — Per-module Qt Logging Categories with persistence
+│   ├── SupportBundle       — Collect logs+settings+sysinfo into tar.gz/zip for bug reports
+│   ├── MacMicPermission    — macOS AVFoundation mic permission request at startup
 │   ├── FirmwareStager      — Download SmartSDR installer, extract .ssdr files
 │   └── FirmwareUploader    — TCP upload of .ssdr firmware to radio
 ├── models/
-│   ├── RadioModel          — Central state: owns connection, slices, panadapter config
-│   ├── SliceModel          — Per-slice state (freq, mode, filter, DSP, RIT/XIT, etc.)
-│   ├── MeterModel          — Meter definition registry + VITA-49 value conversion
+│   ├── RadioModel          — Central state: owns connection, slices, panadapters, TX ownership
+│   ├── SliceModel          — Per-slice state (freq, mode, filter, DSP, RIT/XIT, panId)
+│   ├── PanadapterModel     — Per-panadapter state (center, bandwidth, dBm, antenna, WNB)
+│   ├── MeterModel          — Per-slice meter registry + VITA-49 value conversion
 │   ├── TransmitModel       — Transmit state, internal ATU, TX profile management
 │   ├── EqualizerModel      — 8-band EQ state for TX and RX (eq txsc / eq rxsc)
 │   ├── TunerModel          — 4o3a Tuner Genius XL state (relays, SWR, tuning)
@@ -75,10 +81,13 @@ src/
 │   └── AntennaGeniusModel  — 4o3a Antenna Genius switch state
 └── gui/
     ├── MainWindow          — Dark-themed QMainWindow, wires everything together
-    ├── ConnectionPanel     — Radio list + connect/disconnect button
+    ├── TitleBar            — Menu bar + PC Audio + master/HP volume + TX owner + Feature Request
+    ├── ConnectionPanel     — Floating radio list + connect/disconnect popup
+    ├── PanadapterStack     — Vertical QSplitter hosting N PanadapterApplets
     ├── SpectrumWidget      — FFT spectrum + scrolling waterfall + frequency scale
-    ├── SpectrumOverlayMenu — Right-click DSP/display overlay on spectrum
+    ├── SpectrumOverlayMenu — Left-side DSP/display overlay on spectrum
     ├── VfoWidget           — VFO display: frequency, mode, filter, DSP tabs, passband
+    ├── SupportDialog       — Per-module logging toggles, log viewer, AI-assisted bug reports
     ├── AppletPanel         — Toggle-button column of applet panels (VU, RX, TX, etc.)
     ├── SMeterWidget        — Analog S-Meter/Power gauge with peak hold, 3-tier power scale
     ├── RxApplet            — Full RX controls: antenna, filter, AGC, AF gain, pan, DSP, RIT/XIT
@@ -517,7 +526,7 @@ and panadapter. The radio assigns these to our `client_handle`.
 
 ---
 
-## What's Implemented (v0.5.2)
+## What's Implemented (v0.5.6)
 
 - UDP radio discovery and TCP command/control
 - SmartSDR V/H/R/S/M protocol parsing
