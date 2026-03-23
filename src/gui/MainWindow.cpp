@@ -497,8 +497,16 @@ MainWindow::MainWindow(QWidget* parent)
                 { QSignalBlocker sb(btn); btn->setChecked(on); }
         }
     };
-    connect(&m_audio, &AudioEngine::nr2EnabledChanged, this, syncNr2);
-    connect(&m_audio, &AudioEngine::rn2EnabledChanged, this, syncRn2);
+    connect(&m_audio, &AudioEngine::nr2EnabledChanged, this, [this, syncNr2](bool on) {
+        syncNr2(on);
+        AppSettings::instance().setValue("ClientNr2Enabled", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+    connect(&m_audio, &AudioEngine::rn2EnabledChanged, this, [this, syncRn2](bool on) {
+        syncRn2(on);
+        AppSettings::instance().setValue("ClientRn2Enabled", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
     // NR2/RN2 overlay sync is wired in wirePanadapter()
     // RxApplet NR button 3-state cycle → NR2 enable/disable
     connect(m_appletPanel->rxApplet(), &RxApplet::nr2CycleToggled,
@@ -1658,6 +1666,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
         int savedDax = AppSettings::instance().value("LastDaxChannel", "0").toInt();
         if (savedDax > 0)
             s->setDaxChannel(savedDax);
+
+        // Restore client-side DSP (NR2/RN2) from last session
+        auto& settings = AppSettings::instance();
+        if (settings.value("ClientNr2Enabled", "False").toString() == "True")
+            m_audio.setNr2Enabled(true);
+        else if (settings.value("ClientRn2Enabled", "False").toString() == "True")
+            m_audio.setRn2Enabled(true);
     }
 
     // Re-claim TX assignment after profile load or slice recreation (#145).
