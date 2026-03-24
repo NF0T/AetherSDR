@@ -659,6 +659,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             sendCmd("sub dvk all");
             sendCmd("sub usb_cable all");
             sendCmd("sub spot all");
+            sendCmd("sub license all");
             }); // sub xvtr all
             }); // sub client all
             }); // sub apd all
