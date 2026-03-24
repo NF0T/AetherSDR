@@ -106,6 +106,19 @@ void PanadapterStack::setActivePan(const QString& panId)
     emit activePanChanged(panId);
 }
 
+void PanadapterStack::equalizeSizes()
+{
+    const int count = m_splitter->count();
+    if (count < 2) return;
+    const int total = (m_splitter->orientation() == Qt::Horizontal)
+                        ? m_splitter->width() : m_splitter->height();
+    const int each = total / count;
+    QList<int> sizes;
+    for (int i = 0; i < count; ++i)
+        sizes.append(each);
+    m_splitter->setSizes(sizes);
+}
+
 void PanadapterStack::removeAll()
 {
     qDeleteAll(m_pans);

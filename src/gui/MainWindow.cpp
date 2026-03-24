@@ -2582,6 +2582,7 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
             }
 
             m_panApplet = m_panStack->activeApplet();
+            m_panStack->equalizeSizes();
 
             qDebug() << "applyPanLayout: layout" << layoutId
                      << "complete, total pans:" << m_panStack->count();

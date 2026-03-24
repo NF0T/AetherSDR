@@ -41,6 +41,7 @@ public:
     SpectrumWidget* activeSpectrum() const;
     void setActivePan(const QString& panId);
     void setSplitterOrientation(Qt::Orientation o) { m_splitter->setOrientation(o); }
+    void equalizeSizes();
 
 signals:
     void activePanChanged(const QString& panId);
