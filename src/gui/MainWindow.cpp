@@ -2414,6 +2414,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 m_radioModel.sendCommand(
                     QString("slice m %1 pan=%2").arg(mhz, 0, 'f', 6).arg(panId));
                 sw->setVfoFrequency(mhz);  // immediate visual feedback
+                // Update overlay freq so scroll-to-tune uses the new base
+                sw->setSliceOverlayFreq(s->sliceId(), mhz);
 
                 // The radio drops FPS on the non-active pan after slice m.
                 // Restore FPS on all pans to prevent waterfall slowdown.

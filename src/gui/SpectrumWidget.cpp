@@ -262,6 +262,16 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
     update();
 }
 
+void SpectrumWidget::setSliceOverlayFreq(int sliceId, double freqMhz)
+{
+    for (auto& so : m_sliceOverlays) {
+        if (so.sliceId == sliceId) {
+            so.freqMhz = freqMhz;
+            return;
+        }
+    }
+}
+
 void SpectrumWidget::removeSliceOverlay(int sliceId)
 {
     int idx = overlayIndex(sliceId);

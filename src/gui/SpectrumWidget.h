@@ -154,6 +154,8 @@ public:
                          int rttyMark = 2125, int rttyShift = 170,
                          bool ritOn = false, int ritFreq = 0,
                          bool xitOn = false, int xitFreq = 0);
+    // Update just the frequency on an existing overlay (for optimistic scroll-to-tune)
+    void setSliceOverlayFreq(int sliceId, double freqMhz);
     // Remove a slice overlay.
     void removeSliceOverlay(int sliceId);
 
