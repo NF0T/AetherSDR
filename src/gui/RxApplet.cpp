@@ -1468,6 +1468,10 @@ void RxApplet::connectSlice(SliceModel* s)
         QSignalBlocker b(m_revBtn);
         m_revBtn->setChecked(false);  // REV state not persisted by radio
     }
+
+    // Step size — sync from radio's per-slice step and step_list
+    syncStepFromSlice(s->stepHz(), s->stepList());
+    connect(s, &SliceModel::stepChanged, this, &RxApplet::syncStepFromSlice);
 }
 
 void RxApplet::disconnectSlice(SliceModel* s)

@@ -623,10 +623,14 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
             spectrum(), &SpectrumWidget::setStepSize);
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
-            this, [](int step) {
-        auto& s = AppSettings::instance();
-        s.setValue("TuningStepSize", QString::number(step));
-        s.save();
+            this, [this](int step) {
+        // Send step to radio for the active slice
+        if (auto* s = m_radioModel.slice(m_activeSliceId))
+            m_radioModel.sendCommand(QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
+        // Also save to AppSettings for SpectrumWidget scroll-to-tune
+        auto& settings = AppSettings::instance();
+        settings.setValue("TuningStepSize", QString::number(step));
+        settings.save();
     });
     int savedStep = AppSettings::instance().value("TuningStepSize", "100").toInt();
     for (auto* a : m_panStack->allApplets()) a->spectrumWidget()->setStepSize(savedStep);
@@ -2633,10 +2637,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 settings.setValue(pfx + "Mode",     s->mode());
                 settings.setValue(pfx + "FilterLo", QString::number(s->filterLow()));
                 settings.setValue(pfx + "FilterHi", QString::number(s->filterHigh()));
-                // Step: save from SpectrumWidget (client truth — reflects user's
-                // last manual step change, not the radio's mode-change default)
-                settings.setValue(pfx + "Step",     QString::number(
-                    spectrum() ? spectrum()->stepSize() : s->stepHz()));
+                // Step is radio-authoritative (per-slice, per-mode) — not saved in band stack
                 // DSP flags — save each independently
                 settings.setValue(pfx + "NR",   s->nrOn()   ? "True" : "False");
                 settings.setValue(pfx + "NB",   s->nbOn()   ? "True" : "False");
@@ -2691,7 +2692,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             // Recall saved band state
             double recallFreq = savedFreq.toDouble();
             QString recallMode = settings.value(pfx + "Mode", mode).toString();
-            int step     = settings.value(pfx + "Step", "100").toInt();
 
             s->setMode(recallMode);
             // Tune this pan's slice and recenter the pan on the new frequency
@@ -2708,16 +2708,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             // Filter offsets: let the radio apply the correct default for
             // the recalled mode. Recalling saved filter widths across mode
             // changes produces wrong results (e.g. 3kHz USB filter on CW).
-            // Send step to radio after a short delay (mode change resets step,
-            // so we wait for the mode echo before sending our step)
-            if (step > 0) {
-                QTimer::singleShot(300, this, [this, s, step]() {
-                    m_radioModel.sendCommand(
-                        QString("slice set %1 step=%2").arg(s->sliceId()).arg(step));
-                    if (spectrum()) spectrum()->setStepSize(step);
-                    m_appletPanel->rxApplet()->syncStepFromSlice(step, s->stepList());
-                });
-            }
+            // Step is radio-authoritative — the radio sends the correct step
+            // for the mode via stepChanged signal, RxApplet syncs automatically.
 
             // Radio-side DSP flags
             auto setDsp = [&](const QString& key, const QString& cmd, bool cur) {
