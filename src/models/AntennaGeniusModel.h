@@ -170,6 +170,7 @@ private:
     QUdpSocket* m_udpSocket{nullptr};
     QList<AgDeviceInfo> m_discoveredDevices;
     QTimer* m_discoveryTimeout{nullptr};  // prune stale devices
+    QTimer* m_retryTimer{nullptr};        // retry bind if port busy
 
     // TCP connection
     QTcpSocket* m_tcpSocket{nullptr};

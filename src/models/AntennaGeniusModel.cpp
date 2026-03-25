@@ -44,9 +44,22 @@ void AntennaGeniusModel::startDiscovery()
     if (!m_udpSocket->bind(QHostAddress::AnyIPv4, kAgPort,
                            QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
         qCWarning(lcTuner) << "AntennaGenius: failed to bind UDP" << kAgPort
-                    << m_udpSocket->errorString();
+                    << m_udpSocket->errorString() << "— will retry in 5s";
         delete m_udpSocket;
         m_udpSocket = nullptr;
+        // Retry bind every 5 seconds until it succeeds
+        if (!m_retryTimer) {
+            m_retryTimer = new QTimer(this);
+            m_retryTimer->setInterval(5000);
+            connect(m_retryTimer, &QTimer::timeout, this, [this]() {
+                startDiscovery();
+                if (m_udpSocket) {
+                    // Bind succeeded — stop retrying
+                    m_retryTimer->stop();
+                }
+            });
+            m_retryTimer->start();
+        }
         return;
     }
     connect(m_udpSocket, &QUdpSocket::readyRead,
