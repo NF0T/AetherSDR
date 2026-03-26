@@ -33,7 +33,7 @@ cmake --build build -j$(nproc)
 
 Dependencies (Arch): `qt6-base qt6-multimedia cmake ninja pkgconf autoconf automake libtool`
 
-Current version: **0.6.1** (set in both `CMakeLists.txt` and `README.md`).
+Current version: **0.7.3** (set in both `CMakeLists.txt` and `README.md`).
 
 ---
 
@@ -816,6 +816,25 @@ and panadapter. The radio assigns these to our `client_handle`.
   so amplifier meter doesn't overwrite exciter reading (#181)
 - **Step size persistence**: tuning step saved/restored across restarts (#211)
 - **VFO slider value labels**: AF gain, SQL, AGC-T show numeric values (#198)
+- **DVK (Digital Voice Keyer)**: 12-slot recording/playback panel with F1-F12
+  hotkeys, REC/STOP/PLAY/PREV buttons, elapsed timer with progress bars,
+  right-click context menu (rename, clear, delete, import/export WAV),
+  inline name editing, WAV upload/download via TCP (#19)
+- **DVK mode-aware availability**: DVK enabled only in voice modes (USB/LSB/
+  AM/SAM/FM/NFM/DFM), CWX enabled only in CW/CWL. Auto-close on mode switch.
+  Mutual exclusion between CWX and DVK panels.
+- **FFT/waterfall horizontal alignment fix**: removed hardcoded xpixels=1024
+  that overwrote correct widget dimensions, fixing signal position mismatch
+  between FFT spectrum and native waterfall tiles (#279)
+- **FFT dBm calibration**: bin conversion now uses actual ypixels from radio
+  status (bins are pixel Y positions, not 0-65535 range). Tracks y_pixels
+  from radio status updates for correct dBm scaling.
+- **Title bar speaker mute fix**: mute button now controls local PC audio
+  engine in addition to radio line out (#259)
+- **VFO mute indicator**: speaker icon on VFO tab bar toggles 🔊/🔇 to
+  reflect mute state. Right-click speaker tab to toggle mute directly (#283)
+- **4-pane splitter fix**: CWX+DVK+PanStack+AppletPanel layout corrected —
+  applet panel was invisible due to wrong stretch/size indices (#281)
 
 ## What's NOT Yet Implemented
 
@@ -826,7 +845,6 @@ and panadapter. The radio assigns these to our `client_handle`.
 - DAX IQ streaming for SDR apps (#124)
 - DAX on Windows (virtual audio devices, #87)
 - Spot / DX cluster integration
-- Macro / voice keyer
 - SmartLink NAT hole-punching (for radios without UPnP/port forwarding)
 - SmartLink WAN auto-reconnect
 - SmartLink jitter buffer for high-latency connections
