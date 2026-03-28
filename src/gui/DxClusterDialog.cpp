@@ -82,12 +82,27 @@ QVariant SpotTableModel::headerData(int section, Qt::Orientation orientation, in
 
 void SpotTableModel::addSpot(const DxSpot& spot)
 {
-    // Add to top of list (newest first)
     beginInsertRows({}, 0, 0);
     m_spots.prepend(spot);
     endInsertRows();
 
-    // Trim excess
+    if (m_spots.size() > m_maxSpots) {
+        beginRemoveRows({}, m_maxSpots, m_spots.size() - 1);
+        m_spots.resize(m_maxSpots);
+        endRemoveRows();
+    }
+}
+
+void SpotTableModel::addSpots(const QVector<DxSpot>& spots)
+{
+    if (spots.isEmpty()) return;
+    int count = spots.size();
+    beginInsertRows({}, 0, count - 1);
+    // Prepend in reverse so newest is at index 0
+    for (int i = count - 1; i >= 0; --i)
+        m_spots.prepend(spots[i]);
+    endInsertRows();
+
     if (m_spots.size() > m_maxSpots) {
         beginRemoveRows({}, m_maxSpots, m_spots.size() - 1);
         m_spots.resize(m_maxSpots);
@@ -186,6 +201,11 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     root->addWidget(tabs);
 
+    // ── Spot batch timer (1/sec flush) ──────────────────────────────────
+    m_spotBatchTimer = new QTimer(this);
+    m_spotBatchTimer->start(1000);
+    connect(m_spotBatchTimer, &QTimer::timeout, this, &DxClusterDialog::flushSpotBatch);
+
     // Auto-scroll helper: only scroll if user is already at the bottom
     auto isAtBottom = [](QAbstractScrollArea* w) {
         auto* sb = w->verticalScrollBar();
@@ -202,12 +222,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         }
     });
 
-    connect(clusterClient, &DxClusterClient::spotReceived, this, [this, isAtBottom](DxSpot spot) {
+    connect(clusterClient, &DxClusterClient::spotReceived, this, [this](DxSpot spot) {
         spot.source = "Cluster";
-        bool follow = isAtBottom(m_spotTable);
-        m_spotModel->addSpot(spot);
-        if (follow)
-            m_spotTable->scrollToBottom();
+        m_spotBatch.append(spot);
     });
 
     connect(clusterClient, &DxClusterClient::connected, this, [this] {
@@ -276,12 +293,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         }
     });
 
-    connect(rbnClient, &DxClusterClient::spotReceived, this, [this, isAtBottom](DxSpot spot) {
+    connect(rbnClient, &DxClusterClient::spotReceived, this, [this](DxSpot spot) {
         spot.source = "RBN";
-        bool follow = isAtBottom(m_spotTable);
-        m_spotModel->addSpot(spot);
-        if (follow)
-            m_spotTable->scrollToBottom();
+        m_spotBatch.append(spot);
     });
 
     connect(rbnClient, &DxClusterClient::connected, this, [this] {
@@ -349,12 +363,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
             }
         });
 
-        connect(pskClient, &PskReporterClient::spotReceived, this, [this, isAtBottom](DxSpot spot) {
+        connect(pskClient, &PskReporterClient::spotReceived, this, [this](DxSpot spot) {
             spot.source = "PSK";
-            bool follow = isAtBottom(m_spotTable);
-            m_spotModel->addSpot(spot);
-            if (follow)
-                m_spotTable->scrollToBottom();
+            m_spotBatch.append(spot);
         });
 
         connect(pskClient, &PskReporterClient::connected, this, [this] {
@@ -538,7 +549,7 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     connect(m_cmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_cmdEdit->text().trimmed();
         if (cmd.isEmpty() || !m_client->isConnected()) return;
-        m_client->sendCommand(cmd);
+        QMetaObject::invokeMethod(m_client, [client=m_client, cmd] { client->sendCommand(cmd); });
         m_console->appendPlainText("> " + cmd);
         m_cmdEdit->clear();
     });
@@ -700,7 +711,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     connect(m_rbnCmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_rbnCmdEdit->text().trimmed();
         if (cmd.isEmpty() || !m_rbnClient->isConnected()) return;
-        m_rbnClient->sendCommand(cmd);
+        QMetaObject::invokeMethod(m_rbnClient, [client=m_rbnClient, cmd] { client->sendCommand(cmd); });
         m_rbnConsole->appendPlainText("> " + cmd);
         m_rbnCmdEdit->clear();
     });
@@ -1196,6 +1207,23 @@ void DxClusterDialog::setTotalSpots(int count)
 {
     if (m_totalSpotsLabel)
         m_totalSpotsLabel->setText(QString::number(count));
+}
+
+void DxClusterDialog::flushSpotBatch()
+{
+    if (m_spotBatch.isEmpty()) return;
+
+    auto isAtBottom = [](QAbstractScrollArea* w) {
+        auto* sb = w->verticalScrollBar();
+        return sb->value() >= sb->maximum() - 2;
+    };
+    bool follow = isAtBottom(m_spotTable);
+
+    m_spotModel->addSpots(m_spotBatch);
+    m_spotBatch.clear();
+
+    if (follow)
+        m_spotTable->scrollToBottom();
 }
 
 void DxClusterDialog::updateStatus()

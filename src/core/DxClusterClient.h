@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QString>
 #include <QTime>
+#include <atomic>
 
 namespace AetherSDR {
 
@@ -59,16 +60,16 @@ private:
     void handleLine(const QString& line);
     void stripTelnetIAC();
 
-    QTcpSocket m_socket;
-    QByteArray m_readBuffer;
-    QTimer     m_reconnectTimer;
-    QFile      m_logFile;
+    QTcpSocket* m_socket;
+    QByteArray  m_readBuffer;
+    QTimer*     m_reconnectTimer;
+    QFile       m_logFile;
 
     QString m_logFileName{"dxcluster.log"};
     QString m_host;
     quint16 m_port{7300};
     QString m_callsign;
-    bool    m_connected{false};
+    std::atomic<bool> m_connected{false};
     bool    m_loggedIn{false};
     bool    m_intentionalDisconnect{false};
     int     m_reconnectAttempts{0};

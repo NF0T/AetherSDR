@@ -16,27 +16,29 @@ namespace AetherSDR {
 
 PskReporterClient::PskReporterClient(QObject* parent)
     : QObject(parent)
+    , m_mqttClient(new QMqttClient(this))
+    , m_reconnectTimer(new QTimer(this))
 {
-    m_client.setHostname("mqtt.pskreporter.info");
-    m_client.setPort(1883);
+    m_mqttClient->setHostname("mqtt.pskreporter.info");
+    m_mqttClient->setPort(1883);
 
-    connect(&m_client, &QMqttClient::connected, this, &PskReporterClient::onConnected);
-    connect(&m_client, &QMqttClient::disconnected, this, &PskReporterClient::onDisconnected);
-    connect(&m_client, &QMqttClient::errorChanged, this, &PskReporterClient::onErrorChanged);
-    connect(&m_client, &QMqttClient::messageReceived,
+    connect(m_mqttClient, &QMqttClient::connected, this, &PskReporterClient::onConnected);
+    connect(m_mqttClient, &QMqttClient::disconnected, this, &PskReporterClient::onDisconnected);
+    connect(m_mqttClient, &QMqttClient::errorChanged, this, &PskReporterClient::onErrorChanged);
+    connect(m_mqttClient, &QMqttClient::messageReceived,
             this, &PskReporterClient::onMessageReceived);
 
-    m_reconnectTimer.setSingleShot(true);
-    connect(&m_reconnectTimer, &QTimer::timeout, this, &PskReporterClient::onReconnectTimer);
+    m_reconnectTimer->setSingleShot(true);
+    connect(m_reconnectTimer, &QTimer::timeout, this, &PskReporterClient::onReconnectTimer);
 }
 
 PskReporterClient::~PskReporterClient()
 {
     m_intentionalDisconnect = true;
-    m_reconnectTimer.stop();
+    m_reconnectTimer->stop();
     m_logFile.close();
-    if (m_client.state() != QMqttClient::Disconnected)
-        m_client.disconnectFromHost();
+    if (m_mqttClient->state() != QMqttClient::Disconnected)
+        m_mqttClient->disconnectFromHost();
 }
 
 QString PskReporterClient::logFilePath() const
@@ -65,17 +67,17 @@ void PskReporterClient::connectToServer(const QString& callsign)
         m_logFile.flush();
     }
 
-    m_client.setClientId(QString("AetherSDR-%1-%2")
+    m_mqttClient->setClientId(QString("AetherSDR-%1-%2")
         .arg(callsign).arg(QDateTime::currentMSecsSinceEpoch() % 100000));
-    m_client.connectToHost();
+    m_mqttClient->connectToHost();
 }
 
 void PskReporterClient::disconnect()
 {
     m_intentionalDisconnect = true;
-    m_reconnectTimer.stop();
-    if (m_client.state() != QMqttClient::Disconnected)
-        m_client.disconnectFromHost();
+    m_reconnectTimer->stop();
+    if (m_mqttClient->state() != QMqttClient::Disconnected)
+        m_mqttClient->disconnectFromHost();
 }
 
 void PskReporterClient::setFilter(const QString& band, const QString& mode)
@@ -110,7 +112,7 @@ void PskReporterClient::onDisconnected()
         int delay = std::min(InitialReconnectDelayMs * (1 << m_reconnectAttempts),
                              MaxReconnectDelayMs);
         qCDebug(lcDxCluster) << "PskReporterClient: reconnecting in" << delay << "ms";
-        m_reconnectTimer.start(delay);
+        m_reconnectTimer->start(delay);
         m_reconnectAttempts++;
     }
 }
@@ -137,7 +139,7 @@ void PskReporterClient::onReconnectTimer()
 {
     if (m_intentionalDisconnect) return;
     qCDebug(lcDxCluster) << "PskReporterClient: attempting reconnect";
-    m_client.connectToHost();
+    m_mqttClient->connectToHost();
 }
 
 void PskReporterClient::subscribe()
@@ -151,7 +153,7 @@ void PskReporterClient::subscribe()
         .arg(band, mode, m_callsign);
 
     qCDebug(lcDxCluster) << "PskReporterClient: subscribing to" << topic;
-    m_client.subscribe(QMqttTopicFilter(topic), 0);
+    m_mqttClient->subscribe(QMqttTopicFilter(topic), 0);
 }
 
 void PskReporterClient::onMessageReceived(const QByteArray& message, const QMqttTopicName& /*topic*/)

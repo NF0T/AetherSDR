@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QString>
 #include <QTimer>
+#include <atomic>
 #include "DxClusterClient.h"  // for DxSpot
 
 namespace AetherSDR {
@@ -47,14 +48,14 @@ private:
     void subscribe();
     bool parseSpotJson(const QByteArray& json, DxSpot& spot);
 
-    QMqttClient m_client;
-    QTimer      m_reconnectTimer;
-    QFile       m_logFile;
+    QMqttClient* m_mqttClient;
+    QTimer*      m_reconnectTimer;
+    QFile        m_logFile;
 
     QString m_callsign;
     QString m_filterBand;
     QString m_filterMode;
-    bool    m_connected{false};
+    std::atomic<bool> m_connected{false};
     bool    m_intentionalDisconnect{false};
     int     m_reconnectAttempts{0};
 

@@ -42,6 +42,7 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
 
     void addSpot(const DxSpot& spot);
+    void addSpots(const QVector<DxSpot>& spots);
     void clear();
     void setMaxSpots(int max) { m_maxSpots = max; }
     double freqAtRow(int row) const;
@@ -142,6 +143,11 @@ private:
     QLabel*         m_pskStatusLabel;
     QPlainTextEdit* m_pskConsole;
 #endif
+
+    // Spot batching (1/sec flush)
+    QVector<DxSpot>        m_spotBatch;
+    QTimer*                m_spotBatchTimer{nullptr};
+    void flushSpotBatch();
 
     // Spot list tab
     SpotTableModel*        m_spotModel;

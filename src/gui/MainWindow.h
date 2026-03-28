@@ -11,6 +11,7 @@
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
 #include "core/DxClusterClient.h"
+#include <QThread>
 #ifdef HAVE_MQTT
 #include "core/PskReporterClient.h"
 #endif
@@ -106,11 +107,12 @@ private:
     WanConnection     m_wanConnection;
     AntennaGeniusModel m_antennaGenius;
     CwDecoder         m_cwDecoder;
-    DxClusterClient   m_dxCluster;
-    DxClusterClient   m_rbnClient;
+    DxClusterClient*   m_dxCluster{nullptr};
+    DxClusterClient*   m_rbnClient{nullptr};
 #ifdef HAVE_MQTT
-    PskReporterClient m_pskClient;
+    PskReporterClient* m_pskClient{nullptr};
 #endif
+    QThread*           m_spotThread{nullptr};
 
     // Spot deduplication: callsign → {freqMhz, timestamp ms}
     struct SpotDedup {
@@ -118,6 +120,9 @@ private:
         qint64 addedMs;
     };
     QHash<QString, SpotDedup> m_spotDedup;
+
+    // Batched spot add commands (flushed 1/sec)
+    QStringList m_spotCmdBatch;
 #ifdef HAVE_SERIALPORT
     SerialPortController m_serialPort;
 #endif

@@ -11,24 +11,26 @@ namespace AetherSDR {
 
 DxClusterClient::DxClusterClient(QObject* parent)
     : QObject(parent)
+    , m_socket(new QTcpSocket(this))
+    , m_reconnectTimer(new QTimer(this))
 {
-    connect(&m_socket, &QTcpSocket::connected,    this, &DxClusterClient::onConnected);
-    connect(&m_socket, &QTcpSocket::disconnected, this, &DxClusterClient::onDisconnected);
-    connect(&m_socket, &QTcpSocket::readyRead,    this, &DxClusterClient::onReadyRead);
-    connect(&m_socket, &QAbstractSocket::errorOccurred,
+    connect(m_socket, &QTcpSocket::connected,    this, &DxClusterClient::onConnected);
+    connect(m_socket, &QTcpSocket::disconnected, this, &DxClusterClient::onDisconnected);
+    connect(m_socket, &QTcpSocket::readyRead,    this, &DxClusterClient::onReadyRead);
+    connect(m_socket, &QAbstractSocket::errorOccurred,
             this, &DxClusterClient::onSocketError);
 
-    m_reconnectTimer.setSingleShot(true);
-    connect(&m_reconnectTimer, &QTimer::timeout, this, &DxClusterClient::onReconnectTimer);
+    m_reconnectTimer->setSingleShot(true);
+    connect(m_reconnectTimer, &QTimer::timeout, this, &DxClusterClient::onReconnectTimer);
 }
 
 DxClusterClient::~DxClusterClient()
 {
     m_intentionalDisconnect = true;
-    m_reconnectTimer.stop();
+    m_reconnectTimer->stop();
     m_logFile.close();
-    if (m_socket.state() != QAbstractSocket::UnconnectedState)
-        m_socket.abort();
+    if (m_socket->state() != QAbstractSocket::UnconnectedState)
+        m_socket->abort();
 }
 
 QString DxClusterClient::logFilePath() const
@@ -52,13 +54,13 @@ void DxClusterClient::connectToCluster(const QString& host, quint16 port, const 
     m_readBuffer.clear();
 
     qCDebug(lcDxCluster) << "DxClusterClient: connecting to" << host << ":" << port;
-    m_socket.connectToHost(host, port);
+    m_socket->connectToHost(host, port);
 
     // Connection timeout
     QTimer::singleShot(ConnectTimeoutMs, this, [this] {
-        if (!m_connected && m_socket.state() != QAbstractSocket::ConnectedState) {
+        if (!m_connected && m_socket->state() != QAbstractSocket::ConnectedState) {
             qCWarning(lcDxCluster) << "DxClusterClient: connection timeout";
-            m_socket.abort();
+            m_socket->abort();
             emit connectionError("Connection timeout");
         }
     });
@@ -67,12 +69,12 @@ void DxClusterClient::connectToCluster(const QString& host, quint16 port, const 
 void DxClusterClient::disconnect()
 {
     m_intentionalDisconnect = true;
-    m_reconnectTimer.stop();
+    m_reconnectTimer->stop();
     if (m_connected) {
-        m_socket.write("bye\r\n");
-        m_socket.flush();
+        m_socket->write("bye\r\n");
+        m_socket->flush();
     }
-    m_socket.disconnectFromHost();
+    m_socket->disconnectFromHost();
 }
 
 void DxClusterClient::sendCommand(const QString& cmd)
@@ -83,7 +85,7 @@ void DxClusterClient::sendCommand(const QString& cmd)
         m_logFile.write(("> " + cmd + "\n").toUtf8());
         m_logFile.flush();
     }
-    m_socket.write((cmd + "\r\n").toLatin1());
+    m_socket->write((cmd + "\r\n").toLatin1());
 }
 
 // ── Socket slots ────────────────────────────────────────────────────────────
@@ -123,14 +125,14 @@ void DxClusterClient::onDisconnected()
         int delay = std::min(InitialReconnectDelayMs * (1 << m_reconnectAttempts),
                              MaxReconnectDelayMs);
         qCDebug(lcDxCluster) << "DxClusterClient: reconnecting in" << delay << "ms";
-        m_reconnectTimer.start(delay);
+        m_reconnectTimer->start(delay);
         m_reconnectAttempts++;
     }
 }
 
 void DxClusterClient::onSocketError(QAbstractSocket::SocketError /*err*/)
 {
-    QString msg = m_socket.errorString();
+    QString msg = m_socket->errorString();
     qCWarning(lcDxCluster) << "DxClusterClient: socket error:" << msg;
     emit connectionError(msg);
 }
@@ -159,7 +161,7 @@ void DxClusterClient::stripTelnetIAC()
 
 void DxClusterClient::onReadyRead()
 {
-    m_readBuffer.append(m_socket.readAll());
+    m_readBuffer.append(m_socket->readAll());
     stripTelnetIAC();
 
     while (true) {
@@ -171,7 +173,7 @@ void DxClusterClient::onReadyRead()
                 if (isLoginPrompt(partial)) {
                     qCDebug(lcDxCluster) << "DxClusterClient: login prompt detected (no newline):" << partial;
                     m_readBuffer.clear();
-                    m_socket.write((m_callsign + "\r\n").toLatin1());
+                    m_socket->write((m_callsign + "\r\n").toLatin1());
                     m_loggedIn = true;
                     qCDebug(lcDxCluster) << "DxClusterClient: sent callsign" << m_callsign;
                 }
@@ -200,7 +202,7 @@ void DxClusterClient::handleLine(const QString& line)
     // Login prompt detection (line-based)
     if (!m_loggedIn && isLoginPrompt(line)) {
         qCDebug(lcDxCluster) << "DxClusterClient: login prompt:" << line;
-        m_socket.write((m_callsign + "\r\n").toLatin1());
+        m_socket->write((m_callsign + "\r\n").toLatin1());
         m_loggedIn = true;
         qCDebug(lcDxCluster) << "DxClusterClient: sent callsign" << m_callsign;
         return;

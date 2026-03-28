@@ -220,96 +220,83 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     // ── DX Cluster — forward parsed spots to radio ──────────────────────
-    // Spot dedup helper — returns true if spot should be skipped
+    // ── Spot clients on worker thread ─────────────────────────────────────
+    m_dxCluster = new DxClusterClient;
+    m_rbnClient = new DxClusterClient;
+    m_rbnClient->setLogFileName("rbn.log");
+#ifdef HAVE_MQTT
+    m_pskClient = new PskReporterClient;
+#endif
+    m_spotThread = new QThread(this);
+    m_spotThread->setObjectName("SpotClients");
+    m_dxCluster->moveToThread(m_spotThread);
+    m_rbnClient->moveToThread(m_spotThread);
+#ifdef HAVE_MQTT
+    m_pskClient->moveToThread(m_spotThread);
+#endif
+    m_spotThread->start();
+
+    // ── Spot forwarding: dedup + batch queue + 1/sec flush ────────────────
+
+    // Dedup helper — returns true if spot should be skipped
     auto isDuplicateSpot = [this](const DxSpot& spot) -> bool {
         qint64 now = QDateTime::currentMSecsSinceEpoch();
         int lifetimeMs = AppSettings::instance().value("DxClusterSpotLifetime", 30).toInt() * 60000;
         auto it = m_spotDedup.find(spot.dxCall);
         if (it != m_spotDedup.end()) {
-            bool sameFreq = std::abs(it->freqMhz - spot.freqMhz) < 0.001;  // within 1 kHz
+            bool sameFreq = std::abs(it->freqMhz - spot.freqMhz) < 0.001;
             bool expired = (now - it->addedMs) > lifetimeMs;
             if (sameFreq && !expired)
-                return true;  // duplicate — skip
+                return true;
         }
         m_spotDedup[spot.dxCall] = {spot.freqMhz, now};
         return false;
     };
 
-    connect(&m_dxCluster, &DxClusterClient::spotReceived,
-            this, [this, isDuplicateSpot](const DxSpot& spot) {
+    // Build spot add command and queue for batch send
+    auto queueSpotCmd = [this, isDuplicateSpot](const DxSpot& spot, const QString& source) {
         if (!m_radioModel.isConnected()) return;
         if (isDuplicateSpot(spot)) return;
-        // Build spot add command matching FlexLib Radio.cs field order
         QString call = QString(spot.dxCall).replace(' ', QChar(0x7f));
         QString freq = QString::number(spot.freqMhz, 'f', 6);
         QString cmd = "spot add callsign=" + call + " rx_freq=" + freq
                      + " tx_freq=" + freq
-                     + " source=DXCluster"
+                     + " source=" + source
                      + " spotter_callsign=" + spot.spotterCall
                      + " lifetime_seconds=" + QString::number(
                            AppSettings::instance().value("DxClusterSpotLifetime", 30).toInt() * 60);
         if (!spot.comment.isEmpty())
             cmd += " comment=" + QString(spot.comment).replace(' ', QChar(0x7f));
-        m_radioModel.sendCmdPublic(cmd, [cmd](int code, const QString& body) {
-            if (code != 0)
-                qWarning() << "DX Cluster: spot add failed, code:" << Qt::hex << code
-                           << "body:" << body << "cmd:" << cmd;
-        });
+        m_spotCmdBatch.append(cmd);
+    };
+
+    // Flush batch: send queued spot commands to radio (1/sec)
+    auto* spotCmdTimer = new QTimer(this);
+    spotCmdTimer->start(1000);
+    connect(spotCmdTimer, &QTimer::timeout, this, [this] {
+        if (m_spotCmdBatch.isEmpty() || !m_radioModel.isConnected()) return;
+        // Send up to RbnRateLimit commands per tick
+        int limit = AppSettings::instance().value("RbnRateLimit", 10).toInt();
+        int count = std::min(static_cast<int>(m_spotCmdBatch.size()), limit);
+        for (int i = 0; i < count; ++i)
+            m_radioModel.sendCommand(m_spotCmdBatch[i]);
+        m_spotCmdBatch.remove(0, count);
     });
 
-    // ── RBN — rate-limited spot forwarding ───────────────────────────────
-    m_rbnClient.setLogFileName("rbn.log");
-    {
-        auto* rbnRateTimer = new QTimer(this);
-        rbnRateTimer->start(1000);
-        auto* rbnTokens = new int(10);
-        connect(rbnRateTimer, &QTimer::timeout, this, [rbnTokens] {
-            *rbnTokens = AppSettings::instance().value("RbnRateLimit", 10).toInt();
-        });
-        connect(&m_rbnClient, &DxClusterClient::spotReceived,
-                this, [this, rbnTokens, isDuplicateSpot](const DxSpot& spot) {
-            if (!m_radioModel.isConnected() || *rbnTokens <= 0) return;
-            if (isDuplicateSpot(spot)) return;
-            (*rbnTokens)--;
-            QString call = QString(spot.dxCall).replace(' ', QChar(0x7f));
-            QString freq = QString::number(spot.freqMhz, 'f', 6);
-            QString cmd = "spot add callsign=" + call + " rx_freq=" + freq
-                         + " tx_freq=" + freq
-                         + " source=RBN"
-                         + " spotter_callsign=" + spot.spotterCall
-                         + " lifetime_seconds=" + QString::number(
-                               AppSettings::instance().value("DxClusterSpotLifetime", 30).toInt() * 60);
-            if (!spot.comment.isEmpty())
-                cmd += " comment=" + QString(spot.comment).replace(' ', QChar(0x7f));
-            m_radioModel.sendCmdPublic(cmd, [](int code, const QString& body) {
-                if (code != 0)
-                    qWarning() << "RBN: spot add failed, code:" << Qt::hex << code
-                               << "body:" << body;
-            });
-        });
-    }
+    connect(m_dxCluster, &DxClusterClient::spotReceived,
+            this, [queueSpotCmd](const DxSpot& spot) {
+        queueSpotCmd(spot, "DXCluster");
+    });
+
+    connect(m_rbnClient, &DxClusterClient::spotReceived,
+            this, [queueSpotCmd](const DxSpot& spot) {
+        queueSpotCmd(spot, "RBN");
+    });
 
 #ifdef HAVE_MQTT
-    // ── PSKReporter — MQTT spot forwarding with dedup ───────────────────
-    connect(&m_pskClient, &PskReporterClient::spotReceived,
-            this, [this, isDuplicateSpot](const DxSpot& spot) {
-        if (!m_radioModel.isConnected()) return;
-        if (isDuplicateSpot(spot)) return;
-        QString call = QString(spot.dxCall).replace(' ', QChar(0x7f));
-        QString freq = QString::number(spot.freqMhz, 'f', 6);
-        QString cmd = "spot add callsign=" + call + " rx_freq=" + freq
-                     + " tx_freq=" + freq
-                     + " source=PSKReporter"
-                     + " spotter_callsign=" + spot.spotterCall
-                     + " lifetime_seconds=" + QString::number(
-                           AppSettings::instance().value("DxClusterSpotLifetime", 30).toInt() * 60);
-        if (!spot.comment.isEmpty())
-            cmd += " comment=" + QString(spot.comment).replace(' ', QChar(0x7f));
-        m_radioModel.sendCmdPublic(cmd, [](int code, const QString& body) {
-            if (code != 0)
-                qWarning() << "PSK: spot add failed, code:" << Qt::hex << code
-                           << "body:" << body;
-        });
+    connect(m_pskClient, &PskReporterClient::spotReceived,
+            this, [queueSpotCmd](const DxSpot& spot) {
+        queueSpotCmd(spot, "PSKReporter");
     });
 #endif
 
@@ -1107,6 +1094,18 @@ void MainWindow::closeEvent(QCloseEvent* event)
     m_discovery.stopListening();
     m_radioModel.disconnectFromRadio();
     m_audio.stopRxStream();
+
+    // Stop spot client worker thread
+    if (m_spotThread) {
+        m_spotThread->quit();
+        m_spotThread->wait(3000);
+        delete m_dxCluster;  m_dxCluster = nullptr;
+        delete m_rbnClient;  m_rbnClient = nullptr;
+#ifdef HAVE_MQTT
+        delete m_pskClient;  m_pskClient = nullptr;
+#endif
+    }
+
     QMainWindow::closeEvent(event);
 }
 
@@ -1295,9 +1294,9 @@ void MainWindow::buildMenuBar()
     settingsMenu->addAction("USB Cables...");
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
-        DxClusterDialog dlg(&m_dxCluster, &m_rbnClient,
+        DxClusterDialog dlg(m_dxCluster, m_rbnClient,
 #ifdef HAVE_MQTT
-                            &m_pskClient,
+                            m_pskClient,
 #endif
                             &m_radioModel, this);
         dlg.setTotalSpots(m_radioModel.spotModel()->spots().size());
@@ -1327,23 +1326,23 @@ void MainWindow::buildMenuBar()
         connect(&dlg, &DxClusterDialog::settingsChanged, this, refreshSpots);
         connect(&dlg, &DxClusterDialog::connectRequested,
                 this, [this](const QString& host, quint16 port, const QString& call) {
-            m_dxCluster.connectToCluster(host, port, call);
+            QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->connectToCluster(host, port, call); });
         });
         connect(&dlg, &DxClusterDialog::disconnectRequested,
-                this, [this] { m_dxCluster.disconnect(); });
+                this, [this] { QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->disconnect(); }); });
         connect(&dlg, &DxClusterDialog::rbnConnectRequested,
                 this, [this](const QString& host, quint16 port, const QString& call) {
-            m_rbnClient.connectToCluster(host, port, call);
+            QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->connectToCluster(host, port, call); });
         });
         connect(&dlg, &DxClusterDialog::rbnDisconnectRequested,
-                this, [this] { m_rbnClient.disconnect(); });
+                this, [this] { QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->disconnect(); }); });
 #ifdef HAVE_MQTT
         connect(&dlg, &DxClusterDialog::pskConnectRequested,
                 this, [this](const QString& call) {
-            m_pskClient.connectToServer(call);
+            QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->connectToServer(call); });
         });
         connect(&dlg, &DxClusterDialog::pskDisconnectRequested,
-                this, [this] { m_pskClient.disconnect(); });
+                this, [this] { QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->disconnect(); }); });
 #endif
         connect(&dlg, &DxClusterDialog::spotsClearedAll,
                 this, [this] { m_spotDedup.clear(); });
@@ -2102,8 +2101,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 QString host = cs.value("DxClusterHost", "dxc.nc7j.com").toString();
                 quint16 cPort = static_cast<quint16>(cs.value("DxClusterPort", 7300).toInt());
                 QString call = cs.value("DxClusterCallsign").toString();
-                if (!call.isEmpty() && !m_dxCluster.isConnected())
-                    m_dxCluster.connectToCluster(host, cPort, call);
+                if (!call.isEmpty() && !m_dxCluster->isConnected())
+                    QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->connectToCluster(host, cPort, call); });
             }
             // Auto-connect RBN if enabled
             if (cs.value("RbnAutoConnect", "False").toString() == "True") {
@@ -2112,8 +2111,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 QString call = cs.value("RbnCallsign").toString();
                 if (call.isEmpty())
                     call = cs.value("DxClusterCallsign").toString();
-                if (!call.isEmpty() && !m_rbnClient.isConnected())
-                    m_rbnClient.connectToCluster(host, rPort, call);
+                if (!call.isEmpty() && !m_rbnClient->isConnected())
+                    QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->connectToCluster(host, rPort, call); });
             }
 #ifdef HAVE_MQTT
             // Auto-connect PSKReporter if enabled
@@ -2121,16 +2120,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 QString call = cs.value("PskReporterCallsign").toString();
                 if (call.isEmpty())
                     call = cs.value("DxClusterCallsign").toString();
-                if (!call.isEmpty() && !m_pskClient.isConnected())
-                    m_pskClient.connectToServer(call);
+                if (!call.isEmpty() && !m_pskClient->isConnected())
+                    QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->connectToServer(call); });
             }
 #endif
         }
     } else {
-        m_dxCluster.disconnect();
-        m_rbnClient.disconnect();
+        QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->disconnect(); });
+        QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->disconnect(); });
 #ifdef HAVE_MQTT
-        m_pskClient.disconnect();
+        QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->disconnect(); });
 #endif
         m_connStatusLabel->setText("Disconnected");
         m_radioInfoLabel->setText("");
