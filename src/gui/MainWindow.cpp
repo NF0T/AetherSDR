@@ -224,16 +224,10 @@ MainWindow::MainWindow(QWidget* parent)
     m_dxCluster = new DxClusterClient;
     m_rbnClient = new DxClusterClient;
     m_rbnClient->setLogFileName("rbn.log");
-#ifdef HAVE_MQTT
-    m_pskClient = new PskReporterClient;
-#endif
     m_spotThread = new QThread(this);
     m_spotThread->setObjectName("SpotClients");
     m_dxCluster->moveToThread(m_spotThread);
     m_rbnClient->moveToThread(m_spotThread);
-#ifdef HAVE_MQTT
-    m_pskClient->moveToThread(m_spotThread);
-#endif
     m_spotThread->start();
 
     // ── Spot forwarding: dedup + batch queue + 1/sec flush ────────────────
@@ -292,13 +286,6 @@ MainWindow::MainWindow(QWidget* parent)
             this, [queueSpotCmd](const DxSpot& spot) {
         queueSpotCmd(spot, "RBN");
     });
-
-#ifdef HAVE_MQTT
-    connect(m_pskClient, &PskReporterClient::spotReceived,
-            this, [queueSpotCmd](const DxSpot& spot) {
-        queueSpotCmd(spot, "PSKReporter");
-    });
-#endif
 
     // ── Wire up radio model ────────────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
@@ -1101,9 +1088,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_spotThread->wait(3000);
         delete m_dxCluster;  m_dxCluster = nullptr;
         delete m_rbnClient;  m_rbnClient = nullptr;
-#ifdef HAVE_MQTT
-        delete m_pskClient;  m_pskClient = nullptr;
-#endif
     }
 
     QMainWindow::closeEvent(event);
@@ -1295,9 +1279,6 @@ void MainWindow::buildMenuBar()
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
         DxClusterDialog dlg(m_dxCluster, m_rbnClient,
-#ifdef HAVE_MQTT
-                            m_pskClient,
-#endif
                             &m_radioModel, this);
         dlg.setTotalSpots(m_radioModel.spotModel()->spots().size());
         // Live preview: refresh spots on every display settings change
@@ -1336,14 +1317,6 @@ void MainWindow::buildMenuBar()
         });
         connect(&dlg, &DxClusterDialog::rbnDisconnectRequested,
                 this, [this] { QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->disconnect(); }); });
-#ifdef HAVE_MQTT
-        connect(&dlg, &DxClusterDialog::pskConnectRequested,
-                this, [this](const QString& call) {
-            QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->connectToServer(call); });
-        });
-        connect(&dlg, &DxClusterDialog::pskDisconnectRequested,
-                this, [this] { QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->disconnect(); }); });
-#endif
         connect(&dlg, &DxClusterDialog::spotsClearedAll,
                 this, [this] { m_spotDedup.clear(); });
         connect(&dlg, &DxClusterDialog::tuneRequested,
@@ -2114,23 +2087,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!call.isEmpty() && !m_rbnClient->isConnected())
                     QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->connectToCluster(host, rPort, call); });
             }
-#ifdef HAVE_MQTT
-            // Auto-connect PSKReporter if enabled
-            if (cs.value("PskAutoConnect", "False").toString() == "True") {
-                QString call = cs.value("PskReporterCallsign").toString();
-                if (call.isEmpty())
-                    call = cs.value("DxClusterCallsign").toString();
-                if (!call.isEmpty() && !m_pskClient->isConnected())
-                    QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->connectToServer(call); });
-            }
-#endif
         }
     } else {
         QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->disconnect(); });
         QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->disconnect(); });
-#ifdef HAVE_MQTT
-        QMetaObject::invokeMethod(m_pskClient, [=] { m_pskClient->disconnect(); });
-#endif
         m_connStatusLabel->setText("Disconnected");
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");

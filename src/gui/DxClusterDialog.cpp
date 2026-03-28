@@ -166,14 +166,8 @@ bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceP
 // ── DxClusterDialog ─────────────────────────────────────────────────────────
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
-#ifdef HAVE_MQTT
-                                   PskReporterClient* pskClient,
-#endif
                                    RadioModel* radioModel, QWidget* parent)
     : QDialog(parent), m_client(clusterClient), m_rbnClient(rbnClient),
-#ifdef HAVE_MQTT
-      m_pskClient(pskClient),
-#endif
       m_radioModel(radioModel)
 {
     setWindowTitle("SpotHub");
@@ -193,9 +187,6 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     buildClusterTab(tabs);
     buildRbnTab(tabs);
-#ifdef HAVE_MQTT
-    buildPskTab(tabs);
-#endif
     buildSpotListTab(tabs);
     buildDisplayTab(tabs);
 
@@ -350,74 +341,6 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         auto* sb = m_rbnConsole->verticalScrollBar();
         sb->setValue(sb->maximum());
     }
-
-#ifdef HAVE_MQTT
-    // ── Live updates from PSKReporter client ────────────────────────────
-    if (pskClient) {
-        connect(pskClient, &PskReporterClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
-            bool follow = isAtBottom(m_pskConsole);
-            m_pskConsole->appendPlainText(line);
-            if (follow) {
-                auto* sb = m_pskConsole->verticalScrollBar();
-                sb->setValue(sb->maximum());
-            }
-        });
-
-        connect(pskClient, &PskReporterClient::spotReceived, this, [this](DxSpot spot) {
-            spot.source = "PSK";
-            m_spotBatch.append(spot);
-        });
-
-        connect(pskClient, &PskReporterClient::connected, this, [this] {
-            m_pskStatusLabel->setText("Connected to PSKReporter");
-            m_pskStatusLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 11px; }");
-            m_pskConnectBtn->setText("Disconnect");
-            m_pskConsole->appendPlainText("--- Connected ---");
-        });
-        connect(pskClient, &PskReporterClient::disconnected, this, [this] {
-            m_pskStatusLabel->setText("Disconnected");
-            m_pskStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
-            m_pskConnectBtn->setText("Connect");
-            m_pskConsole->appendPlainText("--- Disconnected ---");
-        });
-        connect(pskClient, &PskReporterClient::connectionError, this, [this](const QString& err) {
-            m_pskStatusLabel->setText("Error: " + err);
-            m_pskStatusLabel->setStyleSheet("QLabel { color: #ff4444; font-size: 11px; }");
-            m_pskConsole->appendPlainText("--- Error: " + err + " ---");
-        });
-
-        // Load PSK log file into console and replay spots
-        QFile pskLogFile(pskClient->logFilePath());
-        if (pskLogFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            static const QRegularExpression rx3(
-                R"(^DX\s+de\s+(\S+?):\s+(\d+\.?\d*)\s+(\S+)\s+(.*?)\s+(\d{4})Z)",
-                QRegularExpression::CaseInsensitiveOption);
-
-            while (!pskLogFile.atEnd()) {
-                QString line = QString::fromUtf8(pskLogFile.readLine()).trimmed();
-                if (line.isEmpty()) continue;
-                m_pskConsole->appendPlainText(line);
-
-                auto match = rx3.match(line);
-                if (match.hasMatch()) {
-                    DxSpot spot;
-                    spot.spotterCall = match.captured(1);
-                    spot.freqMhz = match.captured(2).toDouble() / 1000.0;
-                    spot.dxCall = match.captured(3);
-                    spot.comment = match.captured(4).trimmed();
-                    QString timeStr = match.captured(5);
-                    spot.utcTime = QTime(timeStr.left(2).toInt(), timeStr.mid(2, 2).toInt());
-                    if (spot.freqMhz > 0.0 && !spot.dxCall.isEmpty()) {
-                        spot.source = "PSK";
-                        m_spotModel->addSpot(spot);
-                    }
-                }
-            }
-            auto* sb = m_pskConsole->verticalScrollBar();
-            sb->setValue(sb->maximum());
-        }
-    }
-#endif
 
     // Scroll spot table to show newest entries
     m_spotTable->scrollToBottom();
@@ -727,116 +650,6 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
 
     tabs->addTab(page, "RBN");
 }
-
-#ifdef HAVE_MQTT
-void DxClusterDialog::buildPskTab(QTabWidget* tabs)
-{
-    auto* page = new QWidget;
-    auto* layout = new QVBoxLayout(page);
-    layout->setSpacing(8);
-
-    auto& s = AppSettings::instance();
-    QString defaultCall = s.value("PskReporterCallsign").toString();
-    if (defaultCall.isEmpty())
-        defaultCall = s.value("DxClusterCallsign").toString();
-
-    // ── Connection settings ─────────────────────────────────────────────
-    auto* connGroup = new QGroupBox("PSKReporter Connection");
-    auto* connLayout = new QVBoxLayout(connGroup);
-    connLayout->setSpacing(4);
-
-    auto* grid = new QGridLayout;
-    grid->setColumnStretch(1, 1);
-    int row = 0;
-
-    grid->addWidget(new QLabel("Server:"), row, 0);
-    auto* serverLabel = new QLabel("mqtt.pskreporter.info (MQTT)");
-    serverLabel->setStyleSheet("QLabel { color: #808890; }");
-    grid->addWidget(serverLabel, row, 1);
-    row++;
-
-    grid->addWidget(new QLabel("Callsign:"), row, 0);
-    m_pskCallEdit = new QLineEdit(defaultCall);
-    m_pskCallEdit->setPlaceholderText("your callsign");
-    m_pskCallEdit->setStyleSheet("QLineEdit { background: #1a1a2e; color: #c8d8e8; border: 1px solid #203040; padding: 3px; }");
-    grid->addWidget(m_pskCallEdit, row, 1);
-    row++;
-
-    connLayout->addLayout(grid);
-
-    // Button row
-    auto* btnRow = new QHBoxLayout;
-    m_pskAutoConnectBtn = new QPushButton(
-        s.value("PskAutoConnect", "False").toString() == "True" ? "Auto-Connect: ON" : "Auto-Connect: OFF");
-    m_pskAutoConnectBtn->setCheckable(true);
-    m_pskAutoConnectBtn->setChecked(s.value("PskAutoConnect", "False").toString() == "True");
-    m_pskAutoConnectBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
-        "QPushButton:!checked { background: #603020; }");
-    connect(m_pskAutoConnectBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_pskAutoConnectBtn->setText(on ? "Auto-Connect: ON" : "Auto-Connect: OFF");
-        auto& s = AppSettings::instance();
-        s.setValue("PskAutoConnect", on ? "True" : "False");
-        s.save();
-    });
-    btnRow->addWidget(m_pskAutoConnectBtn);
-    btnRow->addStretch();
-
-    m_pskStatusLabel = new QLabel("Disconnected");
-    m_pskStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
-    btnRow->addWidget(m_pskStatusLabel);
-    btnRow->addStretch();
-
-    m_pskConnectBtn = new QPushButton(m_pskClient && m_pskClient->isConnected() ? "Disconnect" : "Connect");
-    m_pskConnectBtn->setFixedWidth(100);
-    m_pskConnectBtn->setStyleSheet(
-        "QPushButton { background: #00b4d8; color: #0f0f1a; font-weight: bold; "
-        "border: 1px solid #008ba8; padding: 4px; border-radius: 3px; }"
-        "QPushButton:hover { background: #00c8f0; }"
-        "QPushButton:disabled { background: #404060; color: #808080; }");
-    connect(m_pskConnectBtn, &QPushButton::clicked, this, [this] {
-        if (m_pskClient && m_pskClient->isConnected()) {
-            emit pskDisconnectRequested();
-            return;
-        }
-        QString call = m_pskCallEdit->text().trimmed().toUpper();
-        if (call.isEmpty()) {
-            m_pskStatusLabel->setText("Callsign is required");
-            m_pskStatusLabel->setStyleSheet("QLabel { color: #ff4444; font-size: 11px; }");
-            return;
-        }
-        auto& s = AppSettings::instance();
-        s.setValue("PskReporterCallsign", call);
-        s.save();
-        emit pskConnectRequested(call);
-    });
-    btnRow->addWidget(m_pskConnectBtn);
-    connLayout->addLayout(btnRow);
-
-    layout->addWidget(connGroup);
-
-    // ── Console output ──────────────────────────────────────────────────
-    auto* consoleLabel = new QLabel("PSKReporter Console");
-    consoleLabel->setStyleSheet("QLabel { color: #00b4d8; font-weight: bold; }");
-    layout->addWidget(consoleLabel);
-
-    m_pskConsole = new QPlainTextEdit;
-    m_pskConsole->setReadOnly(true);
-    m_pskConsole->setMaximumBlockCount(2000);
-    m_pskConsole->setStyleSheet(
-        "QPlainTextEdit {"
-        "  background: #0a0a14;"
-        "  color: #a0b0c0;"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  border: 1px solid #203040;"
-        "  padding: 4px;"
-        "}");
-    layout->addWidget(m_pskConsole, 1);
-
-    tabs->addTab(page, "PSK");
-}
-#endif
 
 void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
 {
@@ -1242,20 +1055,6 @@ void DxClusterDialog::updateStatus()
         m_cmdEdit->setEnabled(false);
         m_sendBtn->setEnabled(false);
     }
-#ifdef HAVE_MQTT
-    // PSK status
-    if (m_pskClient) {
-        if (m_pskClient->isConnected()) {
-            m_pskStatusLabel->setText("Connected to PSKReporter");
-            m_pskStatusLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 11px; }");
-            m_pskConnectBtn->setText("Disconnect");
-        } else {
-            m_pskStatusLabel->setText("Disconnected");
-            m_pskStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
-            m_pskConnectBtn->setText("Connect");
-        }
-    }
-#endif
     // RBN status
     if (m_rbnClient->isConnected()) {
         m_rbnStatusLabel->setText(QString("Connected to %1:%2").arg(m_rbnClient->host()).arg(m_rbnClient->port()));

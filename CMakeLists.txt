@@ -19,16 +19,11 @@ find_package(Qt6 REQUIRED COMPONENTS
     Network
     Multimedia
 )
-find_package(Qt6 QUIET COMPONENTS SerialPort Mqtt)
+find_package(Qt6 QUIET COMPONENTS SerialPort)
 if(Qt6SerialPort_FOUND)
     message(STATUS "Qt6::SerialPort found — serial PTT/CW support enabled")
 else()
     message(STATUS "Qt6::SerialPort not found — serial PTT/CW support disabled")
-endif()
-if(Qt6Mqtt_FOUND)
-    message(STATUS "Qt6::Mqtt found — PSKReporter MQTT support enabled")
-else()
-    message(STATUS "Qt6::Mqtt not found — PSKReporter support disabled")
 endif()
 
 # PortAudio (optional fallback for audio)
@@ -160,7 +155,6 @@ set(CORE_SOURCES
     src/core/SmartLinkClient.cpp
     src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
-    src/core/PskReporterClient.cpp
     src/core/RigctlServer.cpp
     src/core/FirmwareUploader.cpp
     src/core/DvkWavTransfer.cpp
@@ -357,11 +351,6 @@ target_link_libraries(AetherSDR PRIVATE
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
     target_link_libraries(AetherSDR PRIVATE Qt6::SerialPort)
-endif()
-
-if(Qt6Mqtt_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT)
-    target_link_libraries(AetherSDR PRIVATE Qt6::Mqtt)
 endif()
 
 if(PORTAUDIO_FOUND)

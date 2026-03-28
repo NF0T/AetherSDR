@@ -12,9 +12,6 @@
 #include "core/CwDecoder.h"
 #include "core/DxClusterClient.h"
 #include <QThread>
-#ifdef HAVE_MQTT
-#include "core/PskReporterClient.h"
-#endif
 #ifdef HAVE_SERIALPORT
 #include "core/SerialPortController.h"
 #endif
@@ -109,9 +106,6 @@ private:
     CwDecoder         m_cwDecoder;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
-#ifdef HAVE_MQTT
-    PskReporterClient* m_pskClient{nullptr};
-#endif
     QThread*           m_spotThread{nullptr};
 
     // Spot deduplication: callsign → {freqMhz, timestamp ms}
