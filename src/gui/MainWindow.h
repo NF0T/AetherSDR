@@ -13,7 +13,9 @@
 #include "core/DxClusterClient.h"
 #include "core/WsjtxClient.h"
 #include "core/PotaClient.h"
+#ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
+#endif
 #include <QThread>
 #ifdef HAVE_SERIALPORT
 #include "core/SerialPortController.h"
@@ -111,7 +113,9 @@ private:
     DxClusterClient*   m_rbnClient{nullptr};
     WsjtxClient*       m_wsjtxClient{nullptr};
     PotaClient*        m_potaClient{nullptr};
+#ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
+#endif
     QThread*           m_spotThread{nullptr};
 
     // Spot deduplication: callsign → {freqMhz, timestamp ms}

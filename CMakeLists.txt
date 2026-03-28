@@ -18,13 +18,18 @@ find_package(Qt6 REQUIRED COMPONENTS
     Widgets
     Network
     Multimedia
-    WebSockets
 )
 find_package(Qt6 QUIET COMPONENTS SerialPort)
 if(Qt6SerialPort_FOUND)
     message(STATUS "Qt6::SerialPort found — serial PTT/CW support enabled")
 else()
     message(STATUS "Qt6::SerialPort not found — serial PTT/CW support disabled")
+endif()
+find_package(Qt6 QUIET COMPONENTS WebSockets)
+if(Qt6WebSockets_FOUND)
+    message(STATUS "Qt6::WebSockets found — FreeDV Reporter spot source enabled")
+else()
+    message(STATUS "Qt6::WebSockets not found — FreeDV Reporter spot source disabled")
 endif()
 
 # PortAudio (optional fallback for audio)
@@ -158,7 +163,6 @@ set(CORE_SOURCES
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
     src/core/PotaClient.cpp
-    src/core/FreeDvClient.cpp
     src/core/RigctlServer.cpp
     src/core/FirmwareUploader.cpp
     src/core/DvkWavTransfer.cpp
@@ -367,6 +371,12 @@ target_link_libraries(AetherSDR PRIVATE
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
     target_link_libraries(AetherSDR PRIVATE Qt6::SerialPort)
+endif()
+
+if(Qt6WebSockets_FOUND)
+    target_compile_definitions(AetherSDR PRIVATE HAVE_WEBSOCKETS)
+    target_sources(AetherSDR PRIVATE src/core/FreeDvClient.cpp)
+    target_link_libraries(AetherSDR PRIVATE Qt6::WebSockets)
 endif()
 
 if(PORTAUDIO_FOUND)

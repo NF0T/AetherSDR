@@ -167,11 +167,16 @@ bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceP
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
                                    WsjtxClient* wsjtxClient, PotaClient* potaClient,
+#ifdef HAVE_WEBSOCKETS
                                    FreeDvClient* freedvClient,
+#endif
                                    RadioModel* radioModel, QWidget* parent)
     : QDialog(parent), m_client(clusterClient), m_rbnClient(rbnClient),
       m_wsjtxClient(wsjtxClient), m_potaClient(potaClient),
-      m_freedvClient(freedvClient), m_radioModel(radioModel)
+#ifdef HAVE_WEBSOCKETS
+      m_freedvClient(freedvClient),
+#endif
+      m_radioModel(radioModel)
 {
     setWindowTitle("SpotHub");
     setMinimumSize(620, 500);
@@ -192,7 +197,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildRbnTab(tabs);
     buildWsjtxTab(tabs);
     buildPotaTab(tabs);
+#ifdef HAVE_WEBSOCKETS
     buildFreeDvTab(tabs);
+#endif
     buildSpotListTab(tabs);
     buildDisplayTab(tabs);
 
@@ -479,6 +486,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         sb->setValue(sb->maximum());
     }
 
+#ifdef HAVE_WEBSOCKETS
     // ── Live updates from FreeDV client ───────────────────────────────
     connect(freedvClient, &FreeDvClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
         bool follow = isAtBottom(m_freedvConsole);
@@ -527,6 +535,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         auto* sb = m_freedvConsole->verticalScrollBar();
         sb->setValue(sb->maximum());
     }
+#endif
 
     // Scroll spot table to show newest entries
     m_spotTable->scrollToBottom();
@@ -1270,6 +1279,7 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     tabs->addTab(page, "POTA");
 }
 
+#ifdef HAVE_WEBSOCKETS
 void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
 {
     auto* page = new QWidget;
@@ -1385,6 +1395,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
 
     tabs->addTab(page, "FreeDV");
 }
+#endif
 
 void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
 {

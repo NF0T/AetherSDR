@@ -226,14 +226,18 @@ MainWindow::MainWindow(QWidget* parent)
     m_rbnClient->setLogFileName("rbn.log");
     m_wsjtxClient = new WsjtxClient;
     m_potaClient = new PotaClient;
+#ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
+#endif
     m_spotThread = new QThread(this);
     m_spotThread->setObjectName("SpotClients");
     m_dxCluster->moveToThread(m_spotThread);
     m_rbnClient->moveToThread(m_spotThread);
     m_wsjtxClient->moveToThread(m_spotThread);
     m_potaClient->moveToThread(m_spotThread);
+#ifdef HAVE_WEBSOCKETS
     m_freedvClient->moveToThread(m_spotThread);
+#endif
     m_spotThread->start();
 
     // ── Spot forwarding: dedup + batch queue + 1/sec flush ────────────────
@@ -248,7 +252,7 @@ MainWindow::MainWindow(QWidget* parent)
         else if (spot.source == "WSJT-X")
             lifetimeMs = as.value("WsjtxSpotLifetime", 120).toInt() * 1000;
         else if (spot.source == "FreeDV")
-            lifetimeMs = as.value("FreeDvSpotLifetime", 120).toInt() * 1000;
+            lifetimeMs = as.value("FreeDvSpotLifetime", 120).toInt() * 1000;  // HAVE_WEBSOCKETS
         else
             lifetimeMs = as.value("DxClusterSpotLifetime", 30).toInt() * 60000;
         auto it = m_spotDedup.find(spot.dxCall);
@@ -286,7 +290,7 @@ MainWindow::MainWindow(QWidget* parent)
             else if (source == "RBN")
                 spotColor = as.value("RbnSpotColor", "#4488FF").toString();
             else if (source == "FreeDV")
-                spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();
+                spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();  // HAVE_WEBSOCKETS
         }
         if (!spotColor.isEmpty()) {
             if (spotColor.length() == 7) spotColor = "#FF" + spotColor.mid(1);
@@ -396,10 +400,12 @@ MainWindow::MainWindow(QWidget* parent)
         queueSpotCmd(spot, "POTA");
     });
 
+#ifdef HAVE_WEBSOCKETS
     connect(m_freedvClient, &FreeDvClient::spotReceived,
             this, [queueSpotCmd](const DxSpot& spot) {
         queueSpotCmd(spot, "FreeDV");
     });
+#endif
 
     // ── Wire up radio model ────────────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
@@ -1264,7 +1270,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
         delete m_rbnClient;  m_rbnClient = nullptr;
         delete m_wsjtxClient; m_wsjtxClient = nullptr;
         delete m_potaClient;  m_potaClient = nullptr;
+#ifdef HAVE_WEBSOCKETS
         delete m_freedvClient; m_freedvClient = nullptr;
+#endif
     }
 
     QMainWindow::closeEvent(event);
@@ -1457,7 +1465,10 @@ void MainWindow::buildMenuBar()
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
         DxClusterDialog dlg(m_dxCluster, m_rbnClient, m_wsjtxClient, m_potaClient,
-                            m_freedvClient, &m_radioModel, this);
+#ifdef HAVE_WEBSOCKETS
+                            m_freedvClient,
+#endif
+                            &m_radioModel, this);
         dlg.setTotalSpots(m_radioModel.spotModel()->spots().size());
         // Live preview: refresh spots on every display settings change
         auto refreshSpots = [this]() {
@@ -1507,10 +1518,12 @@ void MainWindow::buildMenuBar()
         });
         connect(&dlg, &DxClusterDialog::potaStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_potaClient, [=] { m_potaClient->stopPolling(); }); });
+#ifdef HAVE_WEBSOCKETS
         connect(&dlg, &DxClusterDialog::freedvStartRequested,
                 this, [this] { QMetaObject::invokeMethod(m_freedvClient, [=] { m_freedvClient->startConnection(); }); });
         connect(&dlg, &DxClusterDialog::freedvStopRequested,
-                this, [this] { QMetaObject::invokeMethod(m_freedvClient, [=] { m_freedvClient->stopConnection(); }); });
+                this, [this] { QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); }); });
+#endif
         connect(&dlg, &DxClusterDialog::spotsClearedAll,
                 this, [this] { m_spotDedup.clear(); });
         connect(&dlg, &DxClusterDialog::tuneRequested,
@@ -2294,18 +2307,22 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!m_potaClient->isPolling())
                     QMetaObject::invokeMethod(m_potaClient, [=] { m_potaClient->startPolling(pInterval); });
             }
+#ifdef HAVE_WEBSOCKETS
             // Auto-start FreeDV Reporter if enabled
             if (cs.value("FreeDvAutoStart", "False").toString() == "True") {
                 if (!m_freedvClient->isConnected())
                     QMetaObject::invokeMethod(m_freedvClient, [=] { m_freedvClient->startConnection(); });
             }
+#endif
         }
     } else {
         QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->disconnect(); });
         QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->disconnect(); });
         QMetaObject::invokeMethod(m_wsjtxClient, [=] { m_wsjtxClient->stopListening(); });
         QMetaObject::invokeMethod(m_potaClient, [=] { m_potaClient->stopPolling(); });
-        QMetaObject::invokeMethod(m_freedvClient, [=] { m_freedvClient->stopConnection(); });
+#ifdef HAVE_WEBSOCKETS
+        QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); });
+#endif
         m_connStatusLabel->setText("Disconnected");
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");
