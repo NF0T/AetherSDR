@@ -1096,6 +1096,26 @@ MainWindow::MainWindow(QWidget* parent)
             m_audio.setMuted(!m_audio.isMuted());
         } else if (actionName == "ToggleLock") {
             if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
+        } else if (actionName == "NextSlice") {
+            const auto& slices = m_radioModel.slices();
+            if (slices.size() > 1) {
+                int idx = 0;
+                for (int i = 0; i < slices.size(); ++i) {
+                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+                }
+                int next = (idx + 1) % slices.size();
+                setActiveSlice(slices[next]->sliceId());
+            }
+        } else if (actionName == "PrevSlice") {
+            const auto& slices = m_radioModel.slices();
+            if (slices.size() > 1) {
+                int idx = 0;
+                for (int i = 0; i < slices.size(); ++i) {
+                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+                }
+                int prev = (idx - 1 + slices.size()) % slices.size();
+                setActiveSlice(slices[prev]->sliceId());
+            }
         }
     });
 
@@ -4620,6 +4640,31 @@ void MainWindow::registerMidiParams()
     reg("global.bandDown", "Band Down", "Global", P::Trigger, 0, 1,
         [this](float) {
             qDebug() << "MIDI: Band Down triggered";
+        });
+
+    reg("global.nextSlice", "Next Slice", "Global", P::Trigger, 0, 1,
+        [this](float) {
+            const auto& slices = m_radioModel.slices();
+            if (slices.size() > 1) {
+                int idx = 0;
+                for (int i = 0; i < slices.size(); ++i) {
+                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+                }
+                setActiveSlice(slices[(idx + 1) % slices.size()]->sliceId());
+            }
+        });
+
+    reg("global.prevSlice", "Previous Slice", "Global", P::Trigger, 0, 1,
+        [this](float) {
+            const auto& slices = m_radioModel.slices();
+            if (slices.size() > 1) {
+                int idx = 0;
+                for (int i = 0; i < slices.size(); ++i) {
+                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+                }
+                int prev = (idx - 1 + slices.size()) % slices.size();
+                setActiveSlice(slices[prev]->sliceId());
+            }
         });
 }
 #endif

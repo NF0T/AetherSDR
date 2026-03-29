@@ -2818,7 +2818,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         // Button action configuration
         static const QStringList actions = {
             "None", "StepUp", "StepDown", "ToggleMox",
-            "ToggleTune", "ToggleMute", "ToggleLock"
+            "ToggleTune", "ToggleMute", "ToggleLock",
+            "NextSlice", "PrevSlice"
         };
         static const char* defaultActions[3][2] = {
             {"StepUp", "StepDown"},
