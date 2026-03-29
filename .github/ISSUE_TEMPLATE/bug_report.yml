@@ -2,11 +2,38 @@ name: Bug Report
 description: Something isn't working right
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Thank you for helping improve AetherSDR! 🙏
+
+        AetherSDR is maintained by a solo developer with AI assistance. To help us resolve your issue as quickly as possible, **please use the built-in AI-assisted bug report tool**:
+
+        **Help → Support → File an Issue**
+
+        This copies a diagnostic prompt (pre-filled with your system info) to your clipboard. Paste it into [Claude.ai](https://claude.ai), [ChatGPT](https://chat.openai.com), or any AI assistant, describe your problem, and the AI will generate a well-structured bug report with developer notes and suggested code paths.
+
+        **Why this matters:** AI-assisted reports include the technical detail we need to diagnose and fix issues quickly. Well-structured reports with logs and reproduction steps are resolved significantly faster. Reports without sufficient detail will be deprioritized as we work through the queue.
+
+        If you can't use the in-app tool, please fill out the form below with as much detail as possible. Attach your support bundle (Help → Support → File an Issue creates one automatically) or log file (`~/.config/AetherSDR/aethersdr.log`).
+
+  - type: checkboxes
+    id: ai_assisted
+    attributes:
+      label: Report preparation
+      options:
+        - label: "I used the AI-assisted bug report tool (Help → Support → File an Issue)"
+          required: false
+        - label: "I have attached a support bundle or log file"
+          required: false
+
   - type: textarea
     id: description
     attributes:
       label: What happened?
-      description: Describe the bug. Screenshots are welcome.
+      description: |
+        Describe the bug. If you used the AI-assisted tool, paste its output here.
+        Screenshots, log excerpts, and Wireshark captures are welcome.
     validations:
       required: true
 
@@ -32,7 +59,7 @@ body:
     id: radio
     attributes:
       label: Radio model & firmware
-      placeholder: "FLEX-6600 v3.4.39"
+      placeholder: "FLEX-6600 v4.1.5"
     validations:
       required: false
 
