@@ -178,6 +178,10 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // State changes → refresh UI
     connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::syncFromModel);
 
+    // Forward power and SWR from direct TGXL connection (#625)
+    connect(m_model, &TunerModel::metersChanged,
+            this, &TunerApplet::updateMeters);
+
     // Enable relay bar scrolling when direct TGXL connection is active (#469)
     auto updateScrollEnabled = [this]() {
         bool on = m_model && m_model->hasDirectConnection();

@@ -36,6 +36,8 @@ public:
     int     relayL()    const { return m_relayL; }
     int     relayC2()   const { return m_relayC2; }
     int     antennaA()  const { return m_antennaA; }  // 0-indexed: 0=ANT1, 1=ANT2, 2=ANT3, -1=unknown
+    float   fwdPower()  const { return m_fwdPower; }  // forward power in watts (from direct TGXL status)
+    float   swr()       const { return m_swr; }       // SWR ratio (from direct TGXL status)
     bool    hasAntennaSwitch() const { return m_oneByThree; }  // true for TGXL 3x1 model (one_by_three=1)
     bool    isPresent() const { return !m_handle.isEmpty(); }
     bool    hasDirectConnection() const;
@@ -64,6 +66,7 @@ signals:
     void stateChanged();               // any property changed
     void tuningChanged(bool tuning);   // tuning started/stopped
     void antennaAChanged(int antA);    // antenna port changed (0-indexed)
+    void metersChanged(float fwdPower, float swr);  // fwd power/SWR from direct TGXL
     void presenceChanged(bool present); // tuner detected / lost
     void directConnectionChanged(bool connected);
     void commandReady(const QString& cmd);
@@ -80,6 +83,8 @@ private:
     int     m_relayL{0};
     int     m_relayC2{0};
     int     m_antennaA{-1};   // 0-indexed antenna port (-1 = unknown)
+    float   m_fwdPower{0.0f};  // forward power in watts (from direct TGXL status)
+    float   m_swr{1.0f};      // SWR ratio (from direct TGXL status)
     bool    m_oneByThree{false}; // true for TGXL 3x1 model (from one_by_three=1)
 
     TgxlConnection* m_directConn{nullptr};

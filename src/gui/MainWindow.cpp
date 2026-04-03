@@ -1049,9 +1049,9 @@ MainWindow::MainWindow(QWidget* parent)
     // Use TGXL-specific meters when available (disambiguated from PGXL by handle)
     connect(&m_radioModel.meterModel(), &MeterModel::tgxlMetersChanged,
             m_appletPanel->tunerApplet(), &TunerApplet::updateMeters);
-    // Fallback: TX meters for radios without TGXL AMP meters
-    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            m_appletPanel->tunerApplet(), &TunerApplet::updateMeters);
+    // Note: txMetersChanged NOT connected to TunerApplet — exciter power
+    // would overwrite TGXL readings. TGXL meters come from TunerModel
+    // via the direct TCP connection (port 9010). (#625)
     m_appletPanel->tunerApplet()->setTunerModel(&m_radioModel.tunerModel());
     m_appletPanel->tunerApplet()->setMeterModel(&m_radioModel.meterModel());
 

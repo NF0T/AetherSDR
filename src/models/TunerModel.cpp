@@ -3,6 +3,7 @@
 #include "core/LogManager.h"
 
 #include <QDebug>
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -162,8 +163,24 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 if (m_antennaA != v) { m_antennaA = v; changed = true; emit antennaAChanged(v); }
             }
             if (changed) emit stateChanged();
+            // Forward power and SWR from direct TGXL connection (#625)
+            // TGXL reports fwd in dBm and swr as return loss (negative dB).
+            // Convert to watts and SWR ratio for the gauge.
+            bool meters = false;
+            if (kvs.contains("fwd")) {
+                float dBm = kvs.value("fwd").toFloat();
+                float watts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+                if (m_fwdPower != watts) { m_fwdPower = watts; meters = true; }
+            }
+            if (kvs.contains("swr")) {
+                float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
+                float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
+                float ratio = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+                if (m_swr != ratio) { m_swr = ratio; meters = true; }
+            }
+            if (meters) emit metersChanged(m_fwdPower, m_swr);
         });
-        // Also parse antA from 1/sec status poll responses (pre-load on connect)
+        // Also parse antA + meters from 1/sec status poll responses
         connect(m_directConn, &TgxlConnection::statusUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
             if (kvs.contains("antA")) {
@@ -174,6 +191,20 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                     emit stateChanged();
                 }
             }
+            // Forward power and SWR from direct TGXL status poll (#625)
+            bool meters = false;
+            if (kvs.contains("fwd")) {
+                float dBm = kvs.value("fwd").toFloat();
+                float watts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+                if (m_fwdPower != watts) { m_fwdPower = watts; meters = true; }
+            }
+            if (kvs.contains("swr")) {
+                float rl = kvs.value("swr").toFloat();  // return loss in dB (negative from TGXL)
+                float rho = std::pow(10.0f, rl / 20.0f);  // rl is already negative
+                float ratio = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+                if (m_swr != ratio) { m_swr = ratio; meters = true; }
+            }
+            if (meters) emit metersChanged(m_fwdPower, m_swr);
         });
     }
 }

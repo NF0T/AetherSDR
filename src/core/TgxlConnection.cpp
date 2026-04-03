@@ -88,9 +88,26 @@ void TgxlConnection::processLine(const QString& line)
     }
 
     // Response: R<seq>|<code>|<body>
+    // Status poll responses contain fwd/swr meter data as KV pairs.
+    // Format: R<seq>|0|key=val key=val ...
     if (line.startsWith('R')) {
-        // We don't need to do anything with responses for now —
-        // state pushes (S0|state) give us everything we need.
+        // Extract body after second pipe: R<seq>|<code>|<body>
+        int pipe1 = line.indexOf('|');
+        int pipe2 = (pipe1 >= 0) ? line.indexOf('|', pipe1 + 1) : -1;
+        if (pipe2 >= 0) {
+            QString body = line.mid(pipe2 + 1).trimmed();
+            if (!body.isEmpty()) {
+                QMap<QString, QString> kvs;
+                const auto parts = body.split(' ', Qt::SkipEmptyParts);
+                for (const auto& part : parts) {
+                    int eq = part.indexOf('=');
+                    if (eq > 0)
+                        kvs.insert(part.left(eq), part.mid(eq + 1));
+                }
+                if (!kvs.isEmpty())
+                    emit statusUpdated(kvs);
+            }
+        }
         return;
     }
 
