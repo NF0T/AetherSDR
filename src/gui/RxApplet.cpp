@@ -1244,7 +1244,7 @@ void RxApplet::applyFilterPreset(int widthHz)
 
     if (mode == "LSB" || mode == "DIGL") {
         lo = -widthHz;
-        hi = 0;
+        hi = -95;
     } else if (mode == "RTTY") {
         // RTTY: RF_frequency = mark. Filter is relative to mark.
         // Space is at -rttyShift. Passband should encompass both tones.
@@ -1263,8 +1263,8 @@ void RxApplet::applyFilterPreset(int widthHz)
         lo = -(widthHz / 2);
         hi =  (widthHz / 2);
     } else {
-        // USB, DIGU, RTTY, etc.
-        lo = 0;
+        // USB, DIGU, FDV, etc. — low cut at 95 Hz to reject carrier/hum
+        lo = 95;
         hi = widthHz;
     }
 

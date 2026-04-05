@@ -2548,7 +2548,7 @@ void VfoWidget::applyFilterPreset(int widthHz)
     const QString& mode = m_slice->mode();
 
     if (mode == "LSB" || mode == "DIGL") {
-        lo = -widthHz; hi = 0;
+        lo = -widthHz; hi = -95;
     } else if (mode == "RTTY") {
         // RTTY: RF_frequency = mark. Filter is relative to mark.
         // Space is at -rttyShift. Passband should encompass both tones.
@@ -2564,7 +2564,8 @@ void VfoWidget::applyFilterPreset(int widthHz)
     } else if (mode == "AM" || mode == "SAM" || mode == "DSB") {
         lo = -(widthHz / 2); hi = (widthHz / 2);
     } else {
-        lo = 0; hi = widthHz;
+        // USB/DIGU/FDV: low cut at 95 Hz to reject carrier/hum
+        lo = 95; hi = widthHz;
     }
     m_slice->setFilterWidth(lo, hi);
 }

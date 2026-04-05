@@ -239,9 +239,9 @@ QString RigctlProtocol::cmdSetMode(const QString& args)
                 // Center the filter around 0 for SSB modes
                 QString m = slice->mode();
                 if (m == "LSB" || m == "DIGL" || m == "CWL") {
-                    slice->setFilterWidth(-passband, 0);
+                    slice->setFilterWidth(-passband, -95);
                 } else {
-                    slice->setFilterWidth(0, passband);
+                    slice->setFilterWidth(95, passband);
                 }
             }, Qt::QueuedConnection);
         }

@@ -108,22 +108,39 @@ void FilterPassbandWidget::mousePressEvent(QMouseEvent* ev)
     m_dragStartLo = m_lo;
     m_dragStartHi = m_hi;
 
-    // Detect edge grab: ±8px from the dashed vertical lines
-    constexpr int margin = 16, SKIRT = 16, GRAB = 8;
+    // Three zones: left of lo line = drag low edge, right of hi line = drag high edge, center = shift
+    constexpr int margin = 16, SKIRT = 16;
     const int loLineX = margin + SKIRT + 8;
     const int hiLineX = width() - margin - SKIRT - 8;
 
-    if (std::abs(ev->pos().x() - loLineX) <= GRAB)
+    if (ev->pos().x() <= loLineX) {
         m_dragMode = DragLo;
-    else if (std::abs(ev->pos().x() - hiLineX) <= GRAB)
+        setCursor(Qt::SizeHorCursor);
+    } else if (ev->pos().x() >= hiLineX) {
         m_dragMode = DragHi;
-    else
+        setCursor(Qt::SizeHorCursor);
+    } else {
         m_dragMode = DragShift;
+        setCursor(Qt::SizeAllCursor);
+    }
 }
 
 void FilterPassbandWidget::mouseMoveEvent(QMouseEvent* ev)
 {
-    if (m_dragMode == DragNone) return;
+    // Hover cursor feedback — three zones: left edge, center, right edge
+    // Only call setCursor when the shape actually changes to avoid
+    // excessive CGImageCreate calls on macOS (EXC_BREAKPOINT in Qt cursor code).
+    if (m_dragMode == DragNone) {
+        constexpr int margin = 16, SKIRT = 16;
+        const int loLineX = margin + SKIRT + 8;
+        const int hiLineX = width() - margin - SKIRT - 8;
+        const int x = ev->pos().x();
+        Qt::CursorShape wanted = (x <= loLineX || x >= hiLineX)
+            ? Qt::SizeHorCursor : Qt::SizeAllCursor;
+        if (cursor().shape() != wanted)
+            setCursor(wanted);
+        return;
+    }
 
     const int dx = ev->pos().x() - m_dragStartPos.x();
     const int dy = ev->pos().y() - m_dragStartPos.y();

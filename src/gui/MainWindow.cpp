@@ -31,6 +31,7 @@
 #include "DvkPanel.h"
 #include "core/DvkWavTransfer.h"
 #include "AmpApplet.h"
+#include "MeterApplet.h"
 #include "ProfileManagerDialog.h"
 #include "SupportDialog.h"
 #include "ShortcutDialog.h"
@@ -397,7 +398,11 @@ MainWindow::MainWindow(QWidget* parent)
         else if (spot.source == "FreeDV")
             lifetimeMs = as.value("FreeDvSpotLifetime", 120).toInt() * 1000;  // HAVE_WEBSOCKETS
         else
-            lifetimeMs = as.value("DxClusterSpotLifetime", 30).toInt() * 60000;
+        {
+            int sec = as.value("DxClusterSpotLifetimeSec", 0).toInt();
+            if (sec <= 0) sec = as.value("DxClusterSpotLifetime", 30).toInt() * 60;
+            lifetimeMs = sec * 1000;
+        }
         auto it = m_spotDedup.find(spot.dxCall);
         if (it != m_spotDedup.end()) {
             bool sameFreq = std::abs(it->freqMhz - spot.freqMhz) < 0.001;
@@ -421,7 +426,8 @@ MainWindow::MainWindow(QWidget* parent)
                      + " spotter_callsign=" + spot.spotterCall
                      + " lifetime_seconds=" + QString::number(
                            spot.lifetimeSec > 0 ? spot.lifetimeSec
-                           : AppSettings::instance().value("DxClusterSpotLifetime", 30).toInt() * 60);
+                           : [&]() { int s = AppSettings::instance().value("DxClusterSpotLifetimeSec", 0).toInt();
+                                     return s > 0 ? s : AppSettings::instance().value("DxClusterSpotLifetime", 30).toInt() * 60; }());
         if (!spot.comment.isEmpty())
             cmd += " comment=" + QString(spot.comment).replace(' ', QChar(0x7f));
         // Apply source-specific color if not already set
@@ -864,7 +870,7 @@ MainWindow::MainWindow(QWidget* parent)
                     .value("PanadapterLayout", "1").toString();
                 // Only rearrange if the saved layout matches the pan count
                 static const QMap<QString, int> layoutPanCount = {
-                    {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"2x2", 4}, {"1", 1}
+                    {"1", 1}, {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"3v", 3}, {"2x2", 4}, {"4v", 4}
                 };
                 if (layoutPanCount.value(saved, 1) == panCount)
                     m_panStack->rearrangeLayout(saved);
@@ -1257,6 +1263,9 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(&m_radioModel.transmitModel(), &TransmitModel::maxPowerLevelChanged,
             this, updatePowerScale);
+
+    // ── Meter applet: all meters consolidated ──────────────────────────────
+    m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
 
     // ── TX applet: meters + model ───────────────────────────────────────────
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
@@ -1909,6 +1918,9 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_tciServer)
             m_tciServer->wireSlice(s->sliceId(), s);
     });
+    // Wire existing slices (radio may already be connected with slices)
+    for (auto* s : m_radioModel.slices())
+        m_tciServer->wireSlice(s->sliceId(), s);
     m_tciServer->wireSpotModel();
 
     // Wire RX audio from PanadapterStream → TCI server for audio streaming
@@ -4573,6 +4585,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // uses the correct step regardless of which pan is active.
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
             sw, &SpectrumWidget::setStepSize);
+    // Restore per-pan cursor freq state from AppSettings
+    {
+        auto& s = AppSettings::instance();
+        bool cursorFreq = s.value(sw->settingsKey("CursorFreqLabel"), "False").toString() == "True";
+        sw->setShowCursorFreq(cursorFreq);
+        if (menu->cursorFreqButton())
+            menu->cursorFreqButton()->setChecked(cursorFreq);
+    }
 
     // ── Pan activation: clicking on this pan makes it active ─────────────
     connect(applet, &PanadapterApplet::activated,
