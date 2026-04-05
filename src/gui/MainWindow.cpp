@@ -1027,9 +1027,9 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool on, int sliceId) { if (on) activateRADE(sliceId); else deactivateRADE(); });
 #endif
 
-    // ── Tuning step size → spectrum widget ─────────────────────────────────
-    connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
-            spectrum(), &SpectrumWidget::setStepSize);
+    // ── Tuning step size → AppSettings + radio command ─────────────────────
+    // Per-pan SpectrumWidget::setStepSize connections are made in wirePanadapter()
+    // so all pans (including new ones added at runtime) stay in sync.
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
             this, [this](int step) {
         // Send step to radio for the active slice
@@ -4566,6 +4566,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // Set panId on the overlay menu so +RX routes to the correct pan
     menu->setPanId(applet->panId());
+
+    // ── Tuning step size → this pan's spectrum widget ─────────────────────
+    // The global connection in setupConnections() only covers the first pan.
+    // Each additional pan must also receive stepSizeChanged so scroll-to-tune
+    // uses the correct step regardless of which pan is active.
+    connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
+            sw, &SpectrumWidget::setStepSize);
 
     // ── Pan activation: clicking on this pan makes it active ─────────────
     connect(applet, &PanadapterApplet::activated,
