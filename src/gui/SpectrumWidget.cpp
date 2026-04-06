@@ -2541,7 +2541,11 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         } else {
             // Cache scaled image to avoid per-frame scaling
             if (m_bgScaledSize != specRect.size()) {
-                m_bgScaled = m_bgImage.scaled(specRect.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                // Scale to cover (keep aspect ratio, expand to fill) then crop to fit
+                QImage expanded = m_bgImage.scaled(specRect.size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+                int cx = (expanded.width()  - specRect.width())  / 2;
+                int cy = (expanded.height() - specRect.height()) / 2;
+                m_bgScaled = expanded.copy(cx, cy, specRect.width(), specRect.height());
                 m_bgScaledSize = specRect.size();
             }
             p.drawImage(specRect.topLeft(), m_bgScaled);
