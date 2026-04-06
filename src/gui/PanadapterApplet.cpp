@@ -1,6 +1,7 @@
 #include "PanadapterApplet.h"
 #include "GuardedSlider.h"
 #include "SpectrumWidget.h"
+#include "core/AppSettings.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -87,15 +88,18 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     cwBar->addWidget(sensLabel);
     m_cwSensSlider = new GuardedSlider(Qt::Horizontal);
     m_cwSensSlider->setRange(0, 100);  // 0=show everything, 100=only high confidence
-    m_cwSensSlider->setValue(30);      // default: moderate filtering
+    int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
+    m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
     m_cwSensSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: #00b4d8; width: 10px; margin: -3px 0; border-radius: 5px; }");
-    m_cwCostThreshold = 0.70f;  // default threshold
+    m_cwCostThreshold = 1.0f - (savedSens / 100.0f) * 0.9f;
     connect(m_cwSensSlider, &QSlider::valueChanged, this, [this](int v) {
         // Map 0-100 slider to 1.0-0.1 cost threshold (inverted: higher sens = lower threshold)
         m_cwCostThreshold = 1.0f - (v / 100.0f) * 0.9f;
+        AppSettings::instance().setValue("CwDecoderSensitivity", QString::number(v));
+        AppSettings::instance().save();
     });
     cwBar->addWidget(m_cwSensSlider);
 
