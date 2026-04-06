@@ -1071,6 +1071,18 @@ void VfoWidget::buildTabContent()
                     m_slice->setDiglOffset(hz);
                 else
                     m_slice->setDiguOffset(hz);
+                // Re-apply the current filter so the passband repositions
+                // immediately around the new offset without requiring a preset click.
+                // In wide mode (>=3000 Hz) lo/hi are anchored at ±95, so recover
+                // the preset width from the anchored edge, not the span.
+                int curLo = m_slice->filterLow();
+                int curHi = m_slice->filterHigh();
+                int width;
+                if (m_slice->mode() == "DIGL")
+                    width = (curHi == -95 && curLo <= -3000) ? -curLo : curHi - curLo;
+                else
+                    width = (curLo == 95 && curHi >= 3000) ? curHi : curHi - curLo;
+                applyFilterPreset(width);
             };
 
             static constexpr int DIG_STEP = 10;
