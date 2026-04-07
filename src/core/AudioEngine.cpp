@@ -999,7 +999,7 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     // Bit  27:    C = 1 (class ID present)
     // Bit  26:    T = 0 (no trailer)
     // Bits 25-24: reserved = 0
-    // Bits 23-22: TSI = 2 (Other)
+    // Bits 23-22: TSI = 3 (Other)
     // Bits 21-20: TSF = 1 (SampleCount)
     // Bits 19-16: packet count (4-bit)
     // Bits 15-0:  packet size (in 32-bit words)
@@ -1007,7 +1007,7 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     hdr |= (0x1u << 28);          // pkt_type = IFDataWithStream (DAX TX)
     hdr |= (1u << 27);            // C = 1
     // T = 0 (bit 26)
-    hdr |= (0x2u << 22);          // TSI = Other
+    hdr |= (0x3u << 22);          // TSI = 3 (Other) — matches FlexLib/nDAX
     hdr |= (0x1u << 20);          // TSF = SampleCount
     hdr |= ((m_txPacketCount & 0xF) << 16);
     hdr |= (packetWords & 0xFFFF);
@@ -1203,8 +1203,6 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& float32pcm)
         // (WSJT-X) triggers PTT, m_transmitting is false (we don't own TX)
         // but the radio IS transmitting and needs our DAX audio. (#752)
         if (!m_radioTransmitting) {
-            // Deterministic edge behavior: do not carry pre-TX audio history.
-            // Any backlog here directly appears as TX start/stop mismatch.
             m_daxPreTxBuffer.clear();
             m_txFloatAccumulator.clear();
             return;
