@@ -3032,20 +3032,45 @@ void MainWindow::buildMenuBar()
     autoRigctlAction->setCheckable(true);
     autoRigctlAction->setChecked(
         AppSettings::instance().value("AutoStartRigctld", "False").toString() == "True");
-    connect(autoRigctlAction, &QAction::toggled, this, [](bool on) {
+    connect(autoRigctlAction, &QAction::toggled, this, [this](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("AutoStartRigctld", on ? "True" : "False");
         s.save();
+        if (m_radioModel.isConnected()) {
+            const int basePort = s.value("CatTcpPort", "4532").toInt();
+            for (int i = 0; i < kCatChannels; ++i) {
+                if (on && m_rigctlServers[i] && !m_rigctlServers[i]->isRunning())
+                    m_rigctlServers[i]->start(static_cast<quint16>(basePort + i));
+                else if (!on && m_rigctlServers[i] && m_rigctlServers[i]->isRunning())
+                    m_rigctlServers[i]->stop();
+            }
+            if (m_appletPanel && m_appletPanel->catApplet())
+                m_appletPanel->catApplet()->setTcpEnabled(on);
+        }
     });
 
     auto* autoCatAction = settingsMenu->addAction("Autostart CAT with AetherSDR");
     autoCatAction->setCheckable(true);
     autoCatAction->setChecked(
         AppSettings::instance().value("AutoStartCAT", "False").toString() == "True");
-    connect(autoCatAction, &QAction::toggled, this, [](bool on) {
+#ifdef _WIN32
+    autoCatAction->setEnabled(false);
+    autoCatAction->setToolTip("CAT virtual serial ports require macOS or Linux");
+#endif
+    connect(autoCatAction, &QAction::toggled, this, [this](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("AutoStartCAT", on ? "True" : "False");
         s.save();
+        if (m_radioModel.isConnected()) {
+            for (int i = 0; i < kCatChannels; ++i) {
+                if (on && m_rigctlPtys[i] && !m_rigctlPtys[i]->isRunning())
+                    m_rigctlPtys[i]->start();
+                else if (!on && m_rigctlPtys[i] && m_rigctlPtys[i]->isRunning())
+                    m_rigctlPtys[i]->stop();
+            }
+            if (m_appletPanel && m_appletPanel->catApplet())
+                m_appletPanel->catApplet()->setPtyEnabled(on);
+        }
     });
 
     auto* autoTciAction = settingsMenu->addAction("Autostart TCI with AetherSDR");
@@ -3074,10 +3099,27 @@ void MainWindow::buildMenuBar()
     autoDaxAction->setCheckable(true);
     autoDaxAction->setChecked(
         AppSettings::instance().value("AutoStartDAX", "False").toString() == "True");
-    connect(autoDaxAction, &QAction::toggled, this, [](bool on) {
+#if !defined(Q_OS_MAC) && !defined(HAVE_PIPEWIRE)
+    autoDaxAction->setEnabled(false);
+    autoDaxAction->setToolTip("DAX audio bridge requires macOS or Linux with PipeWire");
+#endif
+    connect(autoDaxAction, &QAction::toggled, this, [this](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("AutoStartDAX", on ? "True" : "False");
         s.save();
+#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+        if (m_radioModel.isConnected()) {
+            if (on) {
+                startDax();
+                if (m_appletPanel && m_appletPanel->catApplet())
+                    m_appletPanel->catApplet()->setDaxEnabled(true);
+            } else {
+                stopDax();
+                if (m_appletPanel && m_appletPanel->catApplet())
+                    m_appletPanel->catApplet()->setDaxEnabled(false);
+            }
+        }
+#endif
     });
 
     auto* lowLatencyDaxTxAction =
