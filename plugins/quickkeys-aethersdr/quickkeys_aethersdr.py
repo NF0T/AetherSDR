@@ -62,21 +62,22 @@ log = logging.getLogger("quickkeys")
 
 # ── Device discovery ───────────────────────────────────────────────────────────
 
-def find_hidraw_device() -> str | None:
-    """Return the hidraw path for the first Xencelabs Quick Keys found."""
+def find_hidraw_devices() -> list[str]:
+    """Return all hidraw paths matching the Xencelabs Quick Keys VID:PID."""
+    found = []
     for node in sorted(glob.glob("/dev/hidraw*")):
         name = node.replace("/dev/hidraw", "")
         uevent = f"/sys/class/hidraw/hidraw{name}/device/uevent"
         try:
             with open(uevent) as f:
                 content = f.read()
-            # HID_ID=0003:000028BD:00005202
             if f"{VENDOR_ID:08X}:{PRODUCT_ID:08X}".upper() in content.upper():
-                log.info(f"Found Quick Keys at {node}")
-                return node
+                found.append(node)
         except OSError:
             continue
-    return None
+    if found:
+        log.info(f"Found Quick Keys interfaces: {found}")
+    return found
 
 
 # ── TCI client ─────────────────────────────────────────────────────────────────
@@ -284,37 +285,58 @@ class QuickKeysDispatcher:
 
 # ── Main read loop ─────────────────────────────────────────────────────────────
 
-def run(hidraw_path: str, dispatcher: QuickKeysDispatcher):
-    buf = b""
+def _consume(buf: bytes, dispatcher: QuickKeysDispatcher) -> bytes:
+    """Parse all complete 9-byte reports from buf, return leftover bytes."""
+    while len(buf) >= REPORT_LEN:
+        idx = buf.find(bytes([REPORT_ID, REPORT_SYNC]))
+        if idx < 0:
+            return b""
+        if idx > 0:
+            buf = buf[idx:]
+        if len(buf) < REPORT_LEN:
+            break
+        dispatcher.handle_report(buf[:REPORT_LEN])
+        buf = buf[REPORT_LEN:]
+    return buf
+
+
+def run(hidraw_paths: list[str], dispatcher: QuickKeysDispatcher):
+    """Open all hidraw interfaces and dispatch events from whichever produces data."""
     while True:
+        fds = {}
+        bufs = {}
+        for path in hidraw_paths:
+            try:
+                f = open(path, "rb")
+                fds[f] = path
+                bufs[f] = b""
+                log.info(f"Opened {path}")
+            except PermissionError:
+                log.error(f"Permission denied: {path}. Add user to 'input' group.")
+            except OSError as e:
+                log.warning(f"Could not open {path}: {e}")
+
+        if not fds:
+            log.error("No Quick Keys interfaces could be opened. Retrying in 5s.")
+            time.sleep(5)
+            continue
+
         try:
-            with open(hidraw_path, "rb") as f:
-                log.info(f"Opened {hidraw_path}")
-                while True:
-                    r, _, _ = select.select([f], [], [], 1.0)
-                    if not r:
-                        continue
+            while True:
+                readable, _, _ = select.select(list(fds.keys()), [], [], 1.0)
+                for f in readable:
                     chunk = f.read(64)
                     if not chunk:
-                        break
-                    buf += chunk
-                    # Consume all complete 9-byte reports synced on 0x02 0xF0
-                    while len(buf) >= REPORT_LEN:
-                        idx = buf.find(bytes([REPORT_ID, REPORT_SYNC]))
-                        if idx < 0:
-                            buf = b""
-                            break
-                        if idx > 0:
-                            buf = buf[idx:]
-                        if len(buf) < REPORT_LEN:
-                            break
-                        dispatcher.handle_report(buf[:REPORT_LEN])
-                        buf = buf[REPORT_LEN:]
-        except PermissionError:
-            log.error(f"Permission denied: {hidraw_path}. Add user to 'input' group.")
-            time.sleep(5)
+                        raise OSError("Device disconnected")
+                    bufs[f] += chunk
+                    bufs[f] = _consume(bufs[f], dispatcher)
         except OSError as e:
-            log.warning(f"Device error: {e} — retrying in 2s")
+            log.warning(f"Device error: {e} — reopening in 2s")
+            for f in fds:
+                try:
+                    f.close()
+                except OSError:
+                    pass
             time.sleep(2)
 
 
@@ -348,9 +370,12 @@ def main():
         log.error(f"Config parse error: {e}")
         sys.exit(1)
 
-    # Find device
-    hidraw_path = args.device or find_hidraw_device()
-    if not hidraw_path:
+    # Find device(s)
+    if args.device:
+        hidraw_paths = [args.device]
+    else:
+        hidraw_paths = find_hidraw_devices()
+    if not hidraw_paths:
         log.error("Xencelabs Quick Keys not found. Is it plugged in?")
         sys.exit(1)
 
@@ -361,8 +386,8 @@ def main():
 
     dispatcher = QuickKeysDispatcher(tci, config)
 
-    log.info(f"Quick Keys daemon starting — device={hidraw_path} tci={host}:{port}")
-    run(hidraw_path, dispatcher)
+    log.info(f"Quick Keys daemon starting — interfaces={hidraw_paths} tci={host}:{port}")
+    run(hidraw_paths, dispatcher)
 
 
 if __name__ == "__main__":
