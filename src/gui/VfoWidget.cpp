@@ -546,6 +546,23 @@ void VfoWidget::buildUI()
     buildTabContent();
     root->addWidget(m_tabStack);
 
+    // Accessible names for VoiceOver / screen reader support (#870)
+    m_rxAntBtn->setAccessibleName("RX antenna");
+    m_txAntBtn->setAccessibleName("TX antenna");
+    m_filterWidthLbl->setAccessibleName("Filter width");
+    m_splitBadge->setAccessibleName("Split mode");
+    m_splitBadge->setAccessibleDescription("Toggle split transmit frequency");
+    m_txBadge->setAccessibleName("TX slice selector");
+    m_sliceBadge->setAccessibleName("Slice letter");
+    m_freqLabel->setAccessibleName("Frequency display");
+    m_freqEdit->setAccessibleName("Frequency entry");
+    m_freqEdit->setAccessibleDescription("Type a frequency in MHz and press Enter");
+    m_closeSliceBtn->setAccessibleName("Close slice");
+    m_lockVfoBtn->setAccessibleName("VFO lock");
+    m_recordBtn->setAccessibleName("Record slice audio");
+    m_playBtn->setAccessibleName("Play recorded audio");
+    m_dbmLabel->setAccessibleName("Signal level dBm");
+
     adjustSize();
 }
 
@@ -662,6 +679,21 @@ void VfoWidget::buildTabContent()
         m_agcCmb->setToolTip("AGC speed. Slow resists pumping on quiet bands; Fast tracks rapid signal changes.");
         m_agcTSlider->setToolTip("AGC threshold. Higher values reduce the maximum gain applied to weak signals.");
         m_panSlider->setToolTip("Pans audio between left and right channels.");
+
+        // Audio tab accessible names (#870)
+        m_muteBtn->setAccessibleName("Slice audio mute");
+        m_afGainSlider->setAccessibleName("AF gain");
+        m_afGainSlider->setAccessibleDescription("Audio output volume for this slice");
+        m_sqlBtn->setAccessibleName("Squelch");
+        m_sqlSlider->setAccessibleName("Squelch threshold");
+        m_agcCmb->setAccessibleName("AGC mode");
+        m_agcTSlider->setAccessibleName("AGC threshold");
+        m_panSlider->setAccessibleName("Audio pan");
+        m_panSlider->setAccessibleDescription("Stereo audio pan, left to right");
+        m_divBtn->setAccessibleName("Diversity receive");
+        m_escBtn->setAccessibleName("Enhanced signal clarity");
+        m_escPhaseSlider->setAccessibleName("ESC phase");
+        m_escGainSlider->setAccessibleName("ESC gain");
 
         // ESC (Enhanced Signal Clarity) panel — visible only when DIV is active
         m_escPanel = new QWidget;
@@ -887,6 +919,24 @@ void VfoWidget::buildTabContent()
         m_anftBtn->setToolTip("FFT-based notch filter \u2014 removes up to five persistent tones from transformers or power supplies.");
         m_bnrBtn->setToolTip("NVIDIA GPU-accelerated neural audio denoising. Requires NVIDIA RTX 4000+ with Docker.");
         m_nr4Btn->setToolTip("Client-side spectral bleach noise reduction (libspecbleach). Right-click for NR4 settings.");
+
+        // DSP button accessible names (#870)
+        m_nrBtn->setAccessibleName("Noise reduction");
+        m_nr2Btn->setAccessibleName("NR2 spectral noise reduction");
+        m_nbBtn->setAccessibleName("Noise blanker");
+        m_anfBtn->setAccessibleName("Auto notch filter");
+        m_apfBtn->setAccessibleName("CW audio peaking filter");
+        m_nrlBtn->setAccessibleName("Leaky LMS noise reduction");
+        m_nrsBtn->setAccessibleName("Spectral subtraction");
+        m_rnnBtn->setAccessibleName("RNN noise reduction");
+        m_rn2Btn->setAccessibleName("RNNoise noise suppression");
+        m_nrfBtn->setAccessibleName("Spectral noise filter");
+        m_anflBtn->setAccessibleName("LMS notch filter");
+        m_anftBtn->setAccessibleName("FFT notch filter");
+        m_bnrBtn->setAccessibleName("GPU neural denoising");
+        m_nr4Btn->setAccessibleName("Spectral bleach noise reduction");
+        m_apfSlider->setAccessibleName("APF bandwidth");
+        m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
 
         // APF level slider (hidden unless CW mode)
         {

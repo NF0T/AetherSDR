@@ -222,6 +222,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     sMeterLayout->addWidget(sMeterTitle);
 
     m_sMeter = new SMeterWidget(m_sMeterSection);
+    m_sMeter->setAccessibleName("S-Meter");
+    m_sMeter->setAccessibleDescription("Signal strength meter, shows S-units or TX power");
     sMeterLayout->addWidget(m_sMeter);
 
     // ── TX / RX meter select row ──────────────────────────────────────────
@@ -238,6 +240,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     txLabel->setAlignment(Qt::AlignCenter);
     m_txSelect = new GuardedComboBox(selectRow);
     m_txSelect->addItems({"Power", "SWR", "Level", "Compression"});
+    m_txSelect->setAccessibleName("TX meter mode");
+    m_txSelect->setAccessibleDescription("Select which TX parameter the S-meter displays");
     AetherSDR::applyComboStyle(m_txSelect);
 
     auto* txCol = new QVBoxLayout;
@@ -251,6 +255,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_rxSelect = new GuardedComboBox(selectRow);
     m_rxSelect->addItems({"S-Meter", "S-Meter Peak"});
     m_rxSelect->setCurrentIndex(0);
+    m_rxSelect->setAccessibleName("RX meter mode");
+    m_rxSelect->setAccessibleDescription("Select which RX parameter the S-meter displays");
     AetherSDR::applyComboStyle(m_rxSelect);
 
     auto* rxCol = new QVBoxLayout;
@@ -294,6 +300,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     auto* peakBtn = new QPushButton("Peak Hold", peakRow);
     peakBtn->setCheckable(true);
     peakBtn->setChecked(AppSettings::instance().value("PeakHoldEnabled", "False") == "True");
+    peakBtn->setAccessibleName("Peak hold");
+    peakBtn->setAccessibleDescription("Toggle peak hold line on S-meter");
     peakBtn->setFixedHeight(20);
     peakBtn->setStyleSheet(
         "QPushButton { background: #1a1a2e; color: #8090a0; border: 1px solid #334; "
@@ -304,6 +312,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     decayLabel->setStyleSheet(labelStyle);
     auto* decayCombo = new GuardedComboBox(peakRow);
     decayCombo->addItems({"Fast", "Medium", "Slow"});
+    decayCombo->setAccessibleName("Peak decay rate");
+    decayCombo->setAccessibleDescription("Speed at which peak hold marker decays");
     decayCombo->setCurrentText(
         AppSettings::instance().value("PeakDecayRate", "Medium").toString());
     AetherSDR::applyComboStyle(decayCombo);
@@ -311,6 +321,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     auto* resetBtn = new QPushButton("RST", peakRow);
     resetBtn->setFixedSize(32, 20);
     resetBtn->setToolTip("Reset peak hold");
+    resetBtn->setAccessibleName("Reset peak hold");
     resetBtn->setStyleSheet(
         "QPushButton { background: #1a1a2e; color: #8090a0; border: 1px solid #334; "
         "border-radius: 3px; font-size: 10px; padding: 0 4px; } "
@@ -448,6 +459,8 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_lockBtn->setCheckable(true);
         m_lockBtn->setToolTip("Lock sidebar controls — prevent accidental\n"
                               "value changes while scrolling");
+        m_lockBtn->setAccessibleName("Lock controls");
+        m_lockBtn->setAccessibleDescription("Lock sidebar controls to prevent accidental value changes");
         bool locked = settings.value("ControlsLocked", "False").toString() == "True";
         m_lockBtn->setChecked(locked);
         ControlsLock::setLocked(locked);

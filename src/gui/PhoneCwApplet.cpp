@@ -128,18 +128,24 @@ void PhoneCwApplet::buildPhonePanel()
     m_levelGauge = new HGauge(-40.0f, 10.0f, 0.0f, "Level", "dB",
         {{-40, "-40dB"}, {-30, "-30"}, {-20, "-20"}, {-10, "-10"}, {0, "0"}, {5, "+5"}, {10, "+10"}},
         nullptr, -10.0f);
+    m_levelGauge->setAccessibleName("Microphone level gauge");
+    m_levelGauge->setAccessibleDescription("Microphone input level in dBFS");
     vbox->addWidget(m_levelGauge);
 
     // ── Compression gauge (dB: -25 to 0, fills right-to-left) ───────────
     m_compGauge = new HGauge(-25.0f, 0.0f, 1.0f, "Compression", "",
         {{-25, "-25dB"}, {-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_compGauge->setReversed(true);
+    m_compGauge->setAccessibleName("Compression gauge");
+    m_compGauge->setAccessibleDescription("Speech compression amount in dB");
     vbox->addWidget(m_compGauge);
     vbox->addSpacing(4);
 
     // ── Mic profile dropdown ─────────────────────────────────────────────
     m_micProfileCombo = new GuardedComboBox;
     m_micProfileCombo->setFixedHeight(22);
+    m_micProfileCombo->setAccessibleName("Microphone profile");
+    m_micProfileCombo->setAccessibleDescription("Select microphone processing profile");
     AetherSDR::applyComboStyle(m_micProfileCombo);
     connect(m_micProfileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
@@ -159,6 +165,8 @@ void PhoneCwApplet::buildPhonePanel()
         m_micSourceCombo = new GuardedComboBox;
         m_micSourceCombo->setFixedWidth(55);
         m_micSourceCombo->setFixedHeight(22);
+        m_micSourceCombo->setAccessibleName("Microphone source");
+        m_micSourceCombo->setAccessibleDescription("Select microphone input source");
         AetherSDR::applyComboStyle(m_micSourceCombo);
         m_micSourceCombo->addItems({"MIC", "BAL", "LINE", "ACC", "PC"});
         connect(m_micSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -172,6 +180,8 @@ void PhoneCwApplet::buildPhonePanel()
         m_micLevelSlider = new GuardedSlider(Qt::Horizontal);
         m_micLevelSlider->setRange(0, 100);
         m_micLevelSlider->setStyleSheet(kSliderStyle);
+        m_micLevelSlider->setAccessibleName("Microphone gain");
+        m_micLevelSlider->setAccessibleDescription("Microphone input level, 0 to 100");
         row->addWidget(m_micLevelSlider, 1);
 
         m_micLevelLabel = new QLabel("50");
@@ -184,6 +194,8 @@ void PhoneCwApplet::buildPhonePanel()
         m_accBtn->setCheckable(true);
         m_accBtn->setFixedHeight(22);
         m_accBtn->setFixedWidth(48);
+        m_accBtn->setAccessibleName("Accessory mic input");
+        m_accBtn->setAccessibleDescription("Enable accessory microphone input");
         m_accBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_accBtn);
 
@@ -211,6 +223,8 @@ void PhoneCwApplet::buildPhonePanel()
         m_procBtn->setCheckable(true);
         m_procBtn->setFixedHeight(22);
         m_procBtn->setFixedWidth(48);
+        m_procBtn->setAccessibleName("Speech processor");
+        m_procBtn->setAccessibleDescription("Toggle speech processor for compression");
         m_procBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_procBtn);
 
@@ -243,6 +257,8 @@ void PhoneCwApplet::buildPhonePanel()
         m_procSlider->setTickPosition(QSlider::NoTicks);
         m_procSlider->setPageStep(1);
         m_procSlider->setFixedHeight(14);
+        m_procSlider->setAccessibleName("Processor level");
+        m_procSlider->setAccessibleDescription("Speech processor level: Normal, DX, or DX+");
         m_procSlider->setStyleSheet(kSliderStyle);
         procVbox->addWidget(m_procSlider);
 
@@ -252,6 +268,8 @@ void PhoneCwApplet::buildPhonePanel()
         m_daxBtn->setCheckable(true);
         m_daxBtn->setFixedHeight(22);
         m_daxBtn->setFixedWidth(48);
+        m_daxBtn->setAccessibleName("DAX digital audio");
+        m_daxBtn->setAccessibleDescription("Toggle DAX digital audio exchange");
         m_daxBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
         row->addWidget(m_daxBtn);
 
@@ -284,12 +302,16 @@ void PhoneCwApplet::buildPhonePanel()
         m_monBtn->setCheckable(true);
         m_monBtn->setFixedHeight(22);
         m_monBtn->setFixedWidth(48);
+        m_monBtn->setAccessibleName("TX monitor");
+        m_monBtn->setAccessibleDescription("Toggle sidetone monitor of transmitted audio");
         m_monBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_monBtn);
 
         m_monSlider = new GuardedSlider(Qt::Horizontal);
         m_monSlider->setRange(0, 100);
         m_monSlider->setStyleSheet(kSliderStyle);
+        m_monSlider->setAccessibleName("Monitor volume");
+        m_monSlider->setAccessibleDescription("TX sidetone monitor volume");
         row->addWidget(m_monSlider, 1);
 
         m_monLabel = new QLabel("50");
@@ -325,6 +347,8 @@ void PhoneCwApplet::buildCwPanel()
     // ── ALC gauge (0–100) ────────────────────────────────────────────────
     m_alcGauge = new HGauge(0.0f, 100.0f, 80.0f, "ALC", "",
         {{0, "0"}, {25, "25"}, {50, "50"}, {75, "75"}, {100, "100"}});
+    m_alcGauge->setAccessibleName("ALC gauge");
+    m_alcGauge->setAccessibleDescription("Automatic level control meter");
     vbox->addWidget(m_alcGauge);
     vbox->addSpacing(2);
 
@@ -349,6 +373,8 @@ void PhoneCwApplet::buildCwPanel()
         m_delaySlider->setRange(0, 2000);
         m_delaySlider->setSingleStep(10);
         m_delaySlider->setPageStep(100);
+        m_delaySlider->setAccessibleName("CW delay");
+        m_delaySlider->setAccessibleDescription("CW break-in delay in milliseconds");
         m_delaySlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_delaySlider, 1);
 
@@ -381,6 +407,8 @@ void PhoneCwApplet::buildCwPanel()
 
         m_speedSlider = new GuardedSlider(Qt::Horizontal);
         m_speedSlider->setRange(5, 100);
+        m_speedSlider->setAccessibleName("CW speed");
+        m_speedSlider->setAccessibleDescription("CW keying speed in words per minute");
         m_speedSlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_speedSlider, 1);
 
@@ -408,6 +436,8 @@ void PhoneCwApplet::buildCwPanel()
         m_sidetoneBtn->setCheckable(true);
         m_sidetoneBtn->setFixedHeight(22);
         m_sidetoneBtn->setFixedWidth(kLeftColW);
+        m_sidetoneBtn->setAccessibleName("CW sidetone");
+        m_sidetoneBtn->setAccessibleDescription("Toggle CW sidetone monitor");
         m_sidetoneBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_sidetoneBtn);
 
@@ -415,6 +445,8 @@ void PhoneCwApplet::buildCwPanel()
 
         m_sidetoneSlider = new GuardedSlider(Qt::Horizontal);
         m_sidetoneSlider->setRange(0, 100);
+        m_sidetoneSlider->setAccessibleName("Sidetone volume");
+        m_sidetoneSlider->setAccessibleDescription("CW sidetone monitor volume");
         m_sidetoneSlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_sidetoneSlider, 1);
 
@@ -451,6 +483,8 @@ void PhoneCwApplet::buildCwPanel()
         m_cwPanSlider = new GuardedSlider(Qt::Horizontal);
         m_cwPanSlider->setRange(0, 100);
         m_cwPanSlider->setValue(50);
+        m_cwPanSlider->setAccessibleName("CW audio pan");
+        m_cwPanSlider->setAccessibleDescription("CW monitor audio pan, left to right");
         m_cwPanSlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_cwPanSlider, 1);
 
@@ -472,12 +506,16 @@ void PhoneCwApplet::buildCwPanel()
         m_breakinBtn = new QPushButton("Breakin");
         m_breakinBtn->setCheckable(true);
         m_breakinBtn->setFixedHeight(22);
+        m_breakinBtn->setAccessibleName("CW break-in");
+        m_breakinBtn->setAccessibleDescription("Toggle full break-in QSK mode");
         m_breakinBtn->setStyleSheet(QString(kButtonBase) + kGreenActive);
         row->addWidget(m_breakinBtn);
 
         m_iambicBtn = new QPushButton("Iambic");
         m_iambicBtn->setCheckable(true);
         m_iambicBtn->setFixedHeight(22);
+        m_iambicBtn->setAccessibleName("Iambic keyer");
+        m_iambicBtn->setAccessibleDescription("Toggle iambic paddle keyer mode");
         m_iambicBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
         row->addWidget(m_iambicBtn);
 
@@ -489,17 +527,20 @@ void PhoneCwApplet::buildCwPanel()
         row->addWidget(pitchLbl);
 
         m_pitchDown = new CwTriBtn(CwTriBtn::Left);
+        m_pitchDown->setAccessibleName("CW pitch down");
         row->addWidget(m_pitchDown);
 
         m_pitchLabel = new QLabel("600");
         m_pitchLabel->setAlignment(Qt::AlignCenter);
         m_pitchLabel->setFixedWidth(48);
+        m_pitchLabel->setAccessibleName("CW pitch frequency");
         m_pitchLabel->setStyleSheet(
             "QLabel { font-size: 11px; background: #0a0a18; border: 1px solid #1e2e3e; "
             "border-radius: 3px; padding: 1px 3px; color: #c8d8e8; }");
         row->addWidget(m_pitchLabel);
 
         m_pitchUp = new CwTriBtn(CwTriBtn::Right);
+        m_pitchUp->setAccessibleName("CW pitch up");
         row->addWidget(m_pitchUp);
 
         connect(m_breakinBtn, &QPushButton::toggled, this, [this](bool on) {

@@ -896,6 +896,62 @@ void RxApplet::buildUI()
     m_xitOnBtn->setToolTip("Transmit Incremental Tuning \u2014 offsets the transmit frequency without moving receive.");
     m_xitZero->setToolTip("Resets the XIT offset to zero.");
 
+    // Accessible names for VoiceOver / screen reader support (#870)
+    m_sliceBadge->setAccessibleName("Slice letter");
+    m_lockBtn->setAccessibleName("VFO lock");
+    m_lockBtn->setAccessibleDescription("Lock VFO frequency to prevent accidental tuning");
+    m_rxAntBtn->setAccessibleName("RX antenna");
+    m_rxAntBtn->setAccessibleDescription("Select receive antenna port");
+    m_txAntBtn->setAccessibleName("TX antenna");
+    m_txAntBtn->setAccessibleDescription("Select transmit antenna port");
+    m_filterWidthLbl->setAccessibleName("Filter width");
+    m_qskBtn->setAccessibleName("QSK indicator");
+    m_qskBtn->setAccessibleDescription("Full break-in CW indicator");
+    m_txBadge->setAccessibleName("TX slice selector");
+    m_txBadge->setAccessibleDescription("Click to set this slice as the transmit slice");
+    m_modeCombo->setAccessibleName("Operating mode");
+    m_modeCombo->setAccessibleDescription("Select operating mode such as USB, LSB, CW, AM, FM");
+    m_freqLabel->setAccessibleName("Frequency display");
+    m_freqEdit->setAccessibleName("Frequency entry");
+    m_freqEdit->setAccessibleDescription("Type a frequency in MHz and press Enter");
+    m_stepDown->setAccessibleName("Step size down");
+    m_stepLabel->setAccessibleName("Tuning step size");
+    m_stepUp->setAccessibleName("Step size up");
+    m_filterPassband->setAccessibleName("Filter passband");
+    m_filterPassband->setAccessibleDescription("Visual filter passband with draggable edges");
+    m_muteBtn->setAccessibleName("Slice audio mute");
+    m_afSlider->setAccessibleName("AF gain");
+    m_afSlider->setAccessibleDescription("Audio output volume for this slice");
+    m_panSlider->setAccessibleName("Audio pan");
+    m_panSlider->setAccessibleDescription("Stereo audio pan, left to right");
+    m_sqlBtn->setAccessibleName("Squelch");
+    m_sqlBtn->setAccessibleDescription("Toggle squelch gate");
+    m_sqlSlider->setAccessibleName("Squelch threshold");
+    m_sqlSlider->setAccessibleDescription("Signal level below which audio is muted");
+    m_agcCombo->setAccessibleName("AGC mode");
+    m_agcCombo->setAccessibleDescription("Automatic gain control speed");
+    m_agcTSlider->setAccessibleName("AGC threshold");
+    m_agcTSlider->setAccessibleDescription("Maximum gain applied to weak signals");
+    m_ritOnBtn->setAccessibleName("RIT toggle");
+    m_ritOnBtn->setAccessibleDescription("Receive incremental tuning");
+    m_ritZero->setAccessibleName("RIT zero");
+    m_ritMinus->setAccessibleName("RIT decrease");
+    m_ritLabel->setAccessibleName("RIT offset");
+    m_ritPlus->setAccessibleName("RIT increase");
+    m_xitOnBtn->setAccessibleName("XIT toggle");
+    m_xitOnBtn->setAccessibleDescription("Transmit incremental tuning");
+    m_xitZero->setAccessibleName("XIT zero");
+    m_xitMinus->setAccessibleName("XIT decrease");
+    m_xitLabel->setAccessibleName("XIT offset");
+    m_xitPlus->setAccessibleName("XIT increase");
+    m_toneModeCmb->setAccessibleName("FM tone mode");
+    m_toneValueCmb->setAccessibleName("CTCSS tone frequency");
+    m_offsetSpin->setAccessibleName("Repeater offset frequency");
+    m_offsetDown->setAccessibleName("Offset down");
+    m_simplexBtn->setAccessibleName("Simplex");
+    m_offsetUp->setAccessibleName("Offset up");
+    m_revBtn->setAccessibleName("Reverse offset");
+
     root->addStretch();
 }
 

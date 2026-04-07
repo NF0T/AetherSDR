@@ -43,6 +43,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_heartbeat->setStyleSheet(
         "QLabel { background: #404858; border-radius: 5px; }");
     m_heartbeat->setToolTip("Radio discovery heartbeat");
+    m_heartbeat->setAccessibleName("Radio heartbeat");
+    m_heartbeat->setAccessibleDescription("Flashes green when radio discovery packets are received");
 
     // 100ms timer to return green flash back to grey
     m_heartbeatOffTimer = new QTimer(this);
@@ -110,6 +112,7 @@ TitleBar::TitleBar(QWidget* parent)
         "QPushButton:hover { background: rgba(32, 192, 96, 30); }");
     m_mfBtn->setVisible(false);
     m_mfBtn->setCursor(Qt::PointingHandCursor);
+    m_mfBtn->setAccessibleName("multiFLEX status");
     connect(m_mfBtn, &QPushButton::clicked, this, &TitleBar::multiFlexClicked);
     m_hbox->addWidget(m_mfBtn);
 
@@ -140,6 +143,8 @@ TitleBar::TitleBar(QWidget* parent)
 
     bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
     m_pcBtn->setChecked(pcOn);
+    m_pcBtn->setAccessibleName("PC Audio");
+    m_pcBtn->setAccessibleDescription("Toggle PC audio input for microphone");
 
     auto updatePcStyle = [this]() {
         m_pcBtn->setStyleSheet(m_pcBtn->isChecked()
@@ -171,6 +176,8 @@ TitleBar::TitleBar(QWidget* parent)
         "QPushButton { background: transparent; border: none; font-size: 14px; padding: 0; }"
         "QPushButton:checked { opacity: 0.4; }");
     m_speakerBtn->setToolTip("Click to mute/unmute line out");
+    m_speakerBtn->setAccessibleName("Line out mute");
+    m_speakerBtn->setAccessibleDescription("Mute or unmute line out speaker audio");
     connect(m_speakerBtn, &QPushButton::toggled, this, [this](bool muted) {
         m_speakerBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x94\x8A");  // 🔇 / 🔊
         emit lineoutMuteChanged(muted);
@@ -183,6 +190,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_masterSlider->setValue(savedVol);
     m_masterSlider->setFixedWidth(80);
     m_masterSlider->setFixedHeight(16);
+    m_masterSlider->setAccessibleName("Master volume");
+    m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
     m_masterSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: #00b4d8; width: 10px; margin: -3px 0; border-radius: 5px; }"
@@ -210,6 +219,8 @@ TitleBar::TitleBar(QWidget* parent)
         "QPushButton { background: transparent; border: none; font-size: 14px; padding: 0; }"
         "QPushButton:checked { opacity: 0.4; }");
     m_headphoneBtn->setToolTip("Click to mute/unmute headphones");
+    m_headphoneBtn->setAccessibleName("Headphone mute");
+    m_headphoneBtn->setAccessibleDescription("Mute or unmute headphone audio");
     connect(m_headphoneBtn, &QPushButton::toggled, this, [this](bool muted) {
         m_headphoneBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x8E\xA7");  // 🔇 / 🎧
         emit headphoneMuteChanged(muted);
@@ -221,6 +232,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_hpSlider->setValue(50);
     m_hpSlider->setFixedWidth(80);
     m_hpSlider->setFixedHeight(16);
+    m_hpSlider->setAccessibleName("Headphone volume");
+    m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
     m_hpSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: #00b4d8; width: 10px; margin: -3px 0; border-radius: 5px; }"
@@ -244,6 +257,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_minimalBtn = new QPushButton("\xe2\x86\x99");  // ↙ U+2199
     m_minimalBtn->setFixedSize(28, 28);
     m_minimalBtn->setToolTip("Minimal Mode (Ctrl+M)");
+    m_minimalBtn->setAccessibleName("Minimal mode");
     m_minimalBtn->setStyleSheet(
         "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050; "
         "border-radius: 4px; font-size: 18px; padding: 0; }"
@@ -256,6 +270,7 @@ TitleBar::TitleBar(QWidget* parent)
     auto* featureBtn = m_featureBtn;
     featureBtn->setFixedSize(28, 28);
     featureBtn->setToolTip("Submit a feature request");
+    featureBtn->setAccessibleName("Feature request");
     featureBtn->setStyleSheet(
         "QPushButton { background: #3a2a00; color: #ffd060; border: 1px solid #806020; "
         "border-radius: 4px; font-size: 20px; padding: 0; }"
