@@ -546,6 +546,23 @@ void VfoWidget::buildUI()
     buildTabContent();
     root->addWidget(m_tabStack);
 
+    // Accessible names for VoiceOver / screen reader support (#870)
+    m_rxAntBtn->setAccessibleName("RX antenna");
+    m_txAntBtn->setAccessibleName("TX antenna");
+    m_filterWidthLbl->setAccessibleName("Filter width");
+    m_splitBadge->setAccessibleName("Split mode");
+    m_splitBadge->setAccessibleDescription("Toggle split transmit frequency");
+    m_txBadge->setAccessibleName("TX slice selector");
+    m_sliceBadge->setAccessibleName("Slice letter");
+    m_freqLabel->setAccessibleName("Frequency display");
+    m_freqEdit->setAccessibleName("Frequency entry");
+    m_freqEdit->setAccessibleDescription("Type a frequency in MHz and press Enter");
+    m_closeSliceBtn->setAccessibleName("Close slice");
+    m_lockVfoBtn->setAccessibleName("VFO lock");
+    m_recordBtn->setAccessibleName("Record slice audio");
+    m_playBtn->setAccessibleName("Play recorded audio");
+    m_dbmLabel->setAccessibleName("Signal level dBm");
+
     adjustSize();
 }
 
@@ -564,6 +581,7 @@ void VfoWidget::buildTabContent()
         auto* gainRow = new QHBoxLayout;
         gainRow->setSpacing(3);
         m_muteBtn = new QPushButton(QString::fromUtf8("AF  \xF0\x9F\x94\x8A")); // AF 🔊
+        m_muteBtn->setAccessibleName("Slice audio mute");
         m_muteBtn->setCheckable(true);
         m_muteBtn->setFixedHeight(20);
         m_muteBtn->setFixedWidth(60);
@@ -575,6 +593,8 @@ void VfoWidget::buildTabContent()
             " border: 1px solid #a04040; }");
         gainRow->addWidget(m_muteBtn);
         m_afGainSlider = new GuardedSlider(Qt::Horizontal);
+        m_afGainSlider->setAccessibleName("AF gain");
+        m_afGainSlider->setAccessibleDescription("Audio output volume for this slice");
         m_afGainSlider->setRange(0, 100);
         m_afGainSlider->setStyleSheet(kSliderStyle);
         gainRow->addWidget(m_afGainSlider, 1);
@@ -589,11 +609,13 @@ void VfoWidget::buildTabContent()
         auto* sqlRow = new QHBoxLayout;
         sqlRow->setSpacing(3);
         m_sqlBtn = new QPushButton("SQL");
+        m_sqlBtn->setAccessibleName("Squelch");
         m_sqlBtn->setCheckable(true);
         m_sqlBtn->setFixedHeight(20);
         m_sqlBtn->setStyleSheet(kDspToggle + kDisabledBtn);
         sqlRow->addWidget(m_sqlBtn);
         m_sqlSlider = new GuardedSlider(Qt::Horizontal);
+        m_sqlSlider->setAccessibleName("Squelch threshold");
         m_sqlSlider->setRange(0, 100);
         m_sqlSlider->setValue(20);
         m_sqlSlider->setStyleSheet(kSliderStyle);
@@ -609,6 +631,7 @@ void VfoWidget::buildTabContent()
         auto* agcRow = new QHBoxLayout;
         agcRow->setSpacing(3);
         m_agcCmb = new GuardedComboBox;
+        m_agcCmb->setAccessibleName("AGC mode");
         m_agcCmb->addItems({"Off", "Slow", "Med", "Fast"});
         m_agcCmb->setFixedHeight(20);
         m_agcCmb->setFixedWidth(60);
@@ -616,6 +639,7 @@ void VfoWidget::buildTabContent()
         AetherSDR::applyComboStyle(m_agcCmb);
         agcRow->addWidget(m_agcCmb);
         m_agcTSlider = new GuardedSlider(Qt::Horizontal);
+        m_agcTSlider->setAccessibleName("AGC threshold");
         m_agcTSlider->setRange(0, 100);
         m_agcTSlider->setValue(65);
         m_agcTSlider->setStyleSheet(kSliderStyle);
@@ -631,6 +655,7 @@ void VfoWidget::buildTabContent()
         auto* panRow = new QHBoxLayout;
         panRow->setSpacing(3);
         m_divBtn = new QPushButton("DIV");
+        m_divBtn->setAccessibleName("Diversity receive");
         m_divBtn->setCheckable(true);
         m_divBtn->setFixedHeight(20);
         m_divBtn->setFixedWidth(60);
@@ -663,6 +688,8 @@ void VfoWidget::buildTabContent()
         m_agcTSlider->setToolTip("AGC threshold. Higher values reduce the maximum gain applied to weak signals.");
         m_panSlider->setToolTip("Pans audio between left and right channels.");
 
+        // Accessible names set inline after each widget creation below (#870)
+
         // ESC (Enhanced Signal Clarity) panel — visible only when DIV is active
         m_escPanel = new QWidget;
         m_escPanel->setVisible(false);
@@ -674,6 +701,7 @@ void VfoWidget::buildTabContent()
         auto* escTopRow = new QHBoxLayout;
         escTopRow->setSpacing(3);
         m_escBtn = new QPushButton("ESC");
+        m_escBtn->setAccessibleName("Enhanced signal clarity");
         m_escBtn->setCheckable(true);
         m_escBtn->setFixedHeight(20);
         m_escBtn->setFixedWidth(60);
@@ -683,6 +711,7 @@ void VfoWidget::buildTabContent()
         phaseLbl->setStyleSheet(kLabelStyle);
         escTopRow->addWidget(phaseLbl);
         m_escPhaseSlider = new GuardedSlider(Qt::Horizontal);
+        m_escPhaseSlider->setAccessibleName("ESC phase");
         m_escPhaseSlider->setRange(0, 72);   // 0–360° in 5° steps
         m_escPhaseSlider->setValue(0);
         m_escPhaseSlider->setStyleSheet(kSliderStyle);
@@ -707,6 +736,7 @@ void VfoWidget::buildTabContent()
         m_escGainLbl->setAlignment(Qt::AlignHCenter);
         gainCol->addWidget(m_escGainLbl);
         m_escGainSlider = new GuardedSlider(Qt::Vertical);
+        m_escGainSlider->setAccessibleName("ESC gain");
         m_escGainSlider->setRange(0, 200);   // 0.0 – 2.0
         m_escGainSlider->setValue(100);       // default 1.0
         m_escGainSlider->setStyleSheet(kSliderStyle);
@@ -835,19 +865,33 @@ void VfoWidget::buildTabContent()
         };
 
         m_nrBtn   = makeDsp("NR");
+        m_nrBtn->setAccessibleName("Noise reduction");
         m_nr2Btn  = makeDsp("NR2");
+        m_nr2Btn->setAccessibleName("NR2 spectral noise reduction");
         m_nbBtn   = makeDsp("NB");
+        m_nbBtn->setAccessibleName("Noise blanker");
         m_anfBtn  = makeDsp("ANF");
+        m_anfBtn->setAccessibleName("Auto notch filter");
         m_apfBtn  = makeDsp("APF");
+        m_apfBtn->setAccessibleName("CW audio peaking filter");
         m_nrlBtn  = makeDsp("NRL");
+        m_nrlBtn->setAccessibleName("Leaky LMS noise reduction");
         m_nrsBtn  = makeDsp("NRS");
+        m_nrsBtn->setAccessibleName("Spectral subtraction");
         m_rnnBtn  = makeDsp("RNN");
+        m_rnnBtn->setAccessibleName("RNN noise reduction");
         m_rn2Btn  = makeDsp("RN2");
+        m_rn2Btn->setAccessibleName("RNNoise noise suppression");
         m_nrfBtn  = makeDsp("NRF");
+        m_nrfBtn->setAccessibleName("Spectral noise filter");
         m_anflBtn = makeDsp("ANFL");
+        m_anflBtn->setAccessibleName("LMS notch filter");
         m_anftBtn = makeDsp("ANFT");
+        m_anftBtn->setAccessibleName("FFT notch filter");
         m_bnrBtn  = makeDsp("BNR");
+        m_bnrBtn->setAccessibleName("GPU neural denoising");
         m_nr4Btn  = makeDsp("NR4");
+        m_nr4Btn->setAccessibleName("Spectral bleach noise reduction");
         m_apfBtn->hide();  // only visible in CW mode
 #ifndef HAVE_BNR
         m_bnrBtn->hide();
@@ -888,6 +932,9 @@ void VfoWidget::buildTabContent()
         m_bnrBtn->setToolTip("NVIDIA GPU-accelerated neural audio denoising. Requires NVIDIA RTX 4000+ with Docker.");
         m_nr4Btn->setToolTip("Client-side spectral bleach noise reduction (libspecbleach). Right-click for NR4 settings.");
 
+        // DSP button accessible names (#870)
+        // Accessible names set inline after each widget creation below (#870)
+
         // APF level slider (hidden unless CW mode)
         {
             m_apfContainer = new QWidget;
@@ -900,6 +947,8 @@ void VfoWidget::buildTabContent()
             lbl->setFixedWidth(26);
             apfVb->addWidget(lbl);
             m_apfSlider = new GuardedSlider(Qt::Horizontal);
+            m_apfSlider->setAccessibleName("APF bandwidth");
+            m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
             m_apfSlider->setRange(0, 100);
             m_apfSlider->setValue(50);
             m_apfSlider->setStyleSheet(kSliderStyle);
@@ -1011,6 +1060,9 @@ void VfoWidget::buildTabContent()
         }
 
         // DIG offset control (hidden unless DIGL/DIGU mode)
+        // The offset centers the filter passband for widths < 3000 Hz.
+        // Double-click the value to enter directly; arrows step by 10 Hz;
+        // scroll wheel also steps. (fw v1.4.0.0)
         {
             static const QString kStepLabelStyle2 =
                 "QLabel { font-size: 10px; background: #0a0a18; border: 1px solid #1e2e3e; "
@@ -1032,31 +1084,92 @@ void VfoWidget::buildTabContent()
             auto* row = new QHBoxLayout;
             row->setContentsMargins(0, 0, 0, 0);
             row->setSpacing(0);
+
             auto* minus = new TriBtn(TriBtn::Left);
             row->addWidget(minus);
-            m_digOffsetLabel = new QLabel("2210");
+
+            // Stacked widget: label (normal) / line edit (direct entry)
+            m_digOffsetStack = new QStackedWidget;
+            m_digOffsetStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+            m_digOffsetLabel = new ScrollableLabel("2210");
             m_digOffsetLabel->setAlignment(Qt::AlignCenter);
             m_digOffsetLabel->setStyleSheet(kStepLabelStyle2);
-            row->addWidget(m_digOffsetLabel, 1);
+            m_digOffsetLabel->setCursor(Qt::PointingHandCursor);
+            m_digOffsetLabel->setToolTip("Double-click to enter offset directly");
+            m_digOffsetStack->addWidget(m_digOffsetLabel);  // index 0
+
+            m_digOffsetEdit = new QLineEdit;
+            m_digOffsetEdit->setAlignment(Qt::AlignCenter);
+            m_digOffsetEdit->setStyleSheet(
+                "QLineEdit { font-size: 10px; background: #0a0a18; border: 1px solid #00b4d8; "
+                "border-radius: 3px; padding: 0px 2px; color: #00e5ff; }");
+            m_digOffsetStack->addWidget(m_digOffsetEdit);   // index 1
+
+            row->addWidget(m_digOffsetStack, 1);
+
             auto* plus = new TriBtn(TriBtn::Right);
             row->addWidget(plus);
             dvb->addLayout(row);
 
+            // Helper to apply a validated offset value
+            auto applyOffset = [this](int hz) {
+                if (!m_slice) return;
+                hz = qBound(0, hz, 10000);
+                if (m_slice->mode() == "DIGL")
+                    m_slice->setDiglOffset(hz);
+                else
+                    m_slice->setDiguOffset(hz);
+                // Re-apply the current filter so the passband repositions
+                // immediately around the new offset without requiring a preset click.
+                // In wide mode (>=3000 Hz) lo/hi are anchored at ±95, so recover
+                // the preset width from the anchored edge, not the span.
+                int curLo = m_slice->filterLow();
+                int curHi = m_slice->filterHigh();
+                int width;
+                if (m_slice->mode() == "DIGL")
+                    width = (curHi == -95 && curLo <= -3000) ? -curLo : curHi - curLo;
+                else
+                    width = (curLo == 95 && curHi >= 3000) ? curHi : curHi - curLo;
+                applyFilterPreset(width);
+            };
+
             static constexpr int DIG_STEP = 10;
-            connect(minus, &QPushButton::clicked, this, [this] {
+            connect(minus, &QPushButton::clicked, this, [this, applyOffset] {
                 if (!m_slice) return;
-                if (m_slice->mode() == "DIGL")
-                    m_slice->setDiglOffset(m_slice->diglOffset() - DIG_STEP);
-                else
-                    m_slice->setDiguOffset(m_slice->diguOffset() - DIG_STEP);
+                int cur = (m_slice->mode() == "DIGL")
+                    ? m_slice->diglOffset() : m_slice->diguOffset();
+                applyOffset(cur - DIG_STEP);
             });
-            connect(plus, &QPushButton::clicked, this, [this] {
+            connect(plus, &QPushButton::clicked, this, [this, applyOffset] {
                 if (!m_slice) return;
-                if (m_slice->mode() == "DIGL")
-                    m_slice->setDiglOffset(m_slice->diglOffset() + DIG_STEP);
-                else
-                    m_slice->setDiguOffset(m_slice->diguOffset() + DIG_STEP);
+                int cur = (m_slice->mode() == "DIGL")
+                    ? m_slice->diglOffset() : m_slice->diguOffset();
+                applyOffset(cur + DIG_STEP);
             });
+            connect(m_digOffsetLabel, &ScrollableLabel::scrolled, this,
+                    [this, applyOffset](int dir) {
+                if (!m_slice) return;
+                int cur = (m_slice->mode() == "DIGL")
+                    ? m_slice->diglOffset() : m_slice->diguOffset();
+                applyOffset(cur + dir * DIG_STEP);
+            });
+
+            // Double-click label → switch to inline edit
+            m_digOffsetLabel->installEventFilter(this);
+
+            // Commit edit on Enter or focus loss.
+            // Guard against double-fire: returnPressed switches stack to index 0,
+            // which removes focus and triggers editingFinished a second time.
+            auto commitEdit = [this, applyOffset] {
+                if (m_digOffsetStack->currentIndex() != 1) return;
+                m_digOffsetStack->setCurrentIndex(0);
+                bool ok;
+                int hz = m_digOffsetEdit->text().toInt(&ok);
+                if (ok) applyOffset(hz);
+            };
+            connect(m_digOffsetEdit, &QLineEdit::returnPressed, this, commitEdit);
+            connect(m_digOffsetEdit, &QLineEdit::editingFinished, this, commitEdit);
 
             m_digContainer->hide();
             dspVb->addWidget(m_digContainer);
@@ -2611,7 +2724,42 @@ void VfoWidget::applyFilterPreset(int widthHz)
     int lo, hi;
     const QString& mode = m_slice->mode();
 
-    if (mode == "LSB" || mode == "DIGL") {
+    if (mode == "DIGU") {
+        // For widths < 3000 Hz, center the filter on the stored digu_offset.
+        // SmartSDR behavior (fw v1.4.0.0): offset is the audio center frequency;
+        // filter spans [offset - width/2, offset + width/2], clamped so lo >= 95.
+        // For widths >= 3000 Hz, SmartSDR ignores the offset and runs from 95 Hz
+        // upward — preserve that behavior unchanged.
+        if (widthHz < 3000) {
+            int offset = m_slice->diguOffset();
+            lo = offset - widthHz / 2;
+            hi = offset + widthHz / 2;
+            if (lo < 95) {
+                // Clamp: don't let lo drop below 95 Hz (carrier rejection)
+                hi += (95 - lo);
+                lo = 95;
+            }
+        } else {
+            lo = 95;
+            hi = widthHz;
+        }
+    } else if (mode == "DIGL") {
+        // Mirror of DIGU: offset is negative (below carrier). For widths < 3000 Hz,
+        // center on -digl_offset, clamped so hi <= -95.
+        // For widths >= 3000 Hz, run from -95 downward.
+        if (widthHz < 3000) {
+            int offset = m_slice->diglOffset();
+            hi = -offset + widthHz / 2;
+            lo = -offset - widthHz / 2;
+            if (hi > -95) {
+                lo -= (hi + 95);
+                hi = -95;
+            }
+        } else {
+            lo = -widthHz;
+            hi = -95;
+        }
+    } else if (mode == "LSB") {
         lo = -widthHz; hi = -95;
     } else if (mode == "RTTY") {
         // RTTY: RF_frequency = mark. Filter is relative to mark.
@@ -2628,7 +2776,7 @@ void VfoWidget::applyFilterPreset(int widthHz)
     } else if (mode == "AM" || mode == "SAM" || mode == "DSB") {
         lo = -(widthHz / 2); hi = (widthHz / 2);
     } else {
-        // USB/DIGU/FDV: low cut at 95 Hz to reject carrier/hum
+        // USB/FDV/etc: low cut at 95 Hz to reject carrier/hum
         lo = 95; hi = widthHz;
     }
     m_slice->setFilterWidth(lo, hi);
@@ -2658,6 +2806,19 @@ void VfoWidget::setTransmitModel(TransmitModel* txModel)
 
 bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
 {
+    // Double-click on DIG offset label → switch to inline edit
+    if (obj == m_digOffsetLabel && event->type() == QEvent::MouseButtonDblClick) {
+        if (m_digOffsetStack && m_digOffsetEdit) {
+            int cur = m_slice ? ((m_slice->mode() == "DIGL")
+                ? m_slice->diglOffset() : m_slice->diguOffset()) : 0;
+            m_digOffsetEdit->setText(QString::number(cur));
+            m_digOffsetStack->setCurrentIndex(1);
+            m_digOffsetEdit->selectAll();
+            m_digOffsetEdit->setFocus();
+        }
+        return true;
+    }
+
     // Double-click on frequency label → open inline edit
     if (obj == m_freqLabel && event->type() == QEvent::MouseButtonDblClick) {
         beginDirectEntry();

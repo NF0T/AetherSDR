@@ -166,6 +166,16 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
     m_tcpSocket->connectToHost(info.ip, info.port);
 }
 
+void AntennaGeniusModel::connectToAddress(const QHostAddress& ip, quint16 port)
+{
+    AgDeviceInfo info;
+    info.ip   = ip;
+    info.port = port;
+    info.name = ip.toString();
+    info.serial = QString("manual-%1").arg(ip.toString());
+    connectToDevice(info);
+}
+
 void AntennaGeniusModel::disconnectFromDevice()
 {
     if (m_keepAlive) {

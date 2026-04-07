@@ -108,6 +108,8 @@ void EqApplet::buildUI()
         m_onBtn = new QPushButton("ON");
         m_onBtn->setCheckable(true);
         m_onBtn->setFixedSize(36, 22);
+        m_onBtn->setAccessibleName("Equalizer enable");
+        m_onBtn->setAccessibleDescription("Toggle equalizer on or off");
         m_onBtn->setStyleSheet(kBtnBase + kGreenActive);
         connect(m_onBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_model) {
@@ -138,6 +140,8 @@ void EqApplet::buildUI()
         m_rxBtn = new QPushButton("RX");
         m_rxBtn->setCheckable(true);
         m_rxBtn->setFixedSize(36, 22);
+        m_rxBtn->setAccessibleName("RX equalizer");
+        m_rxBtn->setAccessibleDescription("Show receive equalizer bands");
         m_rxBtn->setStyleSheet(kBtnBase + kBlueActive);
         row->addWidget(m_rxBtn);
 
@@ -145,6 +149,8 @@ void EqApplet::buildUI()
         m_txBtn->setCheckable(true);
         m_txBtn->setChecked(true);  // start on TX view
         m_txBtn->setFixedSize(36, 22);
+        m_txBtn->setAccessibleName("TX equalizer");
+        m_txBtn->setAccessibleDescription("Show transmit equalizer bands");
         m_txBtn->setStyleSheet(kBtnBase + kBlueActive);
         row->addWidget(m_txBtn);
 
@@ -231,6 +237,11 @@ void EqApplet::buildUI()
             slider->setTickPosition(QSlider::NoTicks);
             slider->setStyleSheet(kVSliderStyle);
             slider->setFixedHeight(100);
+            slider->setAccessibleName(
+                QString("EQ %1").arg(EqualizerModel::bandLabel(static_cast<EqualizerModel::Band>(i))));
+            slider->setAccessibleDescription(
+                QString("Equalizer band %1, minus 10 to plus 10 dB").arg(
+                    EqualizerModel::bandLabel(static_cast<EqualizerModel::Band>(i))));
             m_sliders[i] = slider;
 
             col->addWidget(slider, 0, Qt::AlignHCenter);

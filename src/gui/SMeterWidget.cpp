@@ -86,8 +86,8 @@ void SMeterWidget::setMicMeters(float micLevel, float compLevel, float micPeak, 
     Q_UNUSED(micLevel);
     Q_UNUSED(compLevel);
     m_micLevel  = m_micLevel  + SMOOTH_ALPHA * (micPeak - m_micLevel);
-    // compPeak is negative (e.g. -15 = 15 dB compression), clamp stale values
-    float comp = (compPeak < -30.0f || compPeak >= 0.0f) ? 0.0f : compPeak;
+    // compPeak is raw dBFS from COMPPEAK. Silence gate at -30.
+    float comp = (compPeak > -30.0f) ? qBound(-25.0f, compPeak, 0.0f) : 0.0f;
     m_compLevel = m_compLevel + SMOOTH_ALPHA * (comp - m_compLevel);
 
     if (m_transmitting && (m_txMode == TxMode::Level || m_txMode == TxMode::Compression))
@@ -166,7 +166,7 @@ float SMeterWidget::txValueToFraction(float value) const
         // -40 to +5
         return qBound(0.0f, (value + 40.0f) / 45.0f, 1.0f);
     case TxMode::Compression:
-        // -25 to 0 (negative dB, e.g. -15 = 15 dB compression)
+        // Gain reduction: 0 = none, -25 = heavy compression
         return qBound(0.0f, (value + 25.0f) / 25.0f, 1.0f);
     }
     return 0.0f;
@@ -410,12 +410,9 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     // Needle originates from needleCy (just below widget) rather than the
     // arc center, so the pivot is barely out of frame.
     // When transmitting, needle tracks the selected TX meter instead of RX.
-    // Also switches to TX display when RF power is flowing even if m_transmitting
-    // hasn't been set yet (VOX, hardware CW, interlock timing race).
     {
-        const bool effectiveTx = m_transmitting || m_txPower > 0.5f;
         float frac;
-        if (effectiveTx)
+        if (m_transmitting)
             frac = txValueToFraction(currentTxValue());
         else if (m_rxMode == RxMode::SMeterPeak)
             frac = dbmToFraction(m_peakDbm);
@@ -438,7 +435,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     }
 
     // Draw peak marker (small triangle) — only in RX S-Meter Peak mode
-    if (!(m_transmitting || m_txPower > 0.5f) && m_rxMode == RxMode::SMeterPeak
+    if (!m_transmitting && m_rxMode == RxMode::SMeterPeak
         && m_peakDbm > m_levelDbm + 1.0f) {
         const float frac = dbmToFraction(m_peakDbm);
         const float angle = fractionToAngle(frac);
@@ -492,7 +489,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     valFont.setBold(true);
     const QFontMetrics vfm(valFont);
 
-    if (m_transmitting || m_txPower > 0.5f) {
+    if (m_transmitting) {
         // TX mode: show TX source label (center), mode name (left), value (right)
         static const char* txLabels[] = {"Power", "SWR", "Level", "Compression"};
         const QString srcLabel = txLabels[static_cast<int>(m_txMode)];

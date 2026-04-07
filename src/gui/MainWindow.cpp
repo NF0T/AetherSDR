@@ -373,6 +373,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_rbnClient = new DxClusterClient;
     m_rbnClient->setLogFileName("rbn.log");
     m_wsjtxClient = new WsjtxClient;
+    m_spotCollectorClient = new SpotCollectorClient;
     m_potaClient = new PotaClient;
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
@@ -382,6 +383,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_dxCluster->moveToThread(m_spotThread);
     m_rbnClient->moveToThread(m_spotThread);
     m_wsjtxClient->moveToThread(m_spotThread);
+    m_spotCollectorClient->moveToThread(m_spotThread);
     m_potaClient->moveToThread(m_spotThread);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient->moveToThread(m_spotThread);
@@ -442,6 +444,8 @@ MainWindow::MainWindow(QWidget* parent)
                 spotColor = as.value("DxClusterSpotColor", "#D2B48C").toString();
             else if (source == "RBN")
                 spotColor = as.value("RbnSpotColor", "#4488FF").toString();
+            else if (source == "SpotCollector")
+                spotColor = as.value("SpotCollectorSpotColor", "#FFD700").toString();
             else if (source == "FreeDV")
                 spotColor = as.value("FreeDvSpotColor", "#FF8C00").toString();  // HAVE_WEBSOCKETS
         }
@@ -548,6 +552,11 @@ MainWindow::MainWindow(QWidget* parent)
         m_spotCmdBatch.append(cmd);
     });
 
+    connect(m_spotCollectorClient, &SpotCollectorClient::spotReceived,
+            this, [queueSpotCmd](const DxSpot& spot) {
+        queueSpotCmd(spot, "SpotCollector");
+    });
+
     connect(m_potaClient, &PotaClient::spotReceived,
             this, [queueSpotCmd](const DxSpot& spot) {
         queueSpotCmd(spot, "POTA");
@@ -613,6 +622,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::remoteTxStreamReady,
             this, [this](quint32 streamId) {
         m_audio->setRemoteTxStreamId(streamId);
+        // Enable Opus TX encoding when compression is active (SmartLink/WAN)
+        m_audio->setOpusTxEnabled(m_radioModel.audioCompressionParam() == "opus");
         // Restore PC mic gain from client-side settings (radio has no
         // hardware gain stage for PC input — client-authoritative)
         if (m_radioModel.transmitModel().micSelection() == "PC") {
@@ -672,14 +683,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_daxBridge->setTransmitting(tx);
 #endif
 
-        // Update TX status bar indicator
-        if (tx) {
-            m_txIndicator->setText("TX");
-            m_txIndicator->setStyleSheet("QLabel { color: white; background: #c03030; font-weight: bold; font-size: 21px; border-radius: 4px; padding: 0px 1px; }");
-        } else {
-            m_txIndicator->setText("TX");
-            m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
-        }
+        // TX indicator is driven by radioTransmittingChanged (see below) so that
+        // it lights up for external PTT and Multi-Flex TX, not just local MOX.
         // On RX resume, native tiles will restart and m_hasNativeWaterfall
         // will be set again by the first arriving tile.
 #ifdef HAVE_RADE
@@ -709,11 +714,25 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // Raw radio TX state for DAX passthrough — allows DAX TX audio to flow
-    // even when an external app (WSJT-X) triggers PTT (#752).
+    // Raw radio TX state: fired for every interlock state=TRANSMITTING regardless
+    // of TX ownership. Used for DAX passthrough (#752) and the TX status bar
+    // indicator — moxChanged is ownership-gated so it misses external PTT and
+    // Multi-Flex TX from other clients.
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool tx) {
         m_audio->setRadioTransmitting(tx);
+        // S-Meter: use raw interlock state so Level/Compression modes work
+        // during VOX/hardware CW without the effectiveTx power threshold (#877)
+        m_appletPanel->sMeterWidget()->setTransmitting(tx);
+        if (tx) {
+            m_txIndicator->setStyleSheet(
+                "QLabel { color: white; background: #c03030; font-weight: bold; "
+                "font-size: 21px; border-radius: 4px; padding: 0px 1px; }");
+        } else {
+            m_txIndicator->setStyleSheet(
+                "QLabel { color: rgba(255,255,255,128); font-weight: bold; "
+                "font-size: 21px; }");
+        }
     });
 
     // Sync show-TX-in-waterfall setting to all spectrum widgets
@@ -990,8 +1009,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans).
-    // Text/stats output is wired to m_panApplet via setActivePanApplet()
-    // which re-wires on active pan change.
+    // Text/stats output is routed to the pan owning the active slice
+    // via routeCwDecoderOutput(), which re-wires on active slice change (#864).
     connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
             &m_cwDecoder, &CwDecoder::feedAudio);
 
@@ -1343,22 +1362,25 @@ MainWindow::MainWindow(QWidget* parent)
     m_flexCoalesceTimer.setSingleShot(true);
     m_flexCoalesceTimer.setInterval(20);
     connect(&m_flexCoalesceTimer, &QTimer::timeout, this, [this]() {
-        if (m_flexPendingSteps == 0) return;
+        if (m_flexTargetMhz < 0.0) return;
         auto* s = activeSlice();
-        if (!s || s->isLocked()) { m_flexPendingSteps = 0; return; }
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + m_flexPendingSteps * stepHz / 1e6;
-        m_flexPendingSteps = 0;
-        QString panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
-        if (!panId.isEmpty())
-            m_radioModel.sendCommand(
-                QString("slice m %1 pan=%2").arg(newMhz, 0, 'f', 6).arg(panId));
-        if (spectrum()) spectrum()->setVfoFrequency(newMhz);
+        if (!s || s->isLocked()) { m_flexTargetMhz = -1.0; return; }
+        double target = m_flexTargetMhz;
+        // Use slice tune (not slice m) — doesn't recenter pan, correct for encoder
+        s->setFrequency(target);
     });
     // FlexControl signals (auto-queued from worker → main)
     connect(m_flexControl, &FlexControlManager::tuneSteps,
             this, [this](int steps) {
-        m_flexPendingSteps += steps;
+        auto* s = activeSlice();
+        if (!s || s->isLocked()) return;
+        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
+        // Initialize target from slice on first step or after external QSY
+        if (m_flexTargetMhz < 0.0)
+            m_flexTargetMhz = s->frequency();
+        m_flexTargetMhz += steps * stepHz / 1e6;
+        // Optimistic VFO display update — immediate visual feedback
+        if (spectrum()) spectrum()->setVfoFrequency(m_flexTargetMhz);
         if (!m_flexCoalesceTimer.isActive())
             m_flexCoalesceTimer.start();
     });
@@ -2061,7 +2083,8 @@ MainWindow::MainWindow(QWidget* parent)
     });
     clockTimer->start(1000);
 
-    // Start discovery
+    // Start discovery — show amber indicator while waiting for connection
+    if (m_titleBar) m_titleBar->setDiscovering(true);
     m_discovery.startListening();
 
     // Auto-connect to routed radios (probed, not broadcast-discovered)
@@ -2229,6 +2252,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         delete m_dxCluster;  m_dxCluster = nullptr;
         delete m_rbnClient;  m_rbnClient = nullptr;
         delete m_wsjtxClient; m_wsjtxClient = nullptr;
+        delete m_spotCollectorClient; m_spotCollectorClient = nullptr;
         delete m_potaClient;  m_potaClient = nullptr;
 #ifdef HAVE_WEBSOCKETS
         delete m_freedvClient; m_freedvClient = nullptr;
@@ -2523,7 +2547,7 @@ void MainWindow::buildMenuBar()
             auto* s = activeSlice();
             if (s) {
                 bool isCw = (s->mode() == "CW" || s->mode() == "CWL");
-                if (m_panApplet) m_panApplet->setCwPanelVisible(isCw && decodeOn);
+                if (m_cwDecoderApplet) m_cwDecoderApplet->setCwPanelVisible(isCw && decodeOn);
             }
 
             // If audio compression changed, recreate the RX audio stream
@@ -2634,7 +2658,8 @@ void MainWindow::buildMenuBar()
             m_spotHubDialog->activateWindow();
             return;
         }
-        auto* dlg = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient, m_potaClient,
+        auto* dlg = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
+                            m_spotCollectorClient, m_potaClient,
 #ifdef HAVE_WEBSOCKETS
                             m_freedvClient,
 #endif
@@ -2688,6 +2713,12 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::wsjtxStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_wsjtxClient, [=] { m_wsjtxClient->stopListening(); }); });
+        connect(dlg, &DxClusterDialog::spotCollectorStartRequested,
+                this, [this](quint16 port) {
+            QMetaObject::invokeMethod(m_spotCollectorClient, [=] { m_spotCollectorClient->startListening(port); });
+        });
+        connect(dlg, &DxClusterDialog::spotCollectorStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_spotCollectorClient, [=] { m_spotCollectorClient->stopListening(); }); });
         connect(dlg, &DxClusterDialog::potaStartRequested,
                 this, [this](int interval) {
             QMetaObject::invokeMethod(m_potaClient, [=] { m_potaClient->startPolling(interval); });
@@ -3221,6 +3252,20 @@ void MainWindow::buildMenuBar()
         m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
     });
 
+    viewMenu->addSeparator();
+    auto* heartbeatBlinkAct = viewMenu->addAction("Blink Status Indicator");
+    heartbeatBlinkAct->setCheckable(true);
+    heartbeatBlinkAct->setChecked(
+        AppSettings::instance().value("HeartbeatBlinkEnabled", "True").toString() == "True");
+    connect(heartbeatBlinkAct, &QAction::toggled, this, [this](bool on) {
+        if (m_titleBar) m_titleBar->setBlinkEnabled(on);
+    });
+    // Keep the menu item in sync when the right-click on the indicator changes the setting
+    if (m_titleBar) {
+        connect(m_titleBar, &TitleBar::blinkEnabledChanged,
+                heartbeatBlinkAct, &QAction::setChecked);
+    }
+
     auto* helpMenu = menuBar()->addMenu("&Help");
     helpMenu->addAction("Getting Started...", this, [this]() {
         auto* dlg = new HelpDialog("Getting Started", ":/help/getting-started.md", this);
@@ -3463,7 +3508,7 @@ void MainWindow::buildUI()
             this, [this](const QString& panId) {
         m_radioModel.setActivePanId(panId);
 
-        // Update m_panApplet and CW decoder wiring for the new active pan
+        // Update m_panApplet for the new active pan
         if (auto* applet = m_panStack->panadapter(panId))
             setActivePanApplet(applet);
 
@@ -3472,7 +3517,8 @@ void MainWindow::buildUI()
             if (sl->panId() == panId) {
                 bool isCw = (sl->mode() == "CW" || sl->mode() == "CWL");
                 bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
-                if (m_panApplet) m_panApplet->setCwPanelVisible(isCw && decodeOn);
+                if (auto* applet = m_panStack->panadapter(panId))
+                    applet->setCwPanelVisible(isCw && decodeOn);
                 if (isCw && !m_cwDecoder.isRunning())
                     m_cwDecoder.start();
                 else if (!isCw && m_cwDecoder.isRunning())
@@ -3847,8 +3893,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // Show DIV button on dual-SCU radios
         {
             const QString& model = m_radioModel.model();
-            bool divAllowed = model.contains("6600") || model.contains("6700")
-                           || model.contains("8600") || model.contains("AU-520");
+            bool divAllowed = model.contains("6500") || model.contains("6600")
+                           || model.contains("6700") || model.contains("8600")
+                           || model.contains("AU-520");
             // Set diversity allowed on all existing VFO widgets
             if (auto* vfo = spectrum()->vfoWidget())
                 vfo->setDiversityAllowed(divAllowed);
@@ -3964,6 +4011,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!m_wsjtxClient->isListening())
                     QMetaObject::invokeMethod(m_wsjtxClient, [=] { m_wsjtxClient->startListening(wAddr, wPort); });
             }
+            // Auto-start SpotCollector listener if enabled
+            if (cs.value("SpotCollectorAutoStart", "False").toString() == "True") {
+                quint16 scPort = static_cast<quint16>(cs.value("SpotCollectorPort", 9999).toInt());
+                if (!m_spotCollectorClient->isListening())
+                    QMetaObject::invokeMethod(m_spotCollectorClient, [=] { m_spotCollectorClient->startListening(scPort); });
+            }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {
                 int pInterval = cs.value("PotaPollInterval", 30).toInt();
@@ -3982,6 +4035,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->disconnect(); });
         QMetaObject::invokeMethod(m_rbnClient, [=] { m_rbnClient->disconnect(); });
         QMetaObject::invokeMethod(m_wsjtxClient, [=] { m_wsjtxClient->stopListening(); });
+        QMetaObject::invokeMethod(m_spotCollectorClient, [=] { m_spotCollectorClient->stopListening(); });
         QMetaObject::invokeMethod(m_potaClient, [=] { m_potaClient->stopPolling(); });
 #ifdef HAVE_WEBSOCKETS
         QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); });
@@ -4175,7 +4229,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
             if (sl) {
                 bool isCw = (sl->mode() == "CW" || sl->mode() == "CWL");
                 bool decodeOn = settings.value("CwDecodeOverlay", "True").toString() == "True";
-                if (m_panApplet) m_panApplet->setCwPanelVisible(isCw && decodeOn);
+                if (m_cwDecoderApplet) m_cwDecoderApplet->setCwPanelVisible(isCw && decodeOn);
                 if (isCw && !m_cwDecoder.isRunning())
                     m_cwDecoder.start();
             }
@@ -4260,7 +4314,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_antennaGenius.setRadioFrequency(s->frequency());
 
     connect(s, &SliceModel::filterChanged, this, [this, s](int lo, int hi) {
-        spectrumForSlice(s)->setSliceOverlay(s->sliceId(), s->frequency(),
+        auto* sw = spectrumForSlice(s);
+        // Skip overlay update while user is dragging a filter edge — the radio's
+        // status echo would overwrite the drag position, causing snap-to-zero (#764)
+        if (sw->isDraggingFilter()) return;
+        sw->setSliceOverlay(s->sliceId(), s->frequency(),
             lo, hi, s->isTxSlice(), s->sliceId() == m_activeSliceId,
             s->mode(), s->rttyMark(), s->rttyShift(),
             s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq());
@@ -4305,7 +4363,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         if (s->sliceId() == m_activeSliceId) {
             bool isCw = (mode == "CW" || mode == "CWL");
             bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
-            if (m_panApplet) m_panApplet->setCwPanelVisible(isCw && decodeOn);
+            if (m_cwDecoderApplet) m_cwDecoderApplet->setCwPanelVisible(isCw && decodeOn);
             if (isCw && !m_cwDecoder.isRunning())
                 m_cwDecoder.start();
             else if (!isCw && m_cwDecoder.isRunning())
@@ -4367,8 +4425,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Show DIV button on dual-SCU radios
     {
         const QString& model = m_radioModel.model();
-        bool divAllowed = model.contains("6600") || model.contains("6700")
-                       || model.contains("8600") || model.contains("AU-520");
+        bool divAllowed = model.contains("6500") || model.contains("6600")
+                       || model.contains("6700") || model.contains("8600")
+                       || model.contains("AU-520");
         vfo->setDiversityAllowed(divAllowed);
     }
 
@@ -4566,10 +4625,13 @@ void MainWindow::setActiveSlice(int sliceId)
     // Update filter limits for the active slice's mode
     updateFilterLimitsForMode(s->mode());
 
+    // Route CW decoder output to the pan owning this slice (#864)
+    routeCwDecoderOutput();
+
     // Show/hide CW decode panel for the active slice's current mode
     bool isCw = (s->mode() == "CW" || s->mode() == "CWL");
     bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
-    if (m_panApplet) m_panApplet->setCwPanelVisible(isCw && decodeOn);
+    if (m_cwDecoderApplet) m_cwDecoderApplet->setCwPanelVisible(isCw && decodeOn);
     if (isCw && !m_cwDecoder.isRunning())
         m_cwDecoder.start();
     else if (!isCw && m_cwDecoder.isRunning())
@@ -4667,36 +4729,55 @@ void MainWindow::updateSplitState()
 void MainWindow::setActivePanApplet(PanadapterApplet* applet)
 {
     if (applet == m_panApplet) return;
+    m_panApplet = applet;
 
-    // Disconnect CW decoder from old applet (QPointer guards against destroyed widget)
-    if (m_panApplet) {
+    // Re-route CW decoder output: the active slice may now belong to this pan
+    routeCwDecoderOutput();
+}
+
+// Route CW decoder text/stats output to the pan that owns the active slice,
+// so decoded text appears in the correct pan's CW widget (#864).
+void MainWindow::routeCwDecoderOutput()
+{
+    // Determine which applet should receive CW decoder output:
+    // the pan that owns the active audio slice (whose audio feeds the decoder).
+    PanadapterApplet* target = nullptr;
+    if (auto* s = activeSlice(); s && m_panStack && !s->panId().isEmpty())
+        target = m_panStack->panadapter(s->panId());
+    if (!target)
+        target = m_panApplet;  // fallback to active pan
+
+    if (target == m_cwDecoderApplet) return;
+
+    // Disconnect from old applet
+    if (m_cwDecoderApplet) {
         disconnect(&m_cwDecoder, &CwDecoder::textDecoded,
-                   m_panApplet, &PanadapterApplet::appendCwText);
+                   m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         disconnect(&m_cwDecoder, &CwDecoder::statsUpdated,
-                   m_panApplet, &PanadapterApplet::setCwStats);
-        if (auto* pb = m_panApplet->lockPitchButton())
+                   m_cwDecoderApplet, &PanadapterApplet::setCwStats);
+        if (auto* pb = m_cwDecoderApplet->lockPitchButton())
             disconnect(pb, &QPushButton::toggled,
                        &m_cwDecoder, &CwDecoder::lockPitch);
-        if (auto* sb = m_panApplet->lockSpeedButton())
+        if (auto* sb = m_cwDecoderApplet->lockSpeedButton())
             disconnect(sb, &QPushButton::toggled,
                        &m_cwDecoder, &CwDecoder::lockSpeed);
-        disconnect(m_panApplet, &PanadapterApplet::pitchRangeChanged,
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                    &m_cwDecoder, &CwDecoder::setPitchRange);
     }
 
-    m_panApplet = applet;
+    m_cwDecoderApplet = target;
 
-    // Reconnect CW decoder to new applet
-    if (m_panApplet) {
+    // Connect to new applet
+    if (m_cwDecoderApplet) {
         connect(&m_cwDecoder, &CwDecoder::textDecoded,
-                m_panApplet, &PanadapterApplet::appendCwText);
+                m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         connect(&m_cwDecoder, &CwDecoder::statsUpdated,
-                m_panApplet, &PanadapterApplet::setCwStats);
-        connect(m_panApplet->lockPitchButton(), &QPushButton::toggled,
+                m_cwDecoderApplet, &PanadapterApplet::setCwStats);
+        connect(m_cwDecoderApplet->lockPitchButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwDecoder::lockPitch);
-        connect(m_panApplet->lockSpeedButton(), &QPushButton::toggled,
+        connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwDecoder::lockSpeed);
-        connect(m_panApplet, &PanadapterApplet::pitchRangeChanged,
+        connect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
                 &m_cwDecoder, &CwDecoder::setPitchRange);
     }
 }

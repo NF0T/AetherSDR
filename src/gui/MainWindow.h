@@ -15,6 +15,7 @@
 #include "core/CwDecoder.h"
 #include "core/DxClusterClient.h"
 #include "core/WsjtxClient.h"
+#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
@@ -110,6 +111,7 @@ private:
     void disableSplit();
     void wirePanadapter(PanadapterApplet* applet);
     void setActivePanApplet(PanadapterApplet* applet);
+    void routeCwDecoderOutput();  // wire CW decoder to the pan owning the active slice
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
     void enableNr2WithWisdom();  // Wisdom-gated NR2 enable (shared by VFO + overlay)
@@ -156,6 +158,7 @@ private:
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
     WsjtxClient*       m_wsjtxClient{nullptr};
+    SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*        m_potaClient{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -177,7 +180,7 @@ private:
     SerialPortController* m_serialPort{nullptr};
     FlexControlManager*   m_flexControl{nullptr};
     QTimer               m_flexCoalesceTimer;
-    int                  m_flexPendingSteps{0};
+    double               m_flexTargetMhz{-1.0};
 #endif
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
@@ -209,6 +212,7 @@ private:
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
+    QPointer<PanadapterApplet> m_cwDecoderApplet;  // applet receiving CW decoder output
 
     // GUI — right applet panel
     AppletPanel*     m_appletPanel{nullptr};

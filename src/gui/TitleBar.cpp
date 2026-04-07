@@ -15,6 +15,7 @@
 #include <QClipboard>
 #include <QApplication>
 #include <QTimer>
+#include <QMenu>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -42,6 +43,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_heartbeat->setStyleSheet(
         "QLabel { background: #404858; border-radius: 5px; }");
     m_heartbeat->setToolTip("Radio discovery heartbeat");
+    m_heartbeat->setAccessibleName("Radio heartbeat");
+    m_heartbeat->setAccessibleDescription("Flashes green when radio discovery packets are received");
 
     // 100ms timer to return green flash back to grey
     m_heartbeatOffTimer = new QTimer(this);
@@ -60,6 +63,29 @@ TitleBar::TitleBar(QWidget* parent)
         m_heartbeat->setStyleSheet(m_alarmRed
             ? "QLabel { background: #cc2020; border-radius: 5px; }"
             : "QLabel { background: #404858; border-radius: 5px; }");
+    });
+
+    // Load persisted blink preference (default: enabled)
+    m_blinkEnabled = AppSettings::instance()
+        .value("HeartbeatBlinkEnabled", "True").toString() == "True";
+
+    // Right-click on the indicator to toggle blink on/off without opening a menu
+    m_heartbeat->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_heartbeat, &QWidget::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        // Heap-allocate with WA_DeleteOnClose so the menu outlives this lambda.
+        // Use popup() not exec() — exec() creates a nested event loop which can
+        // allow network/connection events to be processed out of order while the
+        // menu is open. popup() is non-blocking and safe during connection setup.
+        QMenu* menu = new QMenu(this);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        QAction* blinkAction = menu->addAction("Blink status indicator");
+        blinkAction->setCheckable(true);
+        blinkAction->setChecked(m_blinkEnabled);
+        connect(blinkAction, &QAction::triggered, this, [this](bool checked) {
+            setBlinkEnabled(checked);
+        });
+        menu->popup(m_heartbeat->mapToGlobal(pos));
     });
 
     // On Linux/Windows the menu bar occupies the left side, so add a stretch
@@ -86,6 +112,7 @@ TitleBar::TitleBar(QWidget* parent)
         "QPushButton:hover { background: rgba(32, 192, 96, 30); }");
     m_mfBtn->setVisible(false);
     m_mfBtn->setCursor(Qt::PointingHandCursor);
+    m_mfBtn->setAccessibleName("multiFLEX status");
     connect(m_mfBtn, &QPushButton::clicked, this, &TitleBar::multiFlexClicked);
     m_hbox->addWidget(m_mfBtn);
 
@@ -116,6 +143,8 @@ TitleBar::TitleBar(QWidget* parent)
 
     bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
     m_pcBtn->setChecked(pcOn);
+    m_pcBtn->setAccessibleName("PC Audio");
+    m_pcBtn->setAccessibleDescription("Toggle PC audio input for microphone");
 
     auto updatePcStyle = [this]() {
         m_pcBtn->setStyleSheet(m_pcBtn->isChecked()
@@ -147,6 +176,8 @@ TitleBar::TitleBar(QWidget* parent)
         "QPushButton { background: transparent; border: none; font-size: 14px; padding: 0; }"
         "QPushButton:checked { opacity: 0.4; }");
     m_speakerBtn->setToolTip("Click to mute/unmute line out");
+    m_speakerBtn->setAccessibleName("Line out mute");
+    m_speakerBtn->setAccessibleDescription("Mute or unmute line out speaker audio");
     connect(m_speakerBtn, &QPushButton::toggled, this, [this](bool muted) {
         m_speakerBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x94\x8A");  // 🔇 / 🔊
         emit lineoutMuteChanged(muted);
@@ -159,6 +190,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_masterSlider->setValue(savedVol);
     m_masterSlider->setFixedWidth(80);
     m_masterSlider->setFixedHeight(16);
+    m_masterSlider->setAccessibleName("Master volume");
+    m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
     m_masterSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: #00b4d8; width: 10px; margin: -3px 0; border-radius: 5px; }"
@@ -186,6 +219,8 @@ TitleBar::TitleBar(QWidget* parent)
         "QPushButton { background: transparent; border: none; font-size: 14px; padding: 0; }"
         "QPushButton:checked { opacity: 0.4; }");
     m_headphoneBtn->setToolTip("Click to mute/unmute headphones");
+    m_headphoneBtn->setAccessibleName("Headphone mute");
+    m_headphoneBtn->setAccessibleDescription("Mute or unmute headphone audio");
     connect(m_headphoneBtn, &QPushButton::toggled, this, [this](bool muted) {
         m_headphoneBtn->setText(muted ? "\xF0\x9F\x94\x87" : "\xF0\x9F\x8E\xA7");  // 🔇 / 🎧
         emit headphoneMuteChanged(muted);
@@ -197,6 +232,8 @@ TitleBar::TitleBar(QWidget* parent)
     m_hpSlider->setValue(50);
     m_hpSlider->setFixedWidth(80);
     m_hpSlider->setFixedHeight(16);
+    m_hpSlider->setAccessibleName("Headphone volume");
+    m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
     m_hpSlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: #00b4d8; width: 10px; margin: -3px 0; border-radius: 5px; }"
@@ -220,6 +257,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_minimalBtn = new QPushButton("\xe2\x86\x99");  // ↙ U+2199
     m_minimalBtn->setFixedSize(28, 28);
     m_minimalBtn->setToolTip("Minimal Mode (Ctrl+M)");
+    m_minimalBtn->setAccessibleName("Minimal mode");
     m_minimalBtn->setStyleSheet(
         "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050; "
         "border-radius: 4px; font-size: 18px; padding: 0; }"
@@ -232,6 +270,7 @@ TitleBar::TitleBar(QWidget* parent)
     auto* featureBtn = m_featureBtn;
     featureBtn->setFixedSize(28, 28);
     featureBtn->setToolTip("Submit a feature request");
+    featureBtn->setAccessibleName("Feature request");
     featureBtn->setStyleSheet(
         "QPushButton { background: #3a2a00; color: #ffd060; border: 1px solid #806020; "
         "border-radius: 4px; font-size: 20px; padding: 0; }"
@@ -491,14 +530,37 @@ void TitleBar::showFeatureRequestDialogImpl()
     dlg->show();
 }
 
+void TitleBar::setDiscovering(bool active)
+{
+    m_discovering = active;
+    if (active) {
+        // Solid amber — discovery in progress, no connection yet
+        m_heartbeatOffTimer->stop();
+        m_heartbeatAlarmTimer->stop();
+        m_heartbeat->setStyleSheet(
+            "QLabel { background: #e0a020; border-radius: 5px; }");
+        m_heartbeat->setToolTip("Searching for radio…");
+    } else {
+        m_heartbeat->setToolTip("Radio discovery heartbeat");
+        // Return to idle gray — onHeartbeat() will take over once pings arrive
+        m_heartbeat->setStyleSheet(
+            "QLabel { background: #404858; border-radius: 5px; }");
+    }
+}
+
 void TitleBar::onHeartbeat()
 {
+    m_discovering = false;
     m_missedBeats = 0;
     m_heartbeatAlarmTimer->stop();
     m_alarmRed = false;
+    m_heartbeat->setToolTip("Radio discovery heartbeat");
     m_heartbeat->setStyleSheet(
         "QLabel { background: #20c060; border-radius: 5px; }");
-    m_heartbeatOffTimer->start();
+    if (m_blinkEnabled) {
+        m_heartbeatOffTimer->start();  // flash green → gray after 100ms
+    }
+    // When blink is off: stays static green — no timer, no animation
 }
 
 void TitleBar::onHeartbeatLost()
@@ -506,7 +568,50 @@ void TitleBar::onHeartbeatLost()
     m_missedBeats++;
     if (m_missedBeats >= 3 && !m_heartbeatAlarmTimer->isActive()) {
         m_heartbeatOffTimer->stop();
-        m_heartbeatAlarmTimer->start();
+        if (m_blinkEnabled) {
+            m_heartbeatAlarmTimer->start();  // blinking red ↔ gray every 500ms
+        } else {
+            // Static red — alarm timer is NEVER started.
+            // Indicator stays red until the next successful ping restores connection.
+            // This is intentional and safety-critical: contest operators must see
+            // connection loss clearly, even with blink disabled.
+            m_alarmRed = true;
+            m_heartbeat->setStyleSheet(
+                "QLabel { background: #cc2020; border-radius: 5px; }");
+        }
+    }
+}
+
+void TitleBar::setBlinkEnabled(bool enabled)
+{
+    if (m_blinkEnabled == enabled) return;
+    m_blinkEnabled = enabled;
+    AppSettings::instance().setValue("HeartbeatBlinkEnabled", enabled ? "True" : "False");
+    AppSettings::instance().save();
+    emit blinkEnabledChanged(enabled);
+
+    if (enabled) {
+        // Resume alarm blink immediately if currently in alarm state (m_missedBeats >= 3).
+        // Without this, re-enabling blink while connection is lost leaves the indicator
+        // static red until the next onHeartbeatLost() call increments the counter again.
+        if (m_missedBeats >= 3 && !m_heartbeatAlarmTimer->isActive()) {
+            m_heartbeatAlarmTimer->start();
+        }
+        return;
+    }
+
+    // Immediately reconcile mid-session: stop any active animation and freeze state
+    if (m_heartbeatAlarmTimer->isActive()) {
+        // Was blinking red — freeze to solid red (connection lost)
+        m_heartbeatAlarmTimer->stop();
+        m_alarmRed = true;
+        m_heartbeat->setStyleSheet(
+            "QLabel { background: #cc2020; border-radius: 5px; }");
+    } else if (m_heartbeatOffTimer->isActive()) {
+        // Was mid green-flash — freeze to solid green (connected)
+        m_heartbeatOffTimer->stop();
+        m_heartbeat->setStyleSheet(
+            "QLabel { background: #20c060; border-radius: 5px; }");
     }
 }
 

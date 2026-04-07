@@ -25,9 +25,11 @@ public:
     void setHeadphoneVolume(int pct);
     void setOtherClientTx(bool transmitting, const QString& station);
     void setMultiFlexStatus(int clientCount, const QStringList& names);
-    void onHeartbeat();     // Call when a discovery packet arrives
-    void onHeartbeatLost(); // Call when radio lost from discovery
+    void onHeartbeat();       // Call when a discovery packet arrives
+    void onHeartbeatLost();   // Call when radio lost from discovery
+    void setDiscovering(bool active); // Solid amber while discovering / not yet connected
     void setMinimalMode(bool on);
+    void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
 
 signals:
     void pcAudioToggled(bool on);
@@ -37,6 +39,9 @@ signals:
     void headphoneMuteChanged(bool muted);
     void minimalModeRequested();
     void multiFlexClicked();
+    // Emitted when the blink setting changes (e.g. via right-click) so the
+    // View menu checkbox can stay in sync.
+    void blinkEnabledChanged(bool enabled);
 
 private:
     void showFeatureRequestDialog();
@@ -58,10 +63,12 @@ private:
 
     // Heartbeat indicator
     QLabel*      m_heartbeat{nullptr};
-    QTimer*      m_heartbeatOffTimer{nullptr};  // 100ms green→grey
+    QTimer*      m_heartbeatOffTimer{nullptr};   // 100ms green→grey
     QTimer*      m_heartbeatAlarmTimer{nullptr}; // 500ms red/grey blink
     int          m_missedBeats{0};
     bool         m_alarmRed{false};
+    bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
+    bool         m_discovering{false};  // solid amber while waiting for connection
 };
 
 } // namespace AetherSDR

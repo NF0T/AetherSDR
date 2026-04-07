@@ -8,6 +8,7 @@
 #include "core/DxClusterClient.h"
 #include "core/DxccColorProvider.h"
 #include "core/WsjtxClient.h"
+#include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
@@ -80,7 +81,8 @@ class DxClusterDialog : public QDialog {
 
 public:
     explicit DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
-                             WsjtxClient* wsjtxClient, PotaClient* potaClient,
+                             WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
+                             PotaClient* potaClient,
 #ifdef HAVE_WEBSOCKETS
                              FreeDvClient* freedvClient,
 #endif
@@ -98,6 +100,8 @@ signals:
     void rbnDisconnectRequested();
     void wsjtxStartRequested(const QString& address, quint16 port);
     void wsjtxStopRequested();
+    void spotCollectorStartRequested(quint16 port);
+    void spotCollectorStopRequested();
     void potaStartRequested(int intervalSec);
     void potaStopRequested();
 #ifdef HAVE_WEBSOCKETS
@@ -113,6 +117,7 @@ private:
     void buildClusterTab(QTabWidget* tabs);
     void buildRbnTab(QTabWidget* tabs);
     void buildWsjtxTab(QTabWidget* tabs);
+    void buildSpotCollectorTab(QTabWidget* tabs);
     void buildPotaTab(QTabWidget* tabs);
 #ifdef HAVE_WEBSOCKETS
     void buildFreeDvTab(QTabWidget* tabs);
@@ -123,10 +128,11 @@ private:
                       const QString& wsjtxLog, const QString& potaLog,
                       const QString& freedvLog = {});
 
-    DxClusterClient* m_client;
-    DxClusterClient* m_rbnClient;
-    WsjtxClient*     m_wsjtxClient;
-    PotaClient*      m_potaClient;
+    DxClusterClient*      m_client;
+    DxClusterClient*      m_rbnClient;
+    WsjtxClient*          m_wsjtxClient;
+    SpotCollectorClient*  m_spotCollectorClient;
+    PotaClient*           m_potaClient;
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*    m_freedvClient;
 #endif
@@ -164,6 +170,13 @@ private:
     QCheckBox*      m_wsjtxFilterCQ;
     QCheckBox*      m_wsjtxFilterPOTA;
     QCheckBox*      m_wsjtxFilterCallingMe;
+
+    // SpotCollector tab
+    QSpinBox*       m_scPortSpin;
+    QPushButton*    m_scStartBtn;
+    QPushButton*    m_scAutoStartBtn;
+    QLabel*         m_scStatusLabel;
+    QPlainTextEdit* m_scConsole;
 
     // POTA tab
     QSpinBox*       m_potaIntervalSpin;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(AetherSDR VERSION 0.8.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 0.8.5 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -296,6 +296,7 @@ set(CORE_SOURCES
     src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
+    src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
     src/core/RigctlServer.cpp
     src/core/TciServer.cpp
@@ -371,6 +372,7 @@ set(GUI_SOURCES
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
+    src/gui/FloatingAppletWindow.cpp
     src/gui/RxApplet.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/SMeterWidget.cpp
@@ -562,14 +564,30 @@ else()
     target_link_libraries(AetherSDR PRIVATE asound)
 endif()
 
-# hidapi — USB HID encoder support (Icom RC-28, Griffin PowerMate, Contour Shuttle)
-if(PkgConfig_FOUND)
-    pkg_check_modules(HIDAPI hidapi-hidraw)
-    if(NOT HIDAPI_FOUND)
-        pkg_check_modules(HIDAPI hidapi-libusb)
+# hidapi — USB HID encoder support (Stream Deck, Icom RC-28, Griffin PowerMate, Contour Shuttle)
+# Windows: run setup-hidapi.ps1 first to download and build hidapi
+# Linux:   apt install libhidapi-dev
+# macOS:   brew install hidapi
+if(WIN32)
+    set(HIDAPI_ROOT "${CMAKE_SOURCE_DIR}/third_party/hidapi")
+    if(EXISTS "${HIDAPI_ROOT}/include/hidapi/hidapi.h")
+        set(HIDAPI_FOUND TRUE)
+        set(HIDAPI_INCLUDE_DIRS "${HIDAPI_ROOT}/include")
+        set(HIDAPI_LIBRARIES "${HIDAPI_ROOT}/lib/hidapi.lib")
+        set(HIDAPI_DLL "${HIDAPI_ROOT}/bin/hidapi.dll")
+    else()
+        message(WARNING "hidapi not found. Run setup-hidapi.ps1 to download it. "
+                        "USB HID device support (Stream Deck, etc.) will be disabled.")
     endif()
-    if(NOT HIDAPI_FOUND)
-        pkg_check_modules(HIDAPI hidapi)
+else()
+    if(PkgConfig_FOUND)
+        pkg_check_modules(HIDAPI hidapi-hidraw)
+        if(NOT HIDAPI_FOUND)
+            pkg_check_modules(HIDAPI hidapi-libusb)
+        endif()
+        if(NOT HIDAPI_FOUND)
+            pkg_check_modules(HIDAPI hidapi)
+        endif()
     endif()
 endif()
 if(HIDAPI_FOUND)
@@ -595,6 +613,14 @@ if(HIDAPI_FOUND)
     list(REMOVE_DUPLICATES HIDAPI_NORMALIZED_INCLUDE_DIRS)
     target_include_directories(AetherSDR PRIVATE ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
     target_link_libraries(AetherSDR PRIVATE ${HIDAPI_LIBRARIES})
+    # Copy DLL to build dir on Windows
+    if(WIN32 AND HIDAPI_DLL)
+        add_custom_command(TARGET AetherSDR POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HIDAPI_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
+            COMMENT "Copying hidapi.dll to build directory"
+        )
+    endif()
 else()
     message(STATUS "hidapi not found — USB HID encoder support disabled")
 endif()

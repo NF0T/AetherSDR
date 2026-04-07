@@ -5,11 +5,14 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QComboBox>
+#include <QLineEdit>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QSignalBlocker>
+#include <QHostAddress>
 #include <QDebug>
+#include "core/AppSettings.h"
 
 namespace AetherSDR {
 
@@ -95,6 +98,34 @@ void AntennaGeniusApplet::buildUI()
     m_statusLabel->setStyleSheet("color: #606878; font-size: 10px;");
     m_statusLabel->setAlignment(Qt::AlignCenter);
     vbox->addWidget(m_statusLabel);
+
+    // ── Manual IP entry (for remote connections) ───────────────────────────
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(4);
+
+        auto* label = new QLabel("Manual IP:");
+        label->setStyleSheet(kLabelStyle);
+        row->addWidget(label);
+
+        m_manualIpEdit = new QLineEdit;
+        m_manualIpEdit->setStyleSheet(
+            "QLineEdit { background: #1a2a3a; border: 1px solid #203040; "
+            "border-radius: 3px; padding: 2px 4px; color: #c8d8e8; font-size: 10px; }");
+        m_manualIpEdit->setPlaceholderText("IP address");
+        m_manualIpEdit->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_manualIpEdit->setMinimumWidth(0);
+
+        // Restore last-used manual IP from settings.
+        auto& settings = AppSettings::instance();
+        QString savedIp = settings.value("AG_ManualIp", "").toString();
+        if (!savedIp.isEmpty())
+            m_manualIpEdit->setText(savedIp);
+
+        row->addWidget(m_manualIpEdit, 1);
+
+        vbox->addLayout(row);
+    }
 
     // ── Port A section ──────────────────────────────────────────────────────
     m_portASection = new QWidget;
@@ -201,8 +232,16 @@ void AntennaGeniusApplet::buildUI()
             auto devices = m_model->discoveredDevices();
             if (idx >= 0 && idx < devices.size()) {
                 m_model->connectToDevice(devices[idx]);
+            } else {
+                // No discovered device selected — try manual IP.
+                tryManualConnect();
             }
         }
+    });
+
+    // Manual IP: pressing Enter triggers connect.
+    connect(m_manualIpEdit, &QLineEdit::returnPressed, this, [this]() {
+        tryManualConnect();
     });
 
     // Port A AUTO toggle
@@ -219,6 +258,21 @@ void AntennaGeniusApplet::buildUI()
 
 }
 
+
+void AntennaGeniusApplet::tryManualConnect()
+{
+    if (!m_model || m_model->isConnected()) return;
+    QString ip = m_manualIpEdit->text().trimmed();
+    if (ip.isEmpty()) return;
+    QHostAddress addr(ip);
+    if (addr.isNull()) {
+        m_statusLabel->setText("Invalid IP address");
+        m_statusLabel->setStyleSheet("QLabel { color: #ff4444; font-size: 10px; }");
+        return;
+    }
+    AppSettings::instance().setValue("AG_ManualIp", ip);
+    m_model->connectToAddress(addr, 9007);
+}
 
 void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
 {

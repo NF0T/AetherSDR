@@ -69,11 +69,15 @@ void TxApplet::buildUI()
     // ── Forward Power gauge (0–120 W, red > 100 W) ─────────────────────────
     m_fwdGauge = new HGauge(0.0f, 120.0f, 100.0f, "RF Pwr", "W",
         {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
+    m_fwdGauge->setAccessibleName("Forward power gauge");
+    m_fwdGauge->setAccessibleDescription("RF forward power in watts");
     vbox->addWidget(m_fwdGauge);
 
     // ── SWR gauge (1.0–3.0, red > 2.5) ─────────────────────────────────────
     m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}});
+    m_swrGauge->setAccessibleName("SWR gauge");
+    m_swrGauge->setAccessibleDescription("Standing wave ratio");
     vbox->addWidget(m_swrGauge);
 
     // ── RF Power slider ─────────────────────────────────────────────────────
@@ -88,6 +92,8 @@ void TxApplet::buildUI()
         m_rfPowerSlider = new GuardedSlider(Qt::Horizontal);
         m_rfPowerSlider->setRange(0, 100);
         m_rfPowerSlider->setStyleSheet(kSliderStyle);
+        m_rfPowerSlider->setAccessibleName("RF power");
+        m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 watts");
         row->addWidget(m_rfPowerSlider, 1);
 
         m_rfPowerLabel = new QLabel("100");
@@ -110,6 +116,8 @@ void TxApplet::buildUI()
         m_tunePowerSlider = new GuardedSlider(Qt::Horizontal);
         m_tunePowerSlider->setRange(0, 100);
         m_tunePowerSlider->setStyleSheet(kSliderStyle);
+        m_tunePowerSlider->setAccessibleName("Tune power");
+        m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 watts");
         row->addWidget(m_tunePowerSlider, 1);
 
         m_tunePowerLabel = new QLabel("10");
@@ -128,6 +136,8 @@ void TxApplet::buildUI()
         m_profileCombo = new GuardedComboBox;
         AetherSDR::applyComboStyle(m_profileCombo);
         m_profileCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        m_profileCombo->setAccessibleName("TX profile");
+        m_profileCombo->setAccessibleDescription("Select transmit profile");
         row->addWidget(m_profileCombo, 1);  // 1 out of 2 = 50%
 
         m_successInd = makeIndicator("Success");
@@ -159,6 +169,8 @@ void TxApplet::buildUI()
         m_tuneBtn->setStyleSheet(btnStyle);
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_tuneBtn->setFixedHeight(22);
+        m_tuneBtn->setAccessibleName("Tune");
+        m_tuneBtn->setAccessibleDescription("Start or stop tune carrier");
         row->addWidget(m_tuneBtn);
 
         m_moxBtn = new QPushButton("MOX");
@@ -166,12 +178,16 @@ void TxApplet::buildUI()
         m_moxBtn->setCheckable(true);
         m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_moxBtn->setFixedHeight(22);
+        m_moxBtn->setAccessibleName("MOX transmit");
+        m_moxBtn->setAccessibleDescription("Toggle manual transmit on or off");
         row->addWidget(m_moxBtn);
 
         m_atuBtn = new QPushButton("ATU");
         m_atuBtn->setStyleSheet(btnStyle);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);
+        m_atuBtn->setAccessibleName("ATU tune");
+        m_atuBtn->setAccessibleDescription("Start automatic antenna tuner");
         row->addWidget(m_atuBtn);
 
         m_memBtn = new QPushButton("MEM");
@@ -179,6 +195,8 @@ void TxApplet::buildUI()
         m_memBtn->setCheckable(true);
         m_memBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_memBtn->setFixedHeight(22);
+        m_memBtn->setAccessibleName("ATU memories");
+        m_memBtn->setAccessibleDescription("Toggle ATU memory recall");
         row->addWidget(m_memBtn);
 
         vbox->addLayout(row);
@@ -192,6 +210,8 @@ void TxApplet::buildUI()
         m_apdBtn = new QPushButton("APD");
         m_apdBtn->setCheckable(true);
         m_apdBtn->setFixedHeight(22);
+        m_apdBtn->setAccessibleName("APD pre-distortion");
+        m_apdBtn->setAccessibleDescription("Toggle adaptive pre-distortion");
         m_apdBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_apdBtn->setStyleSheet(
             "QPushButton { background: #1a3a5a; border: 1px solid #205070; "

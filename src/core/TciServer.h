@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QList>
+#include <memory>
 
 class QWebSocketServer;
 class QWebSocket;
@@ -59,8 +60,10 @@ private:
     void sendInitBurst(QWebSocket* client);
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
+    void startTxChrono(QWebSocket* client, int trx);
+    void stopTxChrono();
 
-    // Build a TCI binary audio frame (36-byte header + float32 samples)
+    // Build a TCI binary audio frame (64-byte header + float32 samples)
     static QByteArray buildAudioFrame(int receiver, int type,
                                       int sampleRate, int channels,
                                       const float* samples, int sampleCount);
@@ -69,7 +72,7 @@ private:
         QWebSocket*  socket{nullptr};
         TciProtocol* protocol{nullptr};
         bool         audioEnabled{false};   // client sent AUDIO_START
-        int          audioSampleRate{24000}; // requested output rate
+        int          audioSampleRate{48000}; // requested output rate (48kHz for WSJT-X compat)
         int          audioChannels{2};       // 1=mono, 2=stereo
         int          audioFormat{3};         // 0=int16, 3=float32
         Resampler*   resampler{nullptr};    // null if rate == 24000 (native)
@@ -82,6 +85,10 @@ private:
     QWebSocketServer* m_server{nullptr};
     QList<ClientState> m_clients;
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
+    QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
+    QWebSocket*       m_txChronoClient{nullptr};
+    int               m_txChronoTrx{0};
+    std::unique_ptr<Resampler> m_txResampler; // 48kHz→24kHz TX downsampler
     bool              m_lastTx{false};
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};

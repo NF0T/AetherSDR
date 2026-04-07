@@ -133,18 +133,26 @@ QString TciProtocol::generateInitBurst()
 
         // Global TX state
         auto& tx = m_model->transmitModel();
-        burst += QStringLiteral("drive:%1;").arg(tx.rfPower());
-        burst += QStringLiteral("tune_drive:%1;").arg(tx.tunePower());
-
         bool isTx = tx.isTransmitting();
         int txTrx = 0;
         for (auto* s : m_model->slices()) {
             if (s->isTxSlice()) { txTrx = s->sliceId(); break; }
         }
+        // ESDR3 format requires TRX index prefix for drive commands.
+        // Without it, WSJT-X/JTDX crash parsing args.at(1) on a 1-element list.
+        burst += QStringLiteral("drive:%1,%2;").arg(txTrx).arg(tx.rfPower());
+        burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrx).arg(tx.tunePower());
         burst += QStringLiteral("trx:%1,%2;").arg(txTrx).arg(isTx ? "true" : "false");
     }
 
-    burst += QStringLiteral("audio_samplerate:24000;");
+    burst += QStringLiteral("audio_samplerate:48000;");
+    // Stream negotiation — required for WSJT-X to initialize its TCI TX
+    // audio FIFO. Without these, readAudioData() returns all zeros.
+    // Matches Thetis TCI server init burst. — confirmed via Thetis source
+    burst += QStringLiteral("audio_stream_sample_type:float32;");
+    burst += QStringLiteral("audio_stream_channels:2;");
+    burst += QStringLiteral("audio_stream_samples:2048;");
+    burst += QStringLiteral("tx_stream_audio_buffering:50;");
     burst += QStringLiteral("iq_samplerate:48000;");
     burst += QStringLiteral("start;");
     burst += QStringLiteral("ready;");
@@ -352,7 +360,9 @@ QString TciProtocol::cmdTrx(const QStringList& args, bool isSet)
 
     m_pendingNotification = QStringLiteral("trx:%1,%2;")
                                 .arg(trx).arg(tx ? "true" : "false");
-    return {};
+    // Echo confirmation to sender — WSJT-X/JTDX wait for this ack
+    // and report "TCI failed to set ptt" if it never arrives.
+    return QStringLiteral("trx:%1,%2;").arg(trx).arg(tx ? "true" : "false");
 }
 
 // ── TX_ENABLE: assign TX to a TRX (unidirectional) ─────────────────────────

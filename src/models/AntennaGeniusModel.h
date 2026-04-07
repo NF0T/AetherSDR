@@ -85,6 +85,8 @@ public:
 
     // Connect to a specific device (by IP:port from discovery).
     void connectToDevice(const AgDeviceInfo& info);
+    // Connect directly by IP address (for remote/manual connections).
+    void connectToAddress(const QHostAddress& ip, quint16 port);
     void disconnectFromDevice();
 
     // Getters

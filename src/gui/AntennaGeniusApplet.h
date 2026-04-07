@@ -6,6 +6,7 @@
 class QPushButton;
 class QLabel;
 class QComboBox;
+class QLineEdit;
 
 namespace AetherSDR {
 
@@ -30,6 +31,7 @@ public:
 
 private:
     void buildUI();
+    void tryManualConnect();
     void syncFromModel();
     void rebuildAntennaButtons();
     void updatePortDisplay(int portId);
@@ -41,6 +43,9 @@ private:
     QComboBox*   m_deviceCombo{nullptr};
     QPushButton* m_connectBtn{nullptr};
     QLabel*      m_statusLabel{nullptr};
+
+    // Manual IP entry (for remote connections without UDP discovery)
+    QLineEdit*   m_manualIpEdit{nullptr};
 
     // Port A widgets
     QLabel*      m_portABandLabel{nullptr};

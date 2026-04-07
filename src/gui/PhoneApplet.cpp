@@ -114,6 +114,8 @@ void PhoneApplet::buildUI()
 
         m_amCarrierSlider = new GuardedSlider(Qt::Horizontal);
         m_amCarrierSlider->setRange(0, 100);
+        m_amCarrierSlider->setAccessibleName("AM carrier level");
+        m_amCarrierSlider->setAccessibleDescription("AM carrier power level, 0 to 100 percent");
         m_amCarrierSlider->setStyleSheet(kSliderStyle);
         connect(m_amCarrierSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) m_model->setAmCarrierLevel(v);
@@ -141,6 +143,8 @@ void PhoneApplet::buildUI()
         m_voxBtn = new QPushButton("VOX");
         m_voxBtn->setCheckable(true);
         m_voxBtn->setFixedSize(52, 22);
+        m_voxBtn->setAccessibleName("VOX voice-operated transmit");
+        m_voxBtn->setAccessibleDescription("Toggle voice-activated transmit");
         m_voxBtn->setStyleSheet(kBtnBase + kGreenActive);
         connect(m_voxBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_model) m_model->setVoxEnable(on);
@@ -150,6 +154,8 @@ void PhoneApplet::buildUI()
 
         m_voxLevelSlider = new GuardedSlider(Qt::Horizontal);
         m_voxLevelSlider->setRange(0, 100);
+        m_voxLevelSlider->setAccessibleName("VOX level");
+        m_voxLevelSlider->setAccessibleDescription("VOX activation threshold");
         m_voxLevelSlider->setStyleSheet(kSliderStyle);
         connect(m_voxLevelSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) m_model->setVoxLevel(v);
@@ -183,6 +189,8 @@ void PhoneApplet::buildUI()
 
         m_voxDelaySlider = new GuardedSlider(Qt::Horizontal);
         m_voxDelaySlider->setRange(0, 100);
+        m_voxDelaySlider->setAccessibleName("VOX delay");
+        m_voxDelaySlider->setAccessibleDescription("VOX hang time before returning to receive");
         m_voxDelaySlider->setStyleSheet(kSliderStyle);
         connect(m_voxDelaySlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) m_model->setVoxDelay(v);
@@ -213,6 +221,8 @@ void PhoneApplet::buildUI()
         m_dexpBtn = new QPushButton("DEXP");
         m_dexpBtn->setCheckable(true);
         m_dexpBtn->setFixedSize(52, 22);
+        m_dexpBtn->setAccessibleName("Downward expander");
+        m_dexpBtn->setAccessibleDescription("Toggle downward expander noise gate");
         m_dexpBtn->setStyleSheet(kBtnBase + kBlueActive);
         connect(m_dexpBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_model) m_model->setDexp(on);
@@ -222,6 +232,8 @@ void PhoneApplet::buildUI()
 
         m_dexpSlider = new GuardedSlider(Qt::Horizontal);
         m_dexpSlider->setRange(0, 100);
+        m_dexpSlider->setAccessibleName("DEXP threshold");
+        m_dexpSlider->setAccessibleDescription("Downward expander gate threshold");
         m_dexpSlider->setStyleSheet(kSliderStyle);
         connect(m_dexpSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) m_model->setDexpLevel(v);
@@ -263,6 +275,7 @@ void PhoneApplet::buildUI()
         lowRow->addWidget(txLbl);
 
         m_lowCutDown = new PhoneTriBtn(PhoneTriBtn::Left);
+        m_lowCutDown->setAccessibleName("TX low cut decrease");
         auto lowCutDown = [this]() {
             if (m_model) m_model->setTxFilterLow(qMax(0, m_model->txFilterLow() - 50));
         };
@@ -274,6 +287,7 @@ void PhoneApplet::buildUI()
         lowRow->addWidget(m_lowCutDown);
 
         m_lowCutLabel = new ScrollableLabel("50");
+        m_lowCutLabel->setAccessibleName("TX low cut frequency");
         m_lowCutLabel->setFixedWidth(46);
         m_lowCutLabel->setAlignment(Qt::AlignCenter);
         m_lowCutLabel->setStyleSheet(
@@ -286,6 +300,7 @@ void PhoneApplet::buildUI()
         lowRow->addWidget(m_lowCutLabel);
 
         m_lowCutUp = new PhoneTriBtn(PhoneTriBtn::Right);
+        m_lowCutUp->setAccessibleName("TX low cut increase");
         connect(m_lowCutUp, &QPushButton::clicked, this, lowCutUp);
         lowRow->addWidget(m_lowCutUp);
 
@@ -307,6 +322,7 @@ void PhoneApplet::buildUI()
         highRow->setSpacing(2);
 
         m_highCutDown = new PhoneTriBtn(PhoneTriBtn::Left);
+        m_highCutDown->setAccessibleName("TX high cut decrease");
         auto highCutDown = [this]() {
             if (m_model) m_model->setTxFilterHigh(
                 qMax(m_model->txFilterLow() + 50, m_model->txFilterHigh() - 50));
@@ -319,6 +335,7 @@ void PhoneApplet::buildUI()
         highRow->addWidget(m_highCutDown);
 
         m_highCutLabel = new ScrollableLabel("3300");
+        m_highCutLabel->setAccessibleName("TX high cut frequency");
         m_highCutLabel->setFixedWidth(46);
         m_highCutLabel->setAlignment(Qt::AlignCenter);
         m_highCutLabel->setStyleSheet(
@@ -331,6 +348,7 @@ void PhoneApplet::buildUI()
         highRow->addWidget(m_highCutLabel);
 
         m_highCutUp = new PhoneTriBtn(PhoneTriBtn::Right);
+        m_highCutUp->setAccessibleName("TX high cut increase");
         connect(m_highCutUp, &QPushButton::clicked, this, highCutUp);
         highRow->addWidget(m_highCutUp);
 

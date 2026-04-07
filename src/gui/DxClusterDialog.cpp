@@ -228,7 +228,8 @@ bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceP
 // ── DxClusterDialog ─────────────────────────────────────────────────────────
 
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
-                                   WsjtxClient* wsjtxClient, PotaClient* potaClient,
+                                   WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
+                                   PotaClient* potaClient,
 #ifdef HAVE_WEBSOCKETS
                                    FreeDvClient* freedvClient,
 #endif
@@ -236,7 +237,8 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
                                    DxccColorProvider* dxccProvider,
                                    QWidget* parent)
     : QDialog(parent), m_client(clusterClient), m_rbnClient(rbnClient),
-      m_wsjtxClient(wsjtxClient), m_potaClient(potaClient),
+      m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
+      m_potaClient(potaClient),
 #ifdef HAVE_WEBSOCKETS
       m_freedvClient(freedvClient),
 #endif
@@ -260,6 +262,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildClusterTab(tabs);
     buildRbnTab(tabs);
     buildWsjtxTab(tabs);
+    buildSpotCollectorTab(tabs);
     buildPotaTab(tabs);
 #ifdef HAVE_WEBSOCKETS
     buildFreeDvTab(tabs);
@@ -443,6 +446,34 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
 
     // WSJT-X log loaded in deferred loadLogFiles() (#748)
+
+    // ── Live updates from SpotCollector client ───────────────────────
+    connect(spotCollectorClient, &SpotCollectorClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
+        bool follow = isAtBottom(m_scConsole);
+        m_scConsole->appendPlainText(line);
+        if (follow) {
+            auto* sb = m_scConsole->verticalScrollBar();
+            sb->setValue(sb->maximum());
+        }
+    });
+
+    connect(spotCollectorClient, &SpotCollectorClient::spotReceived, this, [this](DxSpot spot) {
+        spot.source = "SpotCollector";
+        m_spotBatch.append(spot);
+    });
+
+    connect(spotCollectorClient, &SpotCollectorClient::listening, this, [this] {
+        m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
+        m_scStatusLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 11px; }");
+        m_scStartBtn->setText("Stop");
+        m_scConsole->appendPlainText("--- Listening ---");
+    });
+    connect(spotCollectorClient, &SpotCollectorClient::stopped, this, [this] {
+        m_scStatusLabel->setText("Stopped");
+        m_scStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+        m_scStartBtn->setText("Start");
+        m_scConsole->appendPlainText("--- Stopped ---");
+    });
 
     // ── Live updates from POTA client ─────────────────────────────────
     connect(potaClient, &PotaClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
@@ -1203,6 +1234,114 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     layout->addWidget(m_wsjtxConsole, 1);
 
     tabs->addTab(page, "WSJT-X");
+}
+
+void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(8);
+
+    auto& s = AppSettings::instance();
+
+    // ── Connection settings ─────────────────────────────────────────────
+    auto* connGroup = new QGroupBox("SpotCollector UDP Listener");
+    auto* connLayout = new QVBoxLayout(connGroup);
+    connLayout->setSpacing(4);
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+
+    grid->addWidget(new QLabel("UDP Port:"), 0, 0);
+    m_scPortSpin = new QSpinBox;
+    m_scPortSpin->setRange(1, 65535);
+    m_scPortSpin->setValue(s.value("SpotCollectorPort", 9999).toInt());
+    m_scPortSpin->setStyleSheet("QSpinBox { background: #1a1a2e; color: #c8d8e8; border: 1px solid #203040; padding: 3px; }");
+    grid->addWidget(m_scPortSpin, 0, 1);
+
+    connLayout->addLayout(grid);
+
+    auto* helpLabel = new QLabel(
+        "Receives DX spots from DXLab SpotCollector via UDP push.\n"
+        "In SpotCollector, enable UDP broadcast to this port (default 9999).\n"
+        "Alternatively, use the DX Cluster tab to connect to SpotCollector's telnet interface.");
+    helpLabel->setWordWrap(true);
+    helpLabel->setStyleSheet("QLabel { color: #607080; font-size: 11px; }");
+    connLayout->addWidget(helpLabel);
+
+    // Button row
+    auto* btnRow = new QHBoxLayout;
+    m_scAutoStartBtn = new QPushButton(
+        s.value("SpotCollectorAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
+    m_scAutoStartBtn->setCheckable(true);
+    m_scAutoStartBtn->setChecked(s.value("SpotCollectorAutoStart", "False").toString() == "True");
+    m_scAutoStartBtn->setStyleSheet(
+        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
+        "QPushButton:!checked { background: #603020; }");
+    connect(m_scAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_scAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
+        auto& s = AppSettings::instance();
+        s.setValue("SpotCollectorAutoStart", on ? "True" : "False");
+        s.save();
+    });
+    btnRow->addWidget(m_scAutoStartBtn);
+    btnRow->addStretch();
+
+    m_scStatusLabel = new QLabel("Stopped");
+    m_scStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+    btnRow->addWidget(m_scStatusLabel);
+    btnRow->addStretch();
+
+    m_scStartBtn = new QPushButton(m_spotCollectorClient->isListening() ? "Stop" : "Start");
+    m_scStartBtn->setFixedWidth(100);
+    m_scStartBtn->setStyleSheet(
+        "QPushButton { background: #00b4d8; color: #0f0f1a; font-weight: bold; "
+        "border: 1px solid #008ba8; padding: 4px; border-radius: 3px; }"
+        "QPushButton:hover { background: #00c8f0; }"
+        "QPushButton:disabled { background: #404060; color: #808080; }");
+    connect(m_scStartBtn, &QPushButton::clicked, this, [this] {
+        if (m_spotCollectorClient->isListening()) {
+            emit spotCollectorStopRequested();
+            return;
+        }
+        quint16 port = static_cast<quint16>(m_scPortSpin->value());
+        auto& s = AppSettings::instance();
+        s.setValue("SpotCollectorPort", port);
+        s.save();
+        emit spotCollectorStartRequested(port);
+    });
+    btnRow->addWidget(m_scStartBtn);
+    connLayout->addLayout(btnRow);
+
+    layout->addWidget(connGroup);
+
+    // ── Console output ──────────────────────────────────────────────────
+    auto* consoleLabel = new QLabel("SpotCollector Spots");
+    consoleLabel->setStyleSheet("QLabel { color: #00b4d8; font-weight: bold; }");
+    layout->addWidget(consoleLabel);
+
+    m_scConsole = new QPlainTextEdit;
+    m_scConsole->setReadOnly(true);
+    m_scConsole->setMaximumBlockCount(2000);
+    m_scConsole->setStyleSheet(
+        "QPlainTextEdit {"
+        "  background: #0a0a14;"
+        "  color: #a0b0c0;"
+        "  font-family: monospace;"
+        "  font-size: 11px;"
+        "  border: 1px solid #203040;"
+        "  padding: 4px;"
+        "}");
+    layout->addWidget(m_scConsole, 1);
+
+    // Update status if already listening
+    if (m_spotCollectorClient->isListening()) {
+        m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
+        m_scStatusLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 11px; }");
+        m_scStartBtn->setText("Stop");
+    }
+
+    tabs->addTab(page, "SpotCollector");
 }
 
 void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
