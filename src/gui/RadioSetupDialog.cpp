@@ -1189,6 +1189,34 @@ QWidget* RadioSetupDialog::buildRxTab()
             : "QLabel { color: #c04040; font-size: 12px; font-weight: bold; }");
         grid->addWidget(lockLbl, 0, 2);
 
+        // Update live when radio oscillator status changes (e.g. external 10MHz
+        // reference plugged/unplugged while dialog is open). Fixes #967.
+        connect(m_model, &RadioModel::infoChanged, this, [this, srcCmb, lockLbl] {
+            // Update lock status label
+            const QString text = m_model->oscState().toUpper()
+                + (m_model->oscLocked() ? " Locked" : " Unlocked");
+            lockLbl->setText(text);
+            lockLbl->setStyleSheet(m_model->oscLocked()
+                ? "QLabel { color: #00c040; font-size: 12px; font-weight: bold; }"
+                : "QLabel { color: #c04040; font-size: 12px; font-weight: bold; }");
+
+            // Re-populate source combo if available sources have changed
+            // (ext_present flips when external 10MHz is plugged/unplugged).
+            // Keep QSignalBlocker alive through setCurrentIndex to prevent
+            // spurious "radio oscillator" commands on every infoChanged().
+            const QString current = srcCmb->currentData().toString();
+            QSignalBlocker blocker(srcCmb);
+            srcCmb->clear();
+            srcCmb->addItem("Auto", "auto");
+            if (m_model->tcxoPresent())  { srcCmb->addItem("TCXO",     "tcxo"); }
+            if (m_model->gpsdoPresent()) { srcCmb->addItem("GPSDO",    "gpsdo"); }
+            if (m_model->extPresent())   { srcCmb->addItem("External", "external"); }
+            // Restore selection — prefer current setting from radio, fall back to prior selection
+            int idx = srcCmb->findData(m_model->oscSetting());
+            if (idx < 0) { idx = srcCmb->findData(current); }
+            if (idx >= 0) { srcCmb->setCurrentIndex(idx); }
+        });
+
         vbox->addWidget(group);
     }
 
