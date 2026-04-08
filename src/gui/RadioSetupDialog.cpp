@@ -12,6 +12,7 @@
 #include "core/FirmwareUploader.h"
 #include "core/FirmwareStager.h"
 
+#include <QCloseEvent>
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>

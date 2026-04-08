@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QDialog>
-#include <QCloseEvent>
 
 class QTabWidget;
 class QLabel;

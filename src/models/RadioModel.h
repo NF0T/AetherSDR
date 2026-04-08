@@ -112,7 +112,6 @@ public:
 
     // License info (populated from "sub license all" responses)
     QString licenseRadioId()        const { return m_licenseRadioId; }
-    QString licenseIssuedDate()     const { return m_licenseIssuedDate; }
     QString licenseExpirationDate() const { return m_licenseExpirationDate; }
     QString licenseMaxVersion()     const { return m_licenseMaxVersion; }
     QString licenseSubscription()   const { return m_licenseSubscription; }
@@ -407,7 +406,6 @@ private:
     QString     m_region;
     QString     m_radioOptions;
     QString     m_licenseRadioId;
-    QString     m_licenseIssuedDate;
     QString     m_licenseExpirationDate;
     QString     m_licenseMaxVersion;
     QString     m_licenseSubscription;   // e.g. "SmartSDR+", "SmartSDR", "Unknown"
