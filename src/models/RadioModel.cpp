@@ -797,15 +797,37 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
         // Always (re)start on connect — re-binds socket and re-registers
         // UDP port with the radio. start() calls stop() internally if needed. (#561)
+        bool streamOk = false;
         if (m_wanConn) {
-            QMetaObject::invokeMethod(m_panStream, [this]() {
-                m_panStream->startWan(QHostAddress(m_wanPublicIp), m_wanUdpPort);
+            QMetaObject::invokeMethod(m_panStream, [this, &streamOk]() {
+                streamOk = m_panStream->startWan(QHostAddress(m_wanPublicIp), m_wanUdpPort);
             }, Qt::BlockingQueuedConnection);
         } else {
-            QMetaObject::invokeMethod(m_panStream, [this]() {
-                m_panStream->start(m_connection);
+            QMetaObject::invokeMethod(m_panStream, [this, &streamOk]() {
+                streamOk = m_panStream->start(m_connection);
             }, Qt::BlockingQueuedConnection);
         }
+
+        if (!streamOk) {
+            qCWarning(lcProtocol) << "RadioModel: UDP stream setup failed — disconnecting gracefully (#894)";
+            emit connectionError(tr("UDP stream setup failed. If connecting over VPN, "
+                                    "ensure UDP port 4991 is routable."));
+            QTimer::singleShot(0, this, &RadioModel::disconnectFromRadio);
+            return;
+        }
+
+        // Schedule a UDP stream health check: if no VITA-49 data arrives
+        // within 10 seconds (e.g. VPN blocks UDP), warn the user. (#894)
+        QTimer::singleShot(10000, this, [this]() {
+            if (!isConnected()) return;
+            if (m_panStream->totalRxBytes() == 0) {
+                qCWarning(lcProtocol) << "RadioModel: no VITA-49 UDP data received after 10s"
+                             << "— possible VPN/firewall blocking UDP (#894)";
+                emit connectionError(tr("No spectrum data received. UDP traffic from the "
+                                        "radio may be blocked by a VPN or firewall. "
+                                        "Ensure UDP port 4991 is routable."));
+            }
+        });
 
         // On WAN: use "client udp_register" via UDP (not TCP "client udpport").
         // The radio only accepts udp_register on WAN connections.
@@ -962,8 +984,10 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                                 }
                             });
 
+                        // Radio always forces Opus for remote_audio_tx regardless of
+                        // what we request (confirmed by protocol testing, v1.4.0.0).
                         sendCmd(
-                            QString("stream create type=remote_audio_tx compression=%1").arg(audioCompressionParam()),
+                            "stream create type=remote_audio_tx compression=opus",
                             [this](int code, const QString& body) {
                                 if (code == 0) {
                                     quint32 id = body.trimmed().toUInt(nullptr, 16);
@@ -1587,6 +1611,47 @@ void RadioModel::onStatusReceived(const QString& object,
         if (object.contains("VOICE"))       { m_filterVoice = level; m_filterVoiceAuto = autoLvl; }
         else if (object.contains("CW"))     { m_filterCw = level; m_filterCwAuto = autoLvl; }
         else if (object.contains("DIGITAL")){ m_filterDigital = level; m_filterDigitalAuto = autoLvl; }
+        emit infoChanged();
+        return;
+    }
+
+    // License info (fw v1.4.0.0): three sub-objects per FlexLib:
+    //   "license"              — radio_id, issued, last_refreshed_date, highest_major_version, region
+    //   "license subscription" — name=smartsdr+|smartsdr+_early_access, expiration=<date>
+    //   "license feature"      — name, enabled, reason (BUILT_IN|LICENSE_FILE|PLUS|EA)
+    if (object == "license" && !kvs.contains("name")) {
+        if (kvs.contains("radio_id")) {
+            m_licenseRadioId = kvs["radio_id"].toUpper();
+        }
+        if (kvs.contains("highest_major_version")) {
+            m_licenseMaxVersion = kvs["highest_major_version"];
+        }
+        // Base subscription is always "SmartSDR" — upgraded by subscription messages
+        if (m_licenseSubscription.isEmpty()) {
+            m_licenseSubscription = "SmartSDR";
+        }
+        emit infoChanged();
+        return;
+    }
+    if (object == "license subscription") {
+        // Per FlexLib: name=smartsdr+ or name=smartsdr+_early_access
+        // with expiration=<ISO-8601 date>
+        QString name = kvs.value("name").toLower();
+        QString expStr = kvs.value("expiration");
+        QDate expDate = QDate::fromString(expStr.left(10), Qt::ISODate);
+        bool active = expDate.isValid() && expDate >= QDate::currentDate();
+        if (name == "smartsdr+_early_access" && active) {
+            m_licenseSubscription = "SmartSDR+ Early Access";
+            m_licenseExpirationDate = expDate.toString("MM/dd/yyyy");
+        } else if (name == "smartsdr+" && active) {
+            m_licenseSubscription = "SmartSDR+";
+            m_licenseExpirationDate = expDate.toString("MM/dd/yyyy");
+        }
+        emit infoChanged();
+        return;
+    }
+    if (object == "license feature") {
+        // Feature-level parsing — not needed for display, but log for debugging
         emit infoChanged();
         return;
     }

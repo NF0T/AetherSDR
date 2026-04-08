@@ -473,13 +473,18 @@ void TransmitModel::setAmCarrierLevel(int level)
 
 void TransmitModel::setDexp(bool on)
 {
-    // DEXP (downward expander / noise gate) — firmware v1.4.0.0
+    // Optimistic update — radio may not echo dexp in incremental status
+    m_dexpOn = on;
+    emit phoneStateChanged();
     emit commandReady(QString("transmit set dexp=%1").arg(on ? 1 : 0));
 }
 
 void TransmitModel::setDexpLevel(int level)
 {
     level = qBound(0, level, 100);
+    // Optimistic update — radio may not echo noise_gate_level in incremental status
+    m_dexpLevel = level;
+    emit phoneStateChanged();
     emit commandReady(QString("transmit set noise_gate_level=%1").arg(level));
 }
 
