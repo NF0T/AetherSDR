@@ -6704,14 +6704,11 @@ void MainWindow::activateRADE(int sliceId)
         audioStartTx(m_radioModel.radioAddress(), 4991);
     }
 
-    // RADE status indicator in VFO widget
-    {
-        SpectrumWidget* sw = spectrum();
-        VfoWidget* vfo = sw ? sw->vfoWidget() : nullptr;
-        qInfo() << "MainWindow: activateRADE — spectrum=" << sw
-                << "vfoWidget=" << vfo
-                << "vfoWidget(sliceId)=" << (sw ? sw->vfoWidget(sliceId) : nullptr);
-        if (vfo) {
+    // RADE status indicator in VFO widget.
+    // Use vfoWidget(sliceId) — the no-arg alias (m_vfoWidget) may be null
+    // if setActiveVfoWidget() hasn't been called yet for this slice.
+    if (auto* sw = spectrum()) {
+        if (auto* vfo = sw->vfoWidget(sliceId)) {
             vfo->setRadeActive(true);
             // Show initial unsynchronised state immediately — syncChanged only fires
             // from feedRxAudio() which requires DAX audio to be flowing first.
@@ -6734,11 +6731,13 @@ void MainWindow::deactivateRADE()
     if (m_radeSliceId >= 0) {
         if (auto* s = m_radioModel.slice(m_radeSliceId))
             s->setAudioMute(m_radePrevMute);
+        // Clear RADE status label before resetting sliceId
+        if (auto* sw = spectrum()) {
+            if (auto* vfo = sw->vfoWidget(m_radeSliceId))
+                vfo->setRadeActive(false);
+        }
         m_radeSliceId = -1;
     }
-
-    if (auto* vfo = spectrum()->vfoWidget())
-        vfo->setRadeActive(false);
 
     m_audio->setRadeMode(false);
     m_audio->clearTxAccumulators();  // flush stale RADE modem data
