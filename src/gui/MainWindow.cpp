@@ -6705,17 +6705,24 @@ void MainWindow::activateRADE(int sliceId)
     }
 
     // RADE status indicator in VFO widget
-    if (auto* vfo = spectrum()->vfoWidget()) {
-        vfo->setRadeActive(true);
-        // Show initial unsynchronised state immediately — syncChanged only fires
-        // from feedRxAudio() which requires DAX audio to be flowing first.
-        vfo->setRadeSynced(false);
-        connect(m_radeEngine, &RADEEngine::syncChanged,
-                vfo, &VfoWidget::setRadeSynced);
-        connect(m_radeEngine, &RADEEngine::snrChanged,
-                vfo, &VfoWidget::setRadeSnr);
-        connect(m_radeEngine, &RADEEngine::freqOffsetChanged,
-                vfo, &VfoWidget::setRadeFreqOffset);
+    {
+        SpectrumWidget* sw = spectrum();
+        VfoWidget* vfo = sw ? sw->vfoWidget() : nullptr;
+        qInfo() << "MainWindow: activateRADE — spectrum=" << sw
+                << "vfoWidget=" << vfo
+                << "vfoWidget(sliceId)=" << (sw ? sw->vfoWidget(sliceId) : nullptr);
+        if (vfo) {
+            vfo->setRadeActive(true);
+            // Show initial unsynchronised state immediately — syncChanged only fires
+            // from feedRxAudio() which requires DAX audio to be flowing first.
+            vfo->setRadeSynced(false);
+            connect(m_radeEngine, &RADEEngine::syncChanged,
+                    vfo, &VfoWidget::setRadeSynced);
+            connect(m_radeEngine, &RADEEngine::snrChanged,
+                    vfo, &VfoWidget::setRadeSnr);
+            connect(m_radeEngine, &RADEEngine::freqOffsetChanged,
+                    vfo, &VfoWidget::setRadeFreqOffset);
+        }
     }
 
     qInfo() << "MainWindow: RADE mode activated on slice" << sliceId;
