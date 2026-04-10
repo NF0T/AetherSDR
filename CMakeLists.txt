@@ -341,6 +341,7 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
     src/core/TgxlConnection.cpp
@@ -424,6 +425,7 @@ set(GUI_SOURCES
     src/gui/DspParamPopup.cpp
     src/gui/DxClusterDialog.cpp
     src/gui/CwxPanel.cpp
+    src/gui/BandStackPanel.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/MeterApplet.cpp

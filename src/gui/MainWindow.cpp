@@ -43,6 +43,8 @@
 #include "models/MeterModel.h"
 #include "models/BandDefs.h"
 #include "models/BandPlanManager.h"
+#include "core/BandStackSettings.h"
+#include "gui/BandStackPanel.h"
 #include "models/TunerModel.h"
 #include "models/TransmitModel.h"
 #include "models/EqualizerModel.h"
@@ -2122,6 +2124,22 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         m_radioModel.setFullDuplex(on);
         return true;
     }
+    if (obj == m_bandStackIndicator && event->type() == QEvent::MouseButtonPress) {
+        bool show = !m_panStack->bandStackPanel()->isVisible();
+        m_panStack->setBandStackVisible(show);
+        QPixmap bsPm(10, 22);
+        bsPm.fill(Qt::transparent);
+        QPainter bsPainter(&bsPm);
+        bsPainter.setRenderHint(QPainter::Antialiasing);
+        bsPainter.setPen(Qt::NoPen);
+        bsPainter.setBrush(show ? QColor(0, 180, 216) : QColor(64, 72, 88));
+        bsPainter.drawEllipse(2, 1, 6, 6);
+        bsPainter.drawEllipse(2, 8, 6, 6);
+        bsPainter.drawEllipse(2, 15, 6, 6);
+        bsPainter.end();
+        m_bandStackIndicator->setPixmap(bsPm);
+        return true;
+    }
     if (obj == m_tgxlIndicator && event->type() == QEvent::MouseButtonPress) {
         auto& t = m_radioModel.tunerModel();
         // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
@@ -3333,6 +3351,101 @@ void MainWindow::buildUI()
     setActivePanApplet(m_panStack->addPanadapter("default"));
     splitter->addWidget(m_panStack);
 
+    // Band stack panel signal wiring
+    connect(m_panStack->bandStackPanel(), &BandStackPanel::addRequested, this, [this]() {
+        auto* slice = activeSlice();
+        if (!slice) return;
+        BandStackEntry entry;
+        entry.frequencyMhz = slice->frequency();
+        entry.mode = slice->mode();
+        entry.filterLow = slice->filterLow();
+        entry.filterHigh = slice->filterHigh();
+        entry.rxAntenna = slice->rxAntenna();
+        entry.txAntenna = slice->txAntenna();
+        entry.agcMode = slice->agcMode();
+        entry.agcThreshold = slice->agcThreshold();
+        entry.audioGain = static_cast<int>(slice->audioGain());
+        entry.nbOn = slice->nbOn();
+        entry.nbLevel = slice->nbLevel();
+        entry.nrOn = slice->nrOn();
+        entry.nrLevel = slice->nrLevel();
+        if (auto* pan = m_radioModel.activePanadapter()) {
+            entry.wnbOn = pan->wnbActive();
+            entry.wnbLevel = pan->wnbLevel();
+        }
+
+        QColor color = BandStackPanel::colorForFrequency(entry.frequencyMhz, m_bandPlanMgr);
+        BandStackSettings::instance().addEntry(m_radioModel.serial(), entry);
+        BandStackSettings::instance().save();
+        m_panStack->bandStackPanel()->addBookmark(entry, color);
+    });
+    connect(m_panStack->bandStackPanel(), &BandStackPanel::recallRequested, this,
+            [this](const BandStackEntry& e) {
+        auto* slice = activeSlice();
+        if (!slice) return;
+        int id = slice->sliceId();
+
+        // Mode first (affects filter ranges)
+        if (slice->mode() != e.mode) {
+            slice->setMode(e.mode);
+        }
+        // Frequency + recenter pan
+        slice->tuneAndRecenter(e.frequencyMhz);
+        // Filter
+        if (e.filterLow != 0 || e.filterHigh != 0) {
+            slice->setFilterWidth(e.filterLow, e.filterHigh);
+        }
+        // Antennas
+        if (!e.rxAntenna.isEmpty() && e.rxAntenna != slice->rxAntenna()) {
+            m_radioModel.sendCommand(QString("slice set %1 rxant=%2").arg(id).arg(e.rxAntenna));
+        }
+        if (!e.txAntenna.isEmpty() && e.txAntenna != slice->txAntenna()) {
+            m_radioModel.sendCommand(QString("slice set %1 txant=%2").arg(id).arg(e.txAntenna));
+        }
+        // AGC
+        if (!e.agcMode.isEmpty() && e.agcMode != slice->agcMode()) {
+            m_radioModel.sendCommand(QString("slice set %1 agc_mode=%2").arg(id).arg(e.agcMode));
+        }
+        if (e.agcThreshold != slice->agcThreshold()) {
+            m_radioModel.sendCommand(QString("slice set %1 agc_threshold=%2").arg(id).arg(e.agcThreshold));
+        }
+        // Volume
+        if (static_cast<int>(slice->audioGain()) != e.audioGain) {
+            slice->setAudioGain(static_cast<float>(e.audioGain));
+        }
+        // NB
+        if (e.nbOn != slice->nbOn()) {
+            m_radioModel.sendCommand(QString("slice set %1 nb=%2").arg(id).arg(e.nbOn ? 1 : 0));
+        }
+        if (e.nbLevel != slice->nbLevel()) {
+            m_radioModel.sendCommand(QString("slice set %1 nb_level=%2").arg(id).arg(e.nbLevel));
+        }
+        // NR
+        if (e.nrOn != slice->nrOn()) {
+            m_radioModel.sendCommand(QString("slice set %1 nr=%2").arg(id).arg(e.nrOn ? 1 : 0));
+        }
+        if (e.nrLevel != slice->nrLevel()) {
+            m_radioModel.sendCommand(QString("slice set %1 nr_level=%2").arg(id).arg(e.nrLevel));
+        }
+        // WNB (panadapter-level, not slice)
+        if (auto* pan = m_radioModel.activePanadapter()) {
+            if (e.wnbOn != pan->wnbActive()) {
+                m_radioModel.sendCommand(
+                    QString("display pan set %1 wnb=%2").arg(pan->panId()).arg(e.wnbOn ? 1 : 0));
+            }
+            if (e.wnbLevel != pan->wnbLevel()) {
+                m_radioModel.sendCommand(
+                    QString("display pan set %1 wnb_level=%2").arg(pan->panId()).arg(e.wnbLevel));
+            }
+        }
+    });
+    connect(m_panStack->bandStackPanel(), &BandStackPanel::removeRequested, this,
+            [this](int index) {
+        BandStackSettings::instance().removeEntry(m_radioModel.serial(), index);
+        BandStackSettings::instance().save();
+        m_panStack->bandStackPanel()->removeBookmark(index);
+    });
+
     // Sync RadioModel's active pan/wf IDs when PanadapterStack focus changes.
     // This ensures display setting commands (fps, average, black_level, etc.)
     // target the correct pan.
@@ -3436,6 +3549,28 @@ void MainWindow::buildUI()
         pp.drawLine(30, 4, 30, 14);   // vertical
         pp.drawLine(25, 9, 35, 9);    // horizontal
         pp.end();
+        // Band stack toggle: 3 vertically stacked circles
+        {
+            QPixmap bsPm(10, 22);
+            bsPm.fill(Qt::transparent);
+            QPainter bsPainter(&bsPm);
+            bsPainter.setRenderHint(QPainter::Antialiasing);
+            bsPainter.setPen(Qt::NoPen);
+            bsPainter.setBrush(QColor(64, 72, 88));  // grey, matches inactive indicators
+            bsPainter.drawEllipse(2, 1, 6, 6);
+            bsPainter.drawEllipse(2, 8, 6, 6);
+            bsPainter.drawEllipse(2, 15, 6, 6);
+            bsPainter.end();
+            m_bandStackIndicator = new QLabel;
+            m_bandStackIndicator->setPixmap(bsPm);
+            m_bandStackIndicator->setCursor(Qt::PointingHandCursor);
+            m_bandStackIndicator->setToolTip("Open band stack panel");
+            m_bandStackIndicator->installEventFilter(this);
+            hbox->addWidget(m_bandStackIndicator);
+        }
+
+        hbox->addSpacing(8);
+
         auto* addPanBtn = new QLabel;
         addPanBtn->setPixmap(pm);
         addPanBtn->setCursor(Qt::PointingHandCursor);
@@ -3844,6 +3979,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
             m_reconnectDlg = nullptr;
         }
 
+        // Load band stack bookmarks for this radio
+        BandStackSettings::instance().load();
+        m_panStack->bandStackPanel()->loadBookmarks(
+            m_radioModel.serial(), m_bandPlanMgr);
+
         // Auto-start 4-channel rigctld TCP servers if enabled
         auto& as = AppSettings::instance();
         if (as.value("AutoStartRigctld", "False").toString() == "True") {
@@ -3993,6 +4133,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_radioVersionLabel->setText("");
         m_stationLabel->setText("N0CALL");
         m_tnfIndicator->setStyleSheet("QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
+        m_panStack->bandStackPanel()->clear();
         m_tgxlIndicator->setVisible(false);
         m_tgxlConn.disconnect();
         m_pgxlConn.disconnect();
