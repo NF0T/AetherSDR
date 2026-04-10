@@ -1486,11 +1486,6 @@ void RadioModel::setAmpOperate(bool on)
 void RadioModel::createRxAudioStream()
 {
     if (!m_rxAudioStreamId.isEmpty()) return;  // already exists
-    // Tell radio not to mute hardware outputs when streaming to PC.
-    // Firmware defaults mute_local_audio_when_remote=1, silencing
-    // headphones/lineout/speaker. Push our preference on every create. (#1069)
-    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
-                .arg(m_muteLocalWhenRemote ? 1 : 0));
     sendCmd(QString("stream create type=remote_audio_rx compression=%1").arg(audioCompressionParam()),
         [this](int code, const QString& body) {
             if (code == 0) {
