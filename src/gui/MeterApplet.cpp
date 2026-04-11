@@ -29,7 +29,7 @@ MeterApplet::MeterApplet(QWidget* parent)
 
     m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "+13.8V", "",
         {{10.5f, "10.5"}, {12, "12"}, {13.8f, "13.8"}, {15, "15"}},
-        this, 14.0f);
+        this, 14.1f);
     vbox->addWidget(m_supplyGauge);
 
     m_fanGauge = new HGauge(0.0f, 3000.0f, 2500.0f, "Main Fan", "",
