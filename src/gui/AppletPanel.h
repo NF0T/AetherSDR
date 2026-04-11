@@ -91,7 +91,12 @@ private:
     void saveOrder();
     int dropIndexFromY(int localY) const;
 
+    // Float/dock the S-Meter (VU) section — not in m_appletOrder so handled separately.
+    void floatSMeter();
+    void dockSMeter();
+
     QWidget*      m_sMeterSection{nullptr};
+    QWidget*      m_sMeterContent{nullptr};  // floatable content (smeter + controls)
     SMeterWidget* m_sMeter{nullptr};
     QComboBox*    m_txSelect{nullptr};
     QComboBox*    m_rxSelect{nullptr};

@@ -129,15 +129,15 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
         df_set_post_filter_beta(m_state, m_postFilterBeta.load());
     }
 
-    const auto* src = reinterpret_cast<const int16_t*>(pcm24kStereo.constData());
-    const int stereoFrames = pcm24kStereo.size() / 4;  // L+R pairs at 24kHz
+    const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
+    const int stereoFrames = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
 
-    // 1. Upsample 24kHz stereo → 48kHz mono via r8brain
+    // 1. Upsample 24kHz stereo float32 → 48kHz mono float32 via r8brain
     QByteArray mono48k = m_up->processStereoToMono(src, stereoFrames);
 
-    // Convert resampled int16 to float [-1.0, 1.0] (DeepFilterNet range)
-    const auto* mono48kSamples = reinterpret_cast<const int16_t*>(mono48k.constData());
-    const int monoSamples48k = mono48k.size() / 2;
+    // Already float32 in [-1, 1] range — DeepFilterNet's native format
+    const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
+    const int monoSamples48k = mono48k.size() / static_cast<int>(sizeof(float));
 
     // 2. Append to input accumulator and process complete frames
     const int prevAccumSamples = m_inAccum.size() / static_cast<int>(sizeof(float));
@@ -146,7 +146,7 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
         m_inAccum.resize((startIdx + monoSamples48k) * sizeof(float));
         auto* floatBuf = reinterpret_cast<float*>(m_inAccum.data());
         for (int i = 0; i < monoSamples48k; ++i) {
-            floatBuf[startIdx + i] = static_cast<float>(mono48kSamples[i]) / 32768.0f;
+            floatBuf[startIdx + i] = mono48kSamples[i];
         }
     }
 
@@ -174,19 +174,11 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
             m_inAccum.clear();
         }
 
-        // 3. Convert processed 48kHz float [-1,1] → int16, then downsample to 24kHz stereo
+        // 3. Downsample processed 48kHz mono float32 → 24kHz stereo float32
         const int outputMonoSamples = completeFrames * m_frameSize;
-        std::vector<int16_t> processed48kInt16(outputMonoSamples);
-        for (int i = 0; i < outputMonoSamples; ++i) {
-            float v = processed48k[i] * 32768.0f;
-            if (v > 32767.0f) { v = 32767.0f; }
-            if (v < -32768.0f) { v = -32768.0f; }
-            processed48kInt16[i] = static_cast<int16_t>(v);
-        }
 
-        // Downsample 48kHz mono → 24kHz stereo via r8brain
         QByteArray downsampled = m_down->processMonoToStereo(
-            processed48kInt16.data(), outputMonoSamples);
+            processed48k.data(), outputMonoSamples);
 
         m_outAccum.append(downsampled);
     }

@@ -31,9 +31,9 @@ public:
     SpectralNR(const SpectralNR&) = delete;
     SpectralNR& operator=(const SpectralNR&) = delete;
 
-    // Feed mono int16 samples in, get noise-reduced mono int16 out.
+    // Feed mono float32 samples in, get noise-reduced mono float32 out.
     // Output buffer must be at least numSamples long.
-    void process(const int16_t* input, int16_t* output, int numSamples);
+    void process(const float* input, float* output, int numSamples);
 
     // Reset all internal state (call when toggling on or stream restarts).
     void reset();

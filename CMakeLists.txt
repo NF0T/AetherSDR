@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(AetherSDR VERSION 0.8.6 LANGUAGES C CXX)
+project(AetherSDR VERSION 0.8.9 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -98,9 +98,9 @@ else()
 endif()
 
 # Bundled RADE (BSD-2) — FreeDV Radio Autoencoder digital voice codec
-# Opus (with FARGAN/LPCNet) is downloaded and built automatically via ExternalProject
+# Opus (with FARGAN/LPCNet) is built from a vendored local snapshot via ExternalProject
 set(RADE_DIR ${CMAKE_SOURCE_DIR}/third_party/radae)
-option(ENABLE_RADE "Build with RADE digital voice support (downloads Opus at configure time)" ON)
+option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 if(ENABLE_RADE AND EXISTS "${RADE_DIR}/src/rade_api.h")
     # macOS universal binary: build Opus for both architectures
     if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64.*arm64|arm64.*x86_64")
@@ -132,7 +132,7 @@ if(ENABLE_RADE AND EXISTS "${RADE_DIR}/src/rade_api.h")
         INCLUDE_DIRECTORIES "${RADE_DIR}/src"
     )
     set(RADE_FOUND TRUE)
-    message(STATUS "RADE enabled (bundled, Opus will be downloaded)")
+    message(STATUS "RADE enabled (bundled vendored Opus snapshot)")
 else()
     set(RADE_FOUND FALSE)
     set(RADE_SOURCES "")
@@ -144,7 +144,8 @@ else()
 endif()
 
 # Opus codec — required for SmartLink compressed audio, independent of RADE.
-# When RADE is enabled, Opus comes from RADE's custom build (with FARGAN/OSCE).
+# When RADE is enabled, Opus comes from AetherSDR's vendored RADE snapshot
+# (with FARGAN/OSCE).
 # When RADE is disabled, find system libopus.
 # Windows: run setup-opus.ps1 first to download prebuilt DLLs
 # Linux:   apt install libopus-dev
@@ -197,7 +198,13 @@ if(AETHER_GPU_SPECTRUM)
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
         find_package(Qt6GuiPrivate QUIET)
-        message(STATUS "GPU spectrum rendering enabled (QRhi, Qt ${Qt6_VERSION})")
+        if(Qt6GuiPrivate_FOUND)
+            message(STATUS "GPU spectrum rendering enabled (QRhi, Qt ${Qt6_VERSION})")
+        else()
+            set(AETHER_GPU_SPECTRUM OFF)
+            message(STATUS "GPU spectrum rendering disabled — Qt6GuiPrivate not found "
+                           "(install qt6-base-private-dev / qt6-qtbase-private-devel)")
+        endif()
     endif()
 else()
     message(STATUS "GPU spectrum rendering disabled (use -DAETHER_GPU_SPECTRUM=ON to enable)")
@@ -327,13 +334,15 @@ if(ENABLE_DFNR)
         message(STATUS "DFNR (DeepFilterNet3) enabled — ${DFNR_LIB}")
     else()
         set(ENABLE_DFNR OFF)
-        message(STATUS "DFNR (DeepFilterNet3) disabled — library not found at ${DFNR_LIB}")
+        message(STATUS "DFNR (DeepFilterNet3) disabled — library not found at ${DFNR_LIB} "
+                       "(run ./setup-deepfilter.sh before cmake to enable)")
     endif()
 endif()
 
 # Sources
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
     src/core/TgxlConnection.cpp
@@ -417,6 +426,7 @@ set(GUI_SOURCES
     src/gui/DspParamPopup.cpp
     src/gui/DxClusterDialog.cpp
     src/gui/CwxPanel.cpp
+    src/gui/BandStackPanel.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/MeterApplet.cpp

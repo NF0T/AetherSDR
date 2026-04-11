@@ -118,6 +118,7 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void toggleMinimalMode(bool on);
+    void showMemoryDialog();
     void updateKeyerAvailability(const QString& mode);
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
@@ -250,6 +251,10 @@ private:
     QLabel* m_gpsLabel{nullptr};
     QLabel* m_gpsStatusLabel{nullptr};
     QLabel* m_gridLabel{nullptr};
+    QLabel* m_bandStackIndicator{nullptr};
+    QLabel* m_cpuLabel{nullptr};
+    QLabel* m_memLabel{nullptr};
+    QTimer* m_cpuTimer{nullptr};
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
     QLabel* m_networkLabel{nullptr};
@@ -268,6 +273,7 @@ private:
     // Guard: set true while updating controls from the model, so that
     // onFrequencyChanged doesn't echo the change back to the radio.
     bool m_updatingFromModel{false};
+    bool m_shuttingDown{false};
     void toggleConnectionDialog();
     bool m_useSystemClock{true};     // true when no GPS installed
     bool m_paTempUseFahrenheit{true};
@@ -297,7 +303,7 @@ private:
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
-    void startDax();
+    bool startDax();
     void stopDax();
 #endif
 };

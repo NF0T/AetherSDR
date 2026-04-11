@@ -66,8 +66,8 @@ QByteArray SpecbleachFilter::process(const QByteArray& pcm24kStereo)
     if (m_paramsDirty.load())
         applyParams();
 
-    const int totalSamples = pcm24kStereo.size() / sizeof(int16_t);
-    const int monoSamples = totalSamples / 2;
+    const int totalFloats = pcm24kStereo.size() / static_cast<int>(sizeof(float));
+    const int monoSamples = totalFloats / 2;
     if (monoSamples <= 0)
         return pcm24kStereo;
 
@@ -77,10 +77,10 @@ QByteArray SpecbleachFilter::process(const QByteArray& pcm24kStereo)
         m_monoOut.resize(monoSamples);
     }
 
-    // Stereo int16 → mono float
-    const auto* in = reinterpret_cast<const int16_t*>(pcm24kStereo.constData());
+    // Stereo float32 → mono float (average L+R)
+    const auto* in = reinterpret_cast<const float*>(pcm24kStereo.constData());
     for (int i = 0; i < monoSamples; ++i)
-        m_monoIn[i] = (in[i * 2] + in[i * 2 + 1]) / (2.0f * 32768.0f);
+        m_monoIn[i] = (in[i * 2] + in[i * 2 + 1]) * 0.5f;
 
     // Process — feed audio to build noise profile even during learning
     specbleach_process(m_handle, monoSamples, m_monoIn.data(), m_monoOut.data());
@@ -93,13 +93,12 @@ QByteArray SpecbleachFilter::process(const QByteArray& pcm24kStereo)
         return pcm24kStereo;
     }
 
-    // Mono float → stereo int16
-    QByteArray result(totalSamples * sizeof(int16_t), Qt::Uninitialized);
-    auto* out = reinterpret_cast<int16_t*>(result.data());
+    // Mono float → stereo float32 (duplicate to L+R)
+    QByteArray result(totalFloats * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* out = reinterpret_cast<float*>(result.data());
     for (int i = 0; i < monoSamples; ++i) {
-        int16_t s = static_cast<int16_t>(std::clamp(m_monoOut[i] * 32768.0f, -32768.0f, 32767.0f));
-        out[i * 2]     = s;
-        out[i * 2 + 1] = s;
+        out[i * 2]     = m_monoOut[i];
+        out[i * 2 + 1] = m_monoOut[i];
     }
 
     return result;

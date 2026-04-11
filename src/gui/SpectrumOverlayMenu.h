@@ -35,7 +35,9 @@ public:
                              const QColor& fillColor, int gain, int black,
                              bool autoBlack, int rate,
                              int floorPos = 75, bool floorEnable = false,
-                             bool heatMap = true, int colorScheme = 0);
+                             bool heatMap = true, int colorScheme = 0,
+                             bool showGrid = true,
+                             float lineWidth = 2.0f);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
     void syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                   bool cursorFreq, int bgOpacity);
@@ -88,6 +90,8 @@ signals:
     void fftFillAlphaChanged(float alpha);
     void fftFillColorChanged(const QColor& color);
     void fftHeatMapChanged(bool on);
+    void showGridChanged(bool on);
+    void fftLineWidthChanged(float width);
     void wfColorGainChanged(int gain);
     void wfBlackLevelChanged(int level);
     void wfAutoBlackChanged(bool on);
@@ -182,6 +186,9 @@ private:
     QPushButton* m_fillColorBtn{nullptr};
     QColor       m_fillColor{0x00, 0xe5, 0xff};  // default cyan
     QPushButton* m_heatMapBtn{nullptr};
+    QPushButton* m_showGridBtn{nullptr};
+    QSlider*     m_lineWidthSlider{nullptr};
+    QLabel*      m_lineWidthLabel{nullptr};
     QPushButton* m_weightedAvgBtn{nullptr};
     QSlider*     m_gainSlider{nullptr};
     QLabel*      m_gainLabel{nullptr};

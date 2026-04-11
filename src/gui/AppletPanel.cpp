@@ -247,16 +247,24 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     sMeterLayout->setContentsMargins(0, 0, 0, 0);
     sMeterLayout->setSpacing(0);
 
-    auto* sMeterTitle = new AppletTitleBar("S-Meter", "VU");
-    sMeterLayout->addWidget(sMeterTitle);
+    auto* sMeterTitle = new AppletTitleBar("S-Meter", "VU", this);
+    sMeterLayout->addWidget(sMeterTitle);  // index 0
 
-    m_sMeter = new SMeterWidget(m_sMeterSection);
+    // Content container — the floatable part; mirrors the wrapper[1] convention
+    // used by all other applets so floatApplet("VU") can extract it the same way.
+    m_sMeterContent = new QWidget(m_sMeterSection);
+    auto* contentLayout = new QVBoxLayout(m_sMeterContent);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(0);
+    sMeterLayout->addWidget(m_sMeterContent);  // index 1
+
+    m_sMeter = new SMeterWidget(m_sMeterContent);
     m_sMeter->setAccessibleName("S-Meter");
     m_sMeter->setAccessibleDescription("Signal strength meter, shows S-units or TX power");
-    sMeterLayout->addWidget(m_sMeter);
+    contentLayout->addWidget(m_sMeter);
 
     // ── TX / RX meter select row ──────────────────────────────────────────
-    auto* selectRow = new QWidget(m_sMeterSection);
+    auto* selectRow = new QWidget(m_sMeterContent);
     auto* selectLayout = new QHBoxLayout(selectRow);
     selectLayout->setContentsMargins(4, 2, 4, 2);
     selectLayout->setSpacing(6);
@@ -295,7 +303,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     selectLayout->addLayout(txCol, 1);
     selectLayout->addLayout(rxCol, 1);
-    sMeterLayout->addWidget(selectRow);
+    contentLayout->addWidget(selectRow);
 
     connect(m_txSelect, &QComboBox::currentTextChanged,
             m_sMeter, &SMeterWidget::setTxMode);
@@ -322,7 +330,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     });
 
     // ── Peak hold line controls (#840) ────────────────────────────────────
-    auto* peakRow = new QWidget(m_sMeterSection);
+    auto* peakRow = new QWidget(m_sMeterContent);
     auto* peakLayout = new QHBoxLayout(peakRow);
     peakLayout->setContentsMargins(4, 2, 4, 2);
     peakLayout->setSpacing(6);
@@ -361,7 +369,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     peakLayout->addWidget(decayLabel);
     peakLayout->addWidget(decayCombo, 1);
     peakLayout->addWidget(resetBtn);
-    sMeterLayout->addWidget(peakRow);
+    contentLayout->addWidget(peakRow);
 
     // Apply decay preset: also sets the hold time (Fast=200ms, Medium=500ms, Slow=1000ms)
     auto applyDecayPreset = [this](const QString& rate) {
@@ -524,6 +532,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_sMeterSection->setVisible(anlgOn);
         btnLayout1->addWidget(anlgBtn);
         connect(anlgBtn, &QPushButton::toggled, this, [this](bool on) {
+            // If currently floating, raise/hide the floating window instead of the panel section.
+            if (m_floatingWindows.contains("VU")) {
+                if (on) { m_floatingWindows["VU"]->showAndRestore(); }
+                else    { m_floatingWindows["VU"]->hideAndSave(); }
+                AppSettings::instance().setValue("Applet_ANLG", on ? "True" : "False");
+                return;
+            }
+            // If IsFloating is persisted but the window isn't open yet (e.g. toggled off
+            // then back on before the deferred floatApplet timer fired), re-float it.
+            if (on && AppSettings::instance().value(
+                    AetherSDR::floatKey("VU"), "False").toString() == "True") {
+                QTimer::singleShot(0, this, [this]() { floatApplet("VU"); });
+                AppSettings::instance().setValue("Applet_ANLG", "True");
+                return;
+            }
             m_sMeterSection->setVisible(on);
             AppSettings::instance().setValue("Applet_ANLG", on ? "True" : "False");
         });
@@ -553,16 +576,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             if (m_floatingWindows.contains("TUN")) {
                 if (checked) { m_floatingWindows["TUN"]->showAndRestore(); }
                 else         { m_floatingWindows["TUN"]->hideAndSave(); }
+                AppSettings::instance().setValue("Applet_TUN", checked ? "True" : "False");
                 return;
             }
             if (checked) {
                 const QString floatKey = QStringLiteral("FloatingApplet_TUN_IsFloating");
                 if (AppSettings::instance().value(floatKey, "False").toString() == "True") {
                     QTimer::singleShot(0, this, [this]() { floatApplet("TUN"); });
+                    AppSettings::instance().setValue("Applet_TUN", "True");
                     return;
                 }
             }
             wrapper->setVisible(checked);
+            AppSettings::instance().setValue("Applet_TUN", checked ? "True" : "False");
         });
         m_appletOrder.append({"TUN", wrapper, titleBar, m_tuneBtn});
     }
@@ -587,16 +613,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             if (m_floatingWindows.contains("AMP")) {
                 if (checked) { m_floatingWindows["AMP"]->showAndRestore(); }
                 else         { m_floatingWindows["AMP"]->hideAndSave(); }
+                AppSettings::instance().setValue("Applet_AMP", checked ? "True" : "False");
                 return;
             }
             if (checked) {
                 const QString floatKey = QStringLiteral("FloatingApplet_AMP_IsFloating");
                 if (AppSettings::instance().value(floatKey, "False").toString() == "True") {
                     QTimer::singleShot(0, this, [this]() { floatApplet("AMP"); });
+                    AppSettings::instance().setValue("Applet_AMP", "True");
                     return;
                 }
             }
             wrapper->setVisible(checked);
+            AppSettings::instance().setValue("Applet_AMP", checked ? "True" : "False");
         });
         m_appletOrder.append({"AMP", wrapper, titleBar, m_ampBtn});
     }
@@ -639,16 +668,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             if (m_floatingWindows.contains("AG")) {
                 if (checked) { m_floatingWindows["AG"]->showAndRestore(); }
                 else         { m_floatingWindows["AG"]->hideAndSave(); }
+                AppSettings::instance().setValue("Applet_AG", checked ? "True" : "False");
                 return;
             }
             if (checked) {
                 const QString floatKey = QStringLiteral("FloatingApplet_AG_IsFloating");
                 if (AppSettings::instance().value(floatKey, "False").toString() == "True") {
                     QTimer::singleShot(0, this, [this]() { floatApplet("AG"); });
+                    AppSettings::instance().setValue("Applet_AG", "True");
                     return;
                 }
             }
             wrapper->setVisible(checked);
+            AppSettings::instance().setValue("Applet_AG", checked ? "True" : "False");
         });
         m_appletOrder.append({"AG", wrapper, titleBar, m_agBtn});
     }
@@ -684,6 +716,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             // Use QTimer::singleShot so the window system is ready before showing
             QTimer::singleShot(0, this, [this, id = entry.id]() { floatApplet(id); });
         }
+    }
+
+    // Restore S-Meter (VU) floating state — not in m_appletOrder, restored separately.
+    if (AppSettings::instance().value(AetherSDR::floatKey("VU"), "False").toString() == "True") {
+        QTimer::singleShot(0, this, [this]() { floatApplet("VU"); });
     }
 
 }
@@ -746,7 +783,10 @@ void AppletPanel::setTunerVisible(bool visible)
 {
     if (visible) {
         m_tuneBtn->show();
-        if (!m_tuneBtn->isChecked()) { m_tuneBtn->setChecked(true); }
+        // Honor the user's saved checked state; default true on first detection.
+        const bool savedOn =
+            AppSettings::instance().value("Applet_TUN", "True").toString() == "True";
+        if (savedOn && !m_tuneBtn->isChecked()) { m_tuneBtn->setChecked(true); }
         // Device reconnected — re-show floating window if it still exists,
         // or re-float based on persisted IsFloating flag (#959)
         if (m_floatingWindows.contains("TUN")) {
@@ -771,7 +811,10 @@ void AppletPanel::setAmpVisible(bool visible)
 {
     if (visible) {
         m_ampBtn->show();
-        if (!m_ampBtn->isChecked()) { m_ampBtn->setChecked(true); }
+        // Honor the user's saved checked state; default true on first detection.
+        const bool savedOn =
+            AppSettings::instance().value("Applet_AMP", "True").toString() == "True";
+        if (savedOn && !m_ampBtn->isChecked()) { m_ampBtn->setChecked(true); }
         if (m_floatingWindows.contains("AMP")) {
             m_floatingWindows["AMP"]->showAndRestore();
         } else {
@@ -791,7 +834,10 @@ void AppletPanel::setAgVisible(bool visible)
 {
     if (visible) {
         m_agBtn->show();
-        if (!m_agBtn->isChecked()) { m_agBtn->setChecked(true); }
+        // Honor the user's saved checked state; default true on first detection.
+        const bool savedOn =
+            AppSettings::instance().value("Applet_AG", "True").toString() == "True";
+        if (savedOn && !m_agBtn->isChecked()) { m_agBtn->setChecked(true); }
         if (m_floatingWindows.contains("AG")) {
             m_floatingWindows["AG"]->showAndRestore();
         } else {
@@ -809,6 +855,8 @@ void AppletPanel::setAgVisible(bool visible)
 
 bool AppletPanel::isAppletFloating(const QString& id) const
 {
+    // VU (S-Meter) is not in m_appletOrder; check the floating windows map directly.
+    if (id == "VU") { return m_floatingWindows.contains("VU"); }
     for (const AppletEntry& e : m_appletOrder) {
         if (e.id == id) { return e.floating; }
     }
@@ -844,8 +892,61 @@ void AppletPanel::setAntennaList(const QStringList& ants)
     m_rxApplet->setAntennaList(ants);
 }
 
+void AppletPanel::floatSMeter()
+{
+    if (m_floatingWindows.contains("VU")) { return; }
+
+    // Extract content from m_sMeterSection (index 1, after the title bar) — mirrors
+    // the same wrapper[0]=titleBar / wrapper[1]=content convention used by all other applets.
+    QWidget* appletWidget = nullptr;
+    if (auto* wl = qobject_cast<QVBoxLayout*>(m_sMeterSection->layout())) {
+        if (wl->count() >= 2) {
+            if (auto* item = wl->itemAt(1)) appletWidget = item->widget();
+        }
+    }
+    if (!appletWidget) { return; }
+
+    appletWidget->setParent(nullptr);
+
+    auto* win = new FloatingAppletWindow("VU", "S-Meter", appletWidget, this);
+    m_floatingWindows["VU"] = win;
+
+    connect(win, &FloatingAppletWindow::dockRequested, this, &AppletPanel::dockApplet);
+
+    win->showAndRestore();
+    m_sMeterSection->hide();
+
+    AppSettings::instance().setValue(AetherSDR::floatKey("VU"), "True");
+    AppSettings::instance().save();
+}
+
+void AppletPanel::dockSMeter()
+{
+    if (!m_floatingWindows.contains("VU")) { return; }
+
+    FloatingAppletWindow* win = m_floatingWindows.take("VU");
+
+    // m_sMeterContent is a named member — use it directly rather than walking
+    // the floating window's internal layout. Reparent before deleteLater() so
+    // Qt's parent-chain destruction cannot reach m_sMeterContent or its children.
+    if (auto* wl = qobject_cast<QVBoxLayout*>(m_sMeterSection->layout())) {
+        m_sMeterContent->setParent(m_sMeterSection);
+        wl->addWidget(m_sMeterContent);
+        m_sMeterContent->show();
+    }
+
+    if (win) { win->hideAndSave(); win->deleteLater(); }
+    m_sMeterSection->show();
+
+    AppSettings::instance().setValue(AetherSDR::floatKey("VU"), "False");
+    AppSettings::instance().save();
+}
+
 void AppletPanel::floatApplet(const QString& id)
 {
+    // S-Meter (VU) is not in m_appletOrder — handle via dedicated method.
+    if (id == "VU") { floatSMeter(); return; }
+
     // Find the entry
     int idx = -1;
     for (int i = 0; i < m_appletOrder.size(); ++i) {
@@ -903,6 +1004,9 @@ void AppletPanel::floatApplet(const QString& id)
 
 void AppletPanel::dockApplet(const QString& id)
 {
+    // S-Meter (VU) is not in m_appletOrder — handle via dedicated method.
+    if (id == "VU") { dockSMeter(); return; }
+
     if (!m_floatingWindows.contains(id)) { return; }
 
     int idx = -1;

@@ -13,6 +13,7 @@
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QNativeGestureEvent>
 #include <QMenu>
 #include <QToolTip>
 #include <QDialog>
@@ -160,6 +161,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     };
     m_zoomSegBtn  = makeBtn("S");
     m_zoomBandBtn = makeBtn("B");
+    m_zoomOutBtn  = makeBtn("\u2212");  // minus sign U+2212
+    m_zoomInBtn   = makeBtn("+");
 
     // SmartSDR pcap: B sends "band_zoom=1", S sends "segment_zoom=1"
     connect(m_zoomBandBtn, &QPushButton::clicked, this, [this]() {
@@ -168,6 +171,20 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     connect(m_zoomSegBtn, &QPushButton::clicked, this, [this]() {
         emit segmentZoomRequested();
     });
+
+    // Bandwidth zoom: − zooms out (wider BW), + zooms in (narrower BW)
+    // Send both bandwidth AND current center to prevent the radio from
+    // auto-centering the panadapter (which causes band jumps).
+    auto emitZoom = [this](double factor) {
+        const double newBw = m_bandwidthMhz * factor;
+        if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return; }  // at limit
+        m_bandwidthMhz = newBw;
+        markOverlayDirty();
+        emit bandwidthChangeRequested(newBw);
+        emit centerChangeRequested(m_centerMhz);  // anchor the current center
+    };
+    connect(m_zoomOutBtn, &QPushButton::clicked, this, [emitZoom]() { emitZoom(1.5); });
+    connect(m_zoomInBtn,  &QPushButton::clicked, this, [emitZoom]() { emitZoom(1.0 / 1.5); });
 }
 
 // ── Multi-VfoWidget management ────────────────────────────────────────────────
@@ -212,6 +229,8 @@ void SpectrumWidget::loadSettings()
         m_bandPlanFontSize = s.value("BandPlanFontSize", "6").toInt();
     }
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
+    m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
+    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
     m_wfColorScheme  = static_cast<WfColorScheme>(
         std::clamp(s.value(settingsKey("DisplayWfColorScheme"), "0").toInt(),
                    0, static_cast<int>(WfColorScheme::Count) - 1));
@@ -228,7 +247,8 @@ void SpectrumWidget::loadSettings()
         m_overlayMenu->syncDisplaySettings(m_fftAverage, m_fftFps,
             static_cast<int>(m_fftFillAlpha * 100), m_fftWeightedAvg, m_fftFillColor,
             m_wfColorGain, m_wfBlackLevel, m_wfAutoBlack, m_wfLineDuration,
-            75, false, m_fftHeatMap, static_cast<int>(m_wfColorScheme));
+            75, false, m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
+            m_fftLineWidth);
 }
 
 VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
@@ -292,6 +312,19 @@ void SpectrumWidget::setFftHeatMap(bool on) {
     m_fftHeatMap = on;
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayFftHeatMap"), on ? "True" : "False");
+    s.save();
+}
+void SpectrumWidget::setShowGrid(bool on) {
+    m_showGrid = on;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayShowGrid"), on ? "True" : "False");
+    s.save();
+    markOverlayDirty();
+}
+void SpectrumWidget::setFftLineWidth(float w) {
+    m_fftLineWidth = std::clamp(w, 0.0f, 5.0f);
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayFftLineWidth"), QString::number(m_fftLineWidth, 'f', 1));
     s.save();
 }
 void SpectrumWidget::setFftFillAlpha(float a) {
@@ -886,14 +919,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         return;
     }
 
-    // Click on off-screen slice indicator → absorb or switch slice
-    for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
-        if (!m_offScreenRects[oi].isNull() &&
-            m_offScreenRects[oi].contains(QPoint(static_cast<int>(ev->position().x()), y))) {
-            const auto& so = m_sliceOverlays[oi];
-            if (!so.isActive) emit sliceClicked(so.sliceId);
-            ev->accept();
-            return;
+    // Left-click on off-screen slice indicator → absorb or switch slice
+    if (ev->button() == Qt::LeftButton) {
+        for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
+            if (!m_offScreenRects[oi].isNull() &&
+                m_offScreenRects[oi].contains(QPoint(static_cast<int>(ev->position().x()), y))) {
+                const auto& so = m_sliceOverlays[oi];
+                if (!so.isActive) emit sliceClicked(so.sliceId);
+                ev->accept();
+                return;
+            }
         }
     }
 
@@ -937,6 +972,30 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     if (ev->button() == Qt::RightButton) {
         m_draggingTnfId = -1;
         const int mx = static_cast<int>(ev->position().x());
+
+        // Right-click on off-screen slice indicator → slice context menu
+        for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
+            if (!m_offScreenRects[oi].isNull() &&
+                m_offScreenRects[oi].contains(QPoint(mx, y))) {
+                const auto& so = m_sliceOverlays[oi];
+                const QChar letter = QChar('A' + (so.sliceId & 3));
+                QMenu menu(this);
+                menu.addAction(QString("Close Slice %1").arg(letter), this,
+                    [this, id = so.sliceId]{ emit sliceCloseRequested(id); });
+                menu.addAction(QString("Move Slice %1 Here").arg(letter), this,
+                    [this, id = so.sliceId]{ emit sliceTuneRequested(id, m_centerMhz); });
+                menu.addAction(QString("Center Slice %1").arg(letter), this,
+                    [this, freq = so.freqMhz]{
+                        m_centerMhz = freq;
+                        markOverlayDirty();
+                        emit centerChangeRequested(m_centerMhz);
+                    });
+                menu.exec(ev->globalPosition().toPoint());
+                ev->accept();
+                return;
+            }
+        }
+
         const double freqMhz = xToMhz(mx);
         const int hitTnf = tnfAtPixel(mx);
 
@@ -1113,6 +1172,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const int right = std::max(loX, hiX);
         if (mx > left + GRAB && mx < right - GRAB) {
             m_draggingVfo = true;
+            m_vfoDragOffsetHz = static_cast<int>(std::round((xToMhz(mx) - ao->freqMhz) * 1.0e6));
             setCursor(Qt::SizeHorCursor);
             ev->accept();
             return;
@@ -1181,16 +1241,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // 4x multiplier: dragging 1/4 of widget width doubles/halves bandwidth
         const double scale = std::pow(2.0, static_cast<double>(-dx) / (width() / 4.0));
         const double newBw = std::clamp(m_bwDragStartBw * scale, 0.004, 14.0);
-        // SSB modes: center on filter midpoint so the passband stays visible.
-        // Other modes: center on VFO frequency.
+        // Keep the current pan center on zoom — don't snap to VFO. (#1093)
         double zoomCenter = m_centerMhz;
-        if (const auto* ao = activeOverlay()) {
-            if (m_mode == "USB" || m_mode == "LSB" || m_mode == "DIGU" || m_mode == "DIGL" || m_mode == "RTTY") {
-                zoomCenter = ao->freqMhz + (ao->filterLowHz + ao->filterHighHz) / 2.0 / 1.0e6;
-            } else {
-                zoomCenter = ao->freqMhz;
-            }
-        }
         m_bandwidthMhz = newBw;
         m_centerMhz = zoomCenter;
         markOverlayDirty();
@@ -1221,7 +1273,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 
     if (m_draggingVfo) {
         const int mx = static_cast<int>(ev->position().x());
-        const double mhz = snapToStep(xToMhz(mx), m_stepHz);
+        const double mhz = snapToStep(xToMhz(mx) - m_vfoDragOffsetHz / 1.0e6, m_stepHz);
         emit frequencyClicked(mhz);
         ev->accept();
         return;
@@ -1593,6 +1645,35 @@ void SpectrumWidget::setBackgroundImage(const QString& path)
     markOverlayDirty();
 }
 
+bool SpectrumWidget::event(QEvent* ev)
+{
+    if (ev->type() == QEvent::NativeGesture) {
+        auto* ge = static_cast<QNativeGestureEvent*>(ev);
+        if (ge->gestureType() == Qt::ZoomNativeGesture) {
+            // value > 0 = pinch out (zoom in = narrower BW)
+            // value < 0 = pinch in  (zoom out = wider BW)
+            // Zoom anchored on the frequency under the cursor: the frequency
+            // at the mouse position stays at that pixel after the zoom.
+            const double delta = ge->value();
+            if (qFuzzyIsNull(delta)) { return true; }
+            const double factor = 1.0 / (1.0 + delta);  // invert: pinch-out narrows BW
+            const double newBw = m_bandwidthMhz * factor;
+            if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return true; }  // at limit
+            // Anchor: keep the frequency under the cursor at the same pixel.
+            const double mouseXFrac = ge->position().x() / width() - 0.5;
+            const double anchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
+            const double newCenter = anchorMhz - mouseXFrac * newBw;
+            m_bandwidthMhz = newBw;
+            m_centerMhz = newCenter;
+            markOverlayDirty();
+            emit bandwidthChangeRequested(newBw);
+            emit centerChangeRequested(newCenter);
+            return true;
+        }
+    }
+    return SPECTRUM_BASE_CLASS::event(ev);
+}
+
 void SpectrumWidget::wheelEvent(QWheelEvent* ev)
 {
     // Skip scroll on the divider + freq scale bar.
@@ -1690,9 +1771,12 @@ void SpectrumWidget::positionZoomButtons()
     constexpr int sz = 22;
     const int botY = height() - pad;
 
-    // S | B at bottom-left
-    m_zoomSegBtn->move(pad, botY - sz);
-    m_zoomBandBtn->move(pad + sz + 2, botY - sz);
+    // Row 1 (bottom): − | + (bandwidth zoom)
+    m_zoomOutBtn->move(pad, botY - sz);
+    m_zoomInBtn->move(pad + sz + 2, botY - sz);
+    // Row 0 (above): S | B (segment/band zoom)
+    m_zoomSegBtn->move(pad, botY - sz - sz - 2);
+    m_zoomBandBtn->move(pad + sz + 2, botY - sz - sz - 2);
 }
 
 // ─── Colour map ───────────────────────────────────────────────────────────────
@@ -1926,9 +2010,9 @@ void SpectrumWidget::initSpectrumPipeline()
 {
     QRhi* r = rhi();
 
-    // Dynamic vertex buffers: N × 6 floats (x, y, r, g, b, a) per vertex
+    // Dynamic vertex buffers: 2N × 6 floats for triangle strip line expansion
     m_fftLineVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
-                                 kMaxFftBins * kFftVertStride * sizeof(float));
+                                 kMaxFftBins * 2 * kFftVertStride * sizeof(float));
     m_fftLineVbo->create();
 
     m_fftFillVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
@@ -1981,7 +2065,7 @@ void SpectrumWidget::initSpectrumPipeline()
         {QRhiShaderStage::Fragment, fs},
     });
     m_fftLinePipeline->setVertexInputLayout(layout);
-    m_fftLinePipeline->setTopology(QRhiGraphicsPipeline::LineStrip);
+    m_fftLinePipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
     m_fftLinePipeline->setShaderResourceBindings(m_fftSrb);
     m_fftLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_fftLinePipeline->setTargetBlends({blend});
@@ -2024,6 +2108,12 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     m_wfTexFullUpload = false;
     m_wfLastUploadedRow = m_wfWriteRow;
     m_rhiInitialized = true;
+
+    // Re-apply cursor now that the native HWND exists on Windows. (#1096)
+    // setCursor() in the constructor runs before QRhiWidget creates its native
+    // surface; calling it again here ensures the HWND gets the correct cursor
+    // shape rather than defaulting to NULL (invisible).
+    setCursor(cursor());
 }
 
 void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
@@ -2187,7 +2277,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
             // WNB / RF gain / Prop forecast indicators (top-right of spectrum)
             {
-                const bool showProp = m_propForecastVisible && m_propKIndex >= 0 && m_propSfi > 0;
+                const bool showProp = m_propForecastVisible
+                    && m_propKIndex >= 0
+                    && m_propAIndex >= 0
+                    && m_propSfi > 0;
                 if (m_wnbActive || m_rfGainValue != 0 || showProp) {
                     QFont indFont(p.font().family(), 14, QFont::Bold);
                     p.setFont(indFont);
@@ -2197,7 +2290,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     // Build combined label (left to right: prop, WNB, RF gain), right-align
                     QString label;
                     if (showProp) {
-                        label += QString("K%1  SFI %2").arg(m_propKIndex).arg(m_propSfi);
+                        label += QString("K%1  A%2  SFI %3")
+                            .arg(m_propKIndex)
+                            .arg(m_propAIndex)
+                            .arg(m_propSfi);
                     }
                     if (m_wnbActive) {
                         if (!label.isEmpty()) { label += QStringLiteral("   "); }
@@ -2281,20 +2377,47 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 out[3] = topAlpha + gt * (botAlpha - topAlpha);
             };
 
-            // Line vertices: N × (x, y, r, g, b, a)
-            QVector<float> lineVerts(n * kFftVertStride);
+            // Line vertices: 2N × (x, y, r, g, b, a) — triangle strip expansion
+            // for variable-width lines on GPU (LineStrip is fixed at 1px)
+            QVector<float> lineVerts(n * 2 * kFftVertStride);
             // Fill vertices: 2N × (x, y, r, g, b, a)
             QVector<float> fillVerts(n * 2 * kFftVertStride);
 
+            // Pre-compute positions for normal calculation
+            struct Pt { float x, y; };
+            QVector<Pt> pts(n);
             for (int i = 0; i < n; ++i) {
-                float x = 2.0f * i / (n - 1) - 1.0f;
+                pts[i].x = 2.0f * i / (n - 1) - 1.0f;
                 float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
-                float y = yBot + t * (yTop - yBot);
+                pts[i].y = yBot + t * (yTop - yBot);
+            }
 
-                // Per-vertex color: heat map or solid from color picker
+            // Half-width in NDC — convert pixel width to NDC using viewport
+            const float halfW = m_fftLineWidth / static_cast<float>(qMax(1, width()));
+
+            for (int i = 0; i < n; ++i) {
+                float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
+
+                // Compute perpendicular normal from adjacent points
+                float dx, dy;
+                if (i == 0) {
+                    dx = pts[1].x - pts[0].x;
+                    dy = pts[1].y - pts[0].y;
+                } else if (i == n - 1) {
+                    dx = pts[n-1].x - pts[n-2].x;
+                    dy = pts[n-1].y - pts[n-2].y;
+                } else {
+                    dx = pts[i+1].x - pts[i-1].x;
+                    dy = pts[i+1].y - pts[i-1].y;
+                }
+                float len = std::sqrt(dx * dx + dy * dy);
+                if (len < 1e-8f) len = 1e-8f;
+                float nx = -dy / len * halfW;
+                float ny =  dx / len * halfW;
+
+                // Per-vertex color
                 float cr, cg, cb2;
                 if (m_fftHeatMap) {
-                    // Intensity heat map: blue → cyan → green → yellow → red
                     if (t < 0.25f) {
                         float s = t / 0.25f;
                         cr = 0.0f; cg = s; cb2 = 1.0f;
@@ -2312,20 +2435,26 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     cr = fr; cg = fg; cb2 = fb;
                 }
 
-                // Line vertex
-                int li = i * kFftVertStride;
-                lineVerts[li]     = x;
-                lineVerts[li + 1] = y;
+                // Two vertices per point: offset ± normal
+                int li = i * 2 * kFftVertStride;
+                lineVerts[li]     = pts[i].x + nx;
+                lineVerts[li + 1] = pts[i].y + ny;
                 lineVerts[li + 2] = cr;
                 lineVerts[li + 3] = cg;
                 lineVerts[li + 4] = cb2;
                 lineVerts[li + 5] = 0.9f;
+                lineVerts[li + 6]  = pts[i].x - nx;
+                lineVerts[li + 7]  = pts[i].y - ny;
+                lineVerts[li + 8]  = cr;
+                lineVerts[li + 9]  = cg;
+                lineVerts[li + 10] = cb2;
+                lineVerts[li + 11] = 0.9f;
 
                 // Fill vertices
                 int fi = i * 2 * kFftVertStride;
-                fillVerts[fi]     = x;
-                fillVerts[fi + 1] = y;
-                fillVerts[fi + 6] = x;
+                fillVerts[fi]     = pts[i].x;
+                fillVerts[fi + 1] = pts[i].y;
+                fillVerts[fi + 6] = pts[i].x;
                 fillVerts[fi + 7] = yBot;
 
                 if (m_fftHeatMap) {
@@ -2340,13 +2469,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     fillVerts[fi + 11] = fa;
                 } else {
                     // Solid: Y-based gradient (bright at line, dark+faint at base)
-                    yColor(y, &fillVerts[fi + 2]);
+                    yColor(pts[i].y, &fillVerts[fi + 2]);
                     yColor(yBot, &fillVerts[fi + 8]);
                 }
             }
 
             batch->updateDynamicBuffer(m_fftLineVbo, 0,
-                n * kFftVertStride * sizeof(float), lineVerts.constData());
+                n * 2 * kFftVertStride * sizeof(float), lineVerts.constData());
             batch->updateDynamicBuffer(m_fftFillVbo, 0,
                 n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
         }
@@ -2394,13 +2523,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         cb->setVertexInput(0, 1, &fillVbuf);
         cb->draw(n * 2);
 
-        // Line pass
-        cb->setGraphicsPipeline(m_fftLinePipeline);
-        cb->setShaderResources(m_fftSrb);
-        cb->setViewport(specVp);
-        const QRhiCommandBuffer::VertexInput lineVbuf(m_fftLineVbo, 0);
-        cb->setVertexInput(0, 1, &lineVbuf);
-        cb->draw(n);
+        // Line pass (skip when line width is 0 = "Off")
+        if (m_fftLineWidth > 0.0f) {
+            cb->setGraphicsPipeline(m_fftLinePipeline);
+            cb->setShaderResources(m_fftSrb);
+            cb->setViewport(specVp);
+            const QRhiCommandBuffer::VertexInput lineVbuf(m_fftLineVbo, 0);
+            cb->setVertexInput(0, 1, &lineVbuf);
+            cb->draw(n * 2);
+        }
     }
 
     // Draw overlay quad — on top of FFT fill/line
@@ -2698,7 +2829,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
     // ── WNB / RF Gain / Prop Forecast indicators (top-right of FFT area) ────
     {
-        const bool showProp = m_propForecastVisible && m_propKIndex >= 0 && m_propSfi > 0;
+        const bool showProp = m_propForecastVisible
+            && m_propKIndex >= 0
+            && m_propAIndex >= 0
+            && m_propSfi > 0;
         if (m_wnbActive || m_rfGainValue != 0 || showProp) {
             QFont indFont = p.font();
             indFont.setPointSize(18);
@@ -2731,9 +2865,12 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
                 x -= 10;
             }
 
-            // Prop forecast (leftmost: "K3  SFI 110")
+            // Prop forecast (leftmost: "K3  A12  SFI 110")
             if (showProp) {
-                QString propStr = QString("K%1  SFI %2").arg(m_propKIndex).arg(m_propSfi);
+                QString propStr = QString("K%1  A%2  SFI %3")
+                    .arg(m_propKIndex)
+                    .arg(m_propAIndex)
+                    .arg(m_propSfi);
                 int pw = fm.horizontalAdvance(propStr);
                 x -= pw;
                 p.drawText(x, topY, propStr);
@@ -2771,6 +2908,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
 void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 {
+    if (!m_showGrid) return;
     const int w = r.width();
     const int h = r.height();
 

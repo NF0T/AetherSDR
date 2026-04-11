@@ -98,7 +98,7 @@ QAudioFormat AudioEngine::makeFormat() const
     QAudioFormat fmt;
     fmt.setSampleRate(DEFAULT_SAMPLE_RATE);
     fmt.setChannelCount(2);                        // stereo
-    fmt.setSampleFormat(QAudioFormat::Int16);
+    fmt.setSampleFormat(QAudioFormat::Float);
     return fmt;
 }
 
@@ -174,7 +174,9 @@ bool AudioEngine::startRxStream()
 void AudioEngine::stopRxStream()
 {
     if (m_audioSink) {
-        m_audioSink->stop();
+        // Guard: same stale-device-handle crash can occur on the RX side (#1059).
+        if (m_audioSink->state() != QAudio::StoppedState)
+            m_audioSink->stop();
         delete m_audioSink;
         m_audioSink   = nullptr;
         m_audioDevice = nullptr;
@@ -196,13 +198,13 @@ void AudioEngine::setMuted(bool muted)
         m_audioSink->setVolume(muted ? 0.0f : m_rxVolume.load());
 }
 
-// Resample 24kHz stereo int16 → 48kHz stereo int16 via r8brain.
+// Resample 24kHz stereo float32 → 48kHz stereo float32 via r8brain.
 QByteArray AudioEngine::resampleStereo(const QByteArray& pcm)
 {
     if (!m_rxResampler)
         m_rxResampler = std::make_unique<Resampler>(24000, 48000);
-    const auto* src = reinterpret_cast<const int16_t*>(pcm.constData());
-    return m_rxResampler->processStereoToStereo(src, pcm.size() / 4);
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    return m_rxResampler->processStereoToStereo(src, pcm.size() / (2 * static_cast<int>(sizeof(float))));
 }
 
 void AudioEngine::feedAudioData(const QByteArray& pcm)
@@ -505,49 +507,39 @@ void AudioEngine::processBnr(const QByteArray& stereoPcm)
 {
     // ── Feed input to BNR container (non-blocking) ───────────────────────
 
-    // 1. 24kHz stereo int16 → 24kHz mono int16 (average L+R)
-    const auto* src = reinterpret_cast<const int16_t*>(stereoPcm.constData());
-    const int stereoFrames = stereoPcm.size() / 4;
+    // 1. 24kHz stereo float32 → 24kHz mono float32 (average L+R)
+    const auto* src = reinterpret_cast<const float*>(stereoPcm.constData());
+    const int stereoFrames = stereoPcm.size() / (2 * static_cast<int>(sizeof(float)));
 
     if (static_cast<int>(m_nr2Mono.size()) < stereoFrames)
         m_nr2Mono.resize(stereoFrames);
     for (int i = 0; i < stereoFrames; ++i)
-        m_nr2Mono[i] = static_cast<int16_t>((src[2 * i] + src[2 * i + 1]) / 2);
+        m_nr2Mono[i] = (src[2 * i] + src[2 * i + 1]) * 0.5f;
 
-    // 2. 24kHz mono → 48kHz mono (r8brain)
+    // 2. 24kHz mono float32 → 48kHz mono float32 (r8brain)
     QByteArray mono48k = m_bnrUp->process(m_nr2Mono.data(), stereoFrames);
 
-    // 3. int16 → float32
-    const auto* mono48kSrc = reinterpret_cast<const int16_t*>(mono48k.constData());
-    const int mono48kSamples = mono48k.size() / 2;
-    QVector<float> floatBuf(mono48kSamples);
-    for (int i = 0; i < mono48kSamples; ++i)
-        floatBuf[i] = mono48kSrc[i] / 32768.0f;
+    // 3. Already float32 — pass directly to BNR
+    const auto* mono48kSrc = reinterpret_cast<const float*>(mono48k.constData());
+    const int mono48kSamples = mono48k.size() / static_cast<int>(sizeof(float));
 
     // 4. Push to BNR container (non-blocking), pull any denoised data
-    QByteArray denoised = m_bnr->process(floatBuf.constData(), mono48kSamples);
+    QByteArray denoised = m_bnr->process(mono48kSrc, mono48kSamples);
 
     // ── Convert denoised data and add to jitter buffer ───────────────────
 
     if (!denoised.isEmpty()) {
-        // 5. float32 → int16 (48kHz mono)
+        // 5. BNR returns float32 48kHz mono — downsample to 24kHz mono float32
         const auto* df = reinterpret_cast<const float*>(denoised.constData());
-        const int dn = denoised.size() / sizeof(float);
-        QByteArray di16(dn * 2, Qt::Uninitialized);
-        auto* d16 = reinterpret_cast<int16_t*>(di16.data());
-        for (int i = 0; i < dn; ++i) {
-            float s = std::clamp(df[i] * 32768.0f, -32768.0f, 32767.0f);
-            d16[i] = static_cast<int16_t>(s);
-        }
+        const int dn = denoised.size() / static_cast<int>(sizeof(float));
 
-        // 6. 48kHz mono → 24kHz mono (r8brain)
-        QByteArray mono24k = m_bnrDown->process(d16, dn);
+        QByteArray mono24k = m_bnrDown->process(df, dn);
 
-        // 7. Mono → stereo
-        const auto* m24 = reinterpret_cast<const int16_t*>(mono24k.constData());
-        const int n24 = mono24k.size() / 2;
-        QByteArray stereo(n24 * 4, Qt::Uninitialized);
-        auto* ds = reinterpret_cast<int16_t*>(stereo.data());
+        // 6. Mono float32 → stereo float32 (duplicate L=R)
+        const auto* m24 = reinterpret_cast<const float*>(mono24k.constData());
+        const int n24 = mono24k.size() / static_cast<int>(sizeof(float));
+        QByteArray stereo(n24 * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+        auto* ds = reinterpret_cast<float*>(stereo.data());
         for (int i = 0; i < n24; ++i) {
             ds[2 * i]     = m24[i];
             ds[2 * i + 1] = m24[i];
@@ -555,8 +547,8 @@ void AudioEngine::processBnr(const QByteArray& stereoPcm)
 
         m_bnrOutBuf.append(stereo);
 
-        // Cap jitter buffer at ~500ms (24kHz stereo int16 = 96000 bytes/sec)
-        constexpr int maxBufBytes = 48000;  // 500ms
+        // Cap jitter buffer at ~500ms (24kHz stereo float32 = 192000 bytes/sec)
+        constexpr int maxBufBytes = 96000;  // 500ms
         if (m_bnrOutBuf.size() > maxBufBytes)
             m_bnrOutBuf.remove(0, m_bnrOutBuf.size() - maxBufBytes);
     }
@@ -564,7 +556,7 @@ void AudioEngine::processBnr(const QByteArray& stereoPcm)
     // ── Play from jitter buffer ──────────────────────────────────────────
 
     // Wait for ~50ms of buffered audio before starting playback (priming)
-    constexpr int primeBytes = 4800;  // 50ms of 24kHz stereo int16
+    constexpr int primeBytes = 9600;  // 50ms of 24kHz stereo float32
     if (!m_bnrPrimed) {
         if (m_bnrOutBuf.size() >= primeBytes)
             m_bnrPrimed = true;
@@ -649,27 +641,27 @@ void AudioEngine::setDfnrPostFilterBeta(float) {}
 
 void AudioEngine::processNr2(const QByteArray& stereoPcm)
 {
-    const int totalSamples = stereoPcm.size() / 2;       // int16 count
-    const int stereoFrames = totalSamples / 2;            // L+R pairs
-    const auto* src = reinterpret_cast<const int16_t*>(stereoPcm.constData());
+    const int totalFloats = stereoPcm.size() / static_cast<int>(sizeof(float));
+    const int stereoFrames = totalFloats / 2;
+    const auto* src = reinterpret_cast<const float*>(stereoPcm.constData());
 
-    // Resize pre-allocated buffers if needed (only re-allocates on size increase)
+    // Resize pre-allocated buffers if needed
     if (static_cast<int>(m_nr2Mono.size()) < stereoFrames) {
         m_nr2Mono.resize(stereoFrames);
         m_nr2Processed.resize(stereoFrames);
     }
 
-    // Stereo -> mono (average L+R)
+    // Stereo float32 → mono float32 (average L+R)
     for (int i = 0; i < stereoFrames; ++i)
-        m_nr2Mono[i] = static_cast<int16_t>((src[2 * i] + src[2 * i + 1]) / 2);
+        m_nr2Mono[i] = (src[2 * i] + src[2 * i + 1]) * 0.5f;
 
-    // Process through SpectralNR
+    // Process through SpectralNR (float32 I/O)
     m_nr2->process(m_nr2Mono.data(), m_nr2Processed.data(), stereoFrames);
 
-    // Mono -> stereo (duplicate) into pre-allocated output buffer
-    const int outBytes = stereoFrames * 4;  // stereoFrames x 2ch x 2bytes
+    // Mono float32 → stereo float32 (duplicate)
+    const int outBytes = stereoFrames * 2 * static_cast<int>(sizeof(float));
     m_nr2Output.resize(outBytes);
-    auto* dst = reinterpret_cast<int16_t*>(m_nr2Output.data());
+    auto* dst = reinterpret_cast<float*>(m_nr2Output.data());
     for (int i = 0; i < stereoFrames; ++i) {
         dst[2 * i]     = m_nr2Processed[i];
         dst[2 * i + 1] = m_nr2Processed[i];
@@ -694,14 +686,13 @@ QByteArray AudioEngine::applyBoost(const QByteArray& pcm, float gain) const
 
 float AudioEngine::computeRMS(const QByteArray& pcm) const
 {
-    const int samples = pcm.size() / 2;  // 16-bit samples
+    const int samples = pcm.size() / static_cast<int>(sizeof(float));
     if (samples == 0) return 0.0f;
 
-    const int16_t* data = reinterpret_cast<const int16_t*>(pcm.constData());
+    const float* data = reinterpret_cast<const float*>(pcm.constData());
     double sum = 0.0;
     for (int i = 0; i < samples; ++i) {
-        const double s = data[i] / 32768.0;
-        sum += s * s;
+        sum += static_cast<double>(data[i]) * data[i];
     }
     return static_cast<float>(std::sqrt(sum / samples));
 }
@@ -806,6 +797,23 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_txPollTimer->setInterval(5);
     connect(m_txPollTimer, &QTimer::timeout, this, &AudioEngine::onTxAudioReady);
     m_txPollTimer->start();
+
+    // Guard against CoreAudio silently stopping the source after extended
+    // runtime (~16h). Detect the silent stop, pause the timer, and restart
+    // cleanly so onTxAudioReady never touches a stale m_micBuffer. (#1149)
+    connect(m_audioSource, &QAudioSource::stateChanged, this,
+            [this](QAudio::State state) {
+        if (state != QAudio::StoppedState) return;
+        if (!m_txPollTimer) return;  // intentional stop already handled
+        m_txPollTimer->stop();
+        QHostAddress addr = m_txAddress;
+        quint16 port = m_txPort;
+        QMetaObject::invokeMethod(this, [this, addr, port]() {
+            qCWarning(lcAudio) << "AudioEngine: QAudioSource stopped silently (#1149), restarting TX";
+            stopTxStream();
+            startTxStream(addr, port);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
 #else
     // Linux/Windows: pull mode works fine
     m_audioSource = new QAudioSource(dev, fmt, this);
@@ -875,7 +883,11 @@ void AudioEngine::stopTxStream()
     }
 #endif
     if (m_audioSource) {
-        m_audioSource->stop();
+        // Guard: calling stop() on an already-stopped QAudioSource on macOS causes
+        // AudioOutputUnitStop to dereference a stale CoreAudio device handle,
+        // producing EXC_ARM_DA_ALIGN / EXC_BAD_ACCESS (#1059).
+        if (m_audioSource->state() != QAudio::StoppedState)
+            m_audioSource->stop();
         delete m_audioSource;
         m_audioSource = nullptr;
         m_micDevice   = nullptr;
@@ -895,7 +907,10 @@ void AudioEngine::stopTxStream()
 void AudioEngine::onTxAudioReady()
 {
 #ifdef Q_OS_MAC
-    if (!m_micBuffer || (m_txStreamId == 0 && m_remoteTxStreamId == 0)) return;
+    if (!m_micBuffer || !m_audioSource) return;
+    if (m_audioSource->state() == QAudio::StoppedState) return;
+    if (!m_micBuffer->isOpen()) return;
+    if (m_txStreamId == 0 && m_remoteTxStreamId == 0) return;
     qint64 avail = m_micBuffer->pos();
     if (avail <= 0) return;
     QByteArray data = m_micBuffer->data();
@@ -908,22 +923,31 @@ void AudioEngine::onTxAudioReady()
     if (data.isEmpty()) return;
 #endif
 
+    // Convert mic int16 → float32 at capture boundary
+    {
+        const auto* i16 = reinterpret_cast<const int16_t*>(data.constData());
+        const int numSamples = data.size() / static_cast<int>(sizeof(int16_t));
+        QByteArray floatData(numSamples * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+        auto* fd = reinterpret_cast<float*>(floatData.data());
+        for (int i = 0; i < numSamples; ++i)
+            fd[i] = i16[i] / 32768.0f;
+        data = floatData;
+    }
+
     // Resample to 24kHz stereo using r8brain polyphase resampler
     if (m_txNeedsResample && m_txResampler) {
-        const auto* pcm = reinterpret_cast<const int16_t*>(data.constData());
+        const auto* pcm = reinterpret_cast<const float*>(data.constData());
         if (m_txInputMono) {
-            // Mono input → resample → duplicate to stereo
-            data = m_txResampler->processMonoToStereo(pcm, data.size() / sizeof(int16_t));
+            data = m_txResampler->processMonoToStereo(pcm, data.size() / static_cast<int>(sizeof(float)));
         } else {
-            // Stereo input → downmix to mono → resample → duplicate to stereo
-            data = m_txResampler->processStereoToStereo(pcm, data.size() / (2 * sizeof(int16_t)));
+            data = m_txResampler->processStereoToStereo(pcm, data.size() / (2 * static_cast<int>(sizeof(float))));
         }
     } else if (m_txInputMono) {
-        // 24kHz mono (no resample needed) → duplicate to stereo
-        const auto* src = reinterpret_cast<const int16_t*>(data.constData());
-        const int monoSamples = data.size() / sizeof(int16_t);
-        QByteArray stereo(monoSamples * 2 * sizeof(int16_t), Qt::Uninitialized);
-        auto* dst = reinterpret_cast<int16_t*>(stereo.data());
+        // 24kHz mono float32 (no resample needed) → duplicate to stereo
+        const auto* src = reinterpret_cast<const float*>(data.constData());
+        const int monoSamples = data.size() / static_cast<int>(sizeof(float));
+        QByteArray stereo(monoSamples * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+        auto* dst = reinterpret_cast<float*>(stereo.data());
         for (int i = 0; i < monoSamples; ++i) {
             dst[i * 2] = src[i];
             dst[i * 2 + 1] = src[i];
@@ -933,7 +957,7 @@ void AudioEngine::onTxAudioReady()
 
     // RADE mode: emit raw PCM for RADEEngine instead of sending VITA-49
     if (m_radeMode) {
-        emit txRawPcmReady(data);  // data is int16 stereo 24kHz
+        emit txRawPcmReady(data);  // data is float32 stereo 24kHz
         return;
     }
 
@@ -942,24 +966,23 @@ void AudioEngine::onTxAudioReady()
     if (m_daxTxMode) return;
 
     // ── Apply client-side PC mic gain ────────────────────────────────────
-    // mic_level slider (0-100) maps to 0.0-1.0 gain on raw PCM.
-    // Applied before metering so the meter reflects the actual level sent.
+    // mic_level slider (0-100) maps to 0.0-1.0 gain on raw float32 PCM.
     const float gain = m_pcMicGain.load();
     if (gain < 0.999f) {
-        auto* pcm = reinterpret_cast<int16_t*>(data.data());
-        int sampleCount = data.size() / sizeof(int16_t);
+        auto* pcm = reinterpret_cast<float*>(data.data());
+        int sampleCount = data.size() / static_cast<int>(sizeof(float));
         for (int i = 0; i < sampleCount; ++i)
-            pcm[i] = static_cast<int16_t>(qBound(-32768, static_cast<int>(pcm[i] * gain), 32767));
+            pcm[i] *= gain;
     }
 
     // ── Client-side PC mic level metering ────────────────────────────────
     // Accumulate peak and RMS over a ~50ms window, then emit once.
     // Only used when mic_selection=PC (gated in MainWindow).
     {
-        const auto* pcm = reinterpret_cast<const int16_t*>(data.constData());
-        int sampleCount = data.size() / sizeof(int16_t);
+        const auto* pcm = reinterpret_cast<const float*>(data.constData());
+        int sampleCount = data.size() / static_cast<int>(sizeof(float));
         for (int i = 0; i < sampleCount; i += 2) {  // stereo: use L channel
-            float s = std::abs(pcm[i]) / 32768.0f;
+            float s = std::abs(pcm[i]);
             if (s > m_pcMicPeak) m_pcMicPeak = s;
             m_pcMicSumSq += static_cast<double>(s) * s;
             m_pcMicSampleCount++;
@@ -978,8 +1001,17 @@ void AudioEngine::onTxAudioReady()
     // ── Opus TX path: always active for remote_audio_tx ────────────────
     // Sends Opus during both RX (VOX/met_in_rx metering) and TX (voice).
     // The radio requires Opus on remote_audio_tx (enforces compression=OPUS).
+    // Convert float32→int16 at the Opus boundary (libopus requires int16).
     if (m_opusTxEnabled) {
-        m_opusTxAccumulator.append(data);
+        {
+            const auto* f32 = reinterpret_cast<const float*>(data.constData());
+            const int nSamples = data.size() / static_cast<int>(sizeof(float));
+            QByteArray i16data(nSamples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
+            auto* i16 = reinterpret_cast<int16_t*>(i16data.data());
+            for (int i = 0; i < nSamples; ++i)
+                i16[i] = static_cast<int16_t>(std::clamp(f32[i] * 32768.0f, -32768.0f, 32767.0f));
+            m_opusTxAccumulator.append(i16data);
+        }
         // 240 stereo sample frames × 2 channels × 2 bytes = 960 bytes per 10ms frame
         constexpr int OPUS_FRAME_BYTES = 240 * 2 * sizeof(int16_t);
 
@@ -1034,25 +1066,19 @@ void AudioEngine::onTxAudioReady()
     }
 
     // ── Uncompressed TX path ─────────────────────────────────────────────
+    // Data is float32 stereo — accumulate and send as float32 VITA-49 packets.
     m_txAccumulator.append(data);
 
-    // Process complete packets (128 stereo pairs = 512 bytes of int16 PCM)
-    while (m_txAccumulator.size() >= TX_PCM_BYTES_PER_PACKET) {
-        const int16_t* pcm = reinterpret_cast<const int16_t*>(m_txAccumulator.constData());
+    // 128 stereo pairs × 2 channels × sizeof(float) = 1024 bytes per packet
+    constexpr int TX_FLOAT_BYTES_PER_PACKET = TX_SAMPLES_PER_PACKET * 2 * sizeof(float);
+    while (m_txAccumulator.size() >= TX_FLOAT_BYTES_PER_PACKET) {
+        const float* pcm = reinterpret_cast<const float*>(m_txAccumulator.constData());
 
-        // Convert int16 stereo → float32 stereo (128 pairs = 256 floats)
-        // No client-side gain — the radio handles mic level via mic_level
-        // and mic_boost settings. Sending at native level prevents clipping.
-        float floatBuf[TX_SAMPLES_PER_PACKET * 2];
-        for (int i = 0; i < TX_SAMPLES_PER_PACKET * 2; ++i)
-            floatBuf[i] = pcm[i] / 32768.0f;
-
-        // Build VITA-49 packet and send via registered UDP socket
-        QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
+        // Already float32 — send directly
+        QByteArray packet = buildVitaTxPacket(pcm, TX_SAMPLES_PER_PACKET);
         emit txPacketReady(packet);
 
-        // Advance accumulator
-        m_txAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
+        m_txAccumulator.remove(0, TX_FLOAT_BYTES_PER_PACKET);
     }
 }
 

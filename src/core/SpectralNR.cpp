@@ -277,14 +277,14 @@ bool SpectralNR::generateWisdom(const std::string& directory,
 
 // ─── Main Processing ───────────────────────────────────────────────────────────
 
-void SpectralNR::process(const int16_t* input, int16_t* output, int numSamples)
+void SpectralNR::process(const float* input, float* output, int numSamples)
 {
     const int accSize = static_cast<int>(m_inAccum.size());
     const int outSize = static_cast<int>(m_outAccum.size());
 
-    // Push input samples into accumulator (int16 -> float64)
+    // Push input samples into accumulator (float32 -> float64)
     for (int i = 0; i < numSamples; ++i) {
-        m_inAccum[m_inWritePos] = input[i] / 32768.0;
+        m_inAccum[m_inWritePos] = static_cast<double>(input[i]);
         m_inWritePos = (m_inWritePos + 1) % accSize;
     }
     m_samplesAccum += numSamples;
@@ -309,11 +309,9 @@ void SpectralNR::process(const int16_t* input, int16_t* output, int numSamples)
         m_outWritePos = (m_outWritePos + m_hopSize) % outSize;
     }
 
-    // Read output samples (float64 -> int16), clearing consumed positions
+    // Read output samples (float64 -> float32), clearing consumed positions
     for (int i = 0; i < numSamples; ++i) {
-        double s = m_outAccum[m_outReadPos];
-        s = std::clamp(s, -1.0, 1.0);
-        output[i] = static_cast<int16_t>(s * 32767.0);
+        output[i] = static_cast<float>(m_outAccum[m_outReadPos]);
         m_outAccum[m_outReadPos] = 0.0;
         m_outReadPos = (m_outReadPos + 1) % outSize;
     }

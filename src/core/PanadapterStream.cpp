@@ -581,7 +581,7 @@ void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool 
     }
 
     // Payload: big-endian float32 stereo interleaved (L, R, L, R, ...).
-    // Convert to little-endian int16 stereo for QAudioSink (Int16, 24 kHz).
+    // Byte-swap to native float32 and emit directly — no int16 conversion.
     const int payloadStart = VITA49_HEADER_BYTES;
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
     if (payloadBytes < 4) return;
@@ -589,15 +589,12 @@ void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool 
     const int numFloats = payloadBytes / 4;
     const uchar* src = raw + payloadStart;
 
-    QByteArray pcm(numFloats * 2, Qt::Uninitialized);
-    auto* dst = reinterpret_cast<qint16*>(pcm.data());
+    QByteArray pcm(numFloats * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* dst = reinterpret_cast<float*>(pcm.data());
 
     for (int i = 0; i < numFloats; ++i) {
-        // Read big-endian uint32, reinterpret as float (byte-swap = big→native float).
         const quint32 u = qFromBigEndian<quint32>(src + i * 4);
-        float f;
-        std::memcpy(&f, &u, 4);
-        dst[i] = static_cast<qint16>(qBound(-1.0f, f, 1.0f) * 32767.0f);
+        std::memcpy(&dst[i], &u, 4);
     }
 
     emit audioDataReady(pcm);
@@ -622,7 +619,7 @@ void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bo
                  << "totalBytes=" << totalBytes;
     }
 
-    // Payload: big-endian int16 mono. Duplicate to stereo for QAudioSink.
+    // Payload: big-endian int16 mono. Convert to float32 stereo.
     const int payloadStart = VITA49_HEADER_BYTES;
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
     if (payloadBytes < 2) return;
@@ -630,11 +627,11 @@ void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bo
     const int monoSamples = payloadBytes / 2;
     const uchar* src = raw + payloadStart;
 
-    QByteArray pcm(monoSamples * 4, Qt::Uninitialized);  // stereo int16
-    auto* dst = reinterpret_cast<qint16*>(pcm.data());
+    QByteArray pcm(monoSamples * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* dst = reinterpret_cast<float*>(pcm.data());
 
     for (int i = 0; i < monoSamples; ++i) {
-        const qint16 s = qFromBigEndian<qint16>(src + i * 2);
+        const float s = qFromBigEndian<qint16>(src + i * 2) / 32768.0f;
         dst[i * 2]     = s;  // L
         dst[i * 2 + 1] = s;  // R
     }
@@ -671,9 +668,18 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
 
     // Opus payload is raw bytes — no byte-swapping needed
     QByteArray opusFrame(reinterpret_cast<const char*>(raw + payloadStart), payloadBytes);
-    QByteArray pcm = m_opusCodec->decode(opusFrame);
-    if (!pcm.isEmpty())
-        emit audioDataReady(pcm);
+    QByteArray int16pcm = m_opusCodec->decode(opusFrame);
+    if (int16pcm.isEmpty()) return;
+
+    // Convert Opus int16 output to float32 stereo
+    const int numSamples = int16pcm.size() / static_cast<int>(sizeof(qint16));
+    const auto* src = reinterpret_cast<const qint16*>(int16pcm.constData());
+    QByteArray pcm(numSamples * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* dst = reinterpret_cast<float*>(pcm.data());
+    for (int i = 0; i < numSamples; ++i) {
+        dst[i] = src[i] / 32768.0f;
+    }
+    emit audioDataReady(pcm);
 }
 
 void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer)
