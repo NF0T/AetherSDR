@@ -407,36 +407,12 @@ void TciServer::onBinaryMessage(const QByteArray& data)
     if (pcm.isEmpty()) return;
 
     // ─── TX resampling: 48kHz (TCI) → 24kHz (radio native DAX) ───────────
-    // The Resampler works with int16, so: float32→int16→resample→int16→float32.
-    // Quality loss is negligible for FT8 (8-FSK with ~24dB coding gain).
+    // Resampler now works with float32 directly — no format conversion needed.
     if (m_txResampler) {
         int stereoFrames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
         const auto* fSrc = reinterpret_cast<const float*>(pcm.constData());
-
-        // float32 stereo → int16 stereo
-        QByteArray i16Buf(stereoFrames * 2 * static_cast<int>(sizeof(int16_t)),
-                          Qt::Uninitialized);
-        auto* i16Dst = reinterpret_cast<int16_t*>(i16Buf.data());
-        for (int i = 0; i < stereoFrames * 2; ++i) {
-            i16Dst[i] = static_cast<int16_t>(
-                std::clamp(fSrc[i], -1.0f, 1.0f) * 32767.0f);
-        }
-
-        // Resample stereo 48kHz → stereo 24kHz
-        QByteArray resampled = m_txResampler->processStereoToStereo(
-            i16Dst, stereoFrames);
-        if (resampled.isEmpty()) return;
-
-        // int16 stereo → float32 stereo
-        int resampledFrames = resampled.size()
-            / (2 * static_cast<int>(sizeof(int16_t)));
-        const auto* rSrc = reinterpret_cast<const int16_t*>(
-            resampled.constData());
-        pcm.resize(resampledFrames * 2 * static_cast<int>(sizeof(float)));
-        auto* fDst = reinterpret_cast<float*>(pcm.data());
-        for (int i = 0; i < resampledFrames * 2; ++i) {
-            fDst[i] = rSrc[i] / 32768.0f;
-        }
+        pcm = m_txResampler->processStereoToStereo(fSrc, stereoFrames);
+        if (pcm.isEmpty()) return;
     }
 
     QMetaObject::invokeMethod(m_audio, "feedDaxTxAudio",
@@ -456,9 +432,8 @@ void TciServer::onRxAudioReady(const QByteArray& pcm)
     if (!anyAudio) return;
 
     // Input: int16 stereo, 24 kHz, little-endian
-    const auto* src = reinterpret_cast<const qint16*>(pcm.constData());
-    int totalInt16 = pcm.size() / static_cast<int>(sizeof(qint16));
-    int stereoFrames = totalInt16 / 2;
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    int stereoFrames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
 
     // Periodic debug log
     static int rxCount = 0;
@@ -469,41 +444,38 @@ void TciServer::onRxAudioReady(const QByteArray& pcm)
     for (auto& cs : m_clients) {
         if (!cs.audioEnabled) continue;
 
-        const qint16* audioSrc = src;
+        const float* audioSrc = src;
         int audioFrames = stereoFrames;
         QByteArray resampledBuf;
 
-        // Resample if client wants a different rate
+        // Resample if client wants a different rate (float32 I/O)
         if (cs.resampler) {
             resampledBuf = cs.resampler->processStereoToStereo(src, stereoFrames);
-            audioSrc = reinterpret_cast<const qint16*>(resampledBuf.constData());
-            audioFrames = resampledBuf.size() / (2 * sizeof(qint16));
+            audioSrc = reinterpret_cast<const float*>(resampledBuf.constData());
+            audioFrames = resampledBuf.size() / (2 * static_cast<int>(sizeof(float)));
         }
 
         int srcSamples = audioFrames * 2;  // stereo
 
         if (cs.audioFormat == 3) {
-            // float32 output
+            // float32 output — pass through directly
             if (cs.audioChannels == 2) {
-                QVector<float> floatBuf(srcSamples);
-                for (int i = 0; i < srcSamples; ++i)
-                    floatBuf[i] = audioSrc[i] / 32768.0f;
                 cs.socket->sendBinaryMessage(
                     buildAudioFrame(0, 1, cs.audioSampleRate, 2,
-                                    floatBuf.constData(), audioFrames));
+                                    audioSrc, audioFrames));
             } else {
                 // Mono: average L+R
                 QVector<float> monoBuf(audioFrames);
                 for (int i = 0; i < audioFrames; ++i)
-                    monoBuf[i] = (audioSrc[i*2] + audioSrc[i*2+1]) / 65536.0f;
+                    monoBuf[i] = (audioSrc[i*2] + audioSrc[i*2+1]) * 0.5f;
                 cs.socket->sendBinaryMessage(
                     buildAudioFrame(0, 1, cs.audioSampleRate, 1,
                                     monoBuf.constData(), audioFrames));
             }
         } else {
-            // int16 output — pack into binary frame with format=0
+            // int16 output — convert float32 → int16
             if (cs.audioChannels == 2) {
-                int payloadBytes = srcSamples * sizeof(qint16);
+                int payloadBytes = srcSamples * static_cast<int>(sizeof(qint16));
                 QByteArray frame(sizeof(TciAudioHeader) + payloadBytes, Qt::Uninitialized);
                 TciAudioHeader hdr{};
                 hdr.receiver = 0;
@@ -513,15 +485,13 @@ void TciServer::onRxAudioReady(const QByteArray& pcm)
                 hdr.type = 1;    // RX_AUDIO
                 hdr.channels = 2;
                 std::memcpy(frame.data(), &hdr, sizeof(hdr));
-                std::memcpy(frame.data() + sizeof(hdr), audioSrc, payloadBytes);
+                auto* i16dst = reinterpret_cast<qint16*>(frame.data() + sizeof(hdr));
+                for (int i = 0; i < srcSamples; ++i)
+                    i16dst[i] = static_cast<qint16>(std::clamp(audioSrc[i] * 32768.0f, -32768.0f, 32767.0f));
                 cs.socket->sendBinaryMessage(frame);
             } else {
                 // Mono int16
-                QVector<qint16> monoBuf(audioFrames);
-                for (int i = 0; i < audioFrames; ++i)
-                    monoBuf[i] = static_cast<qint16>(
-                        (audioSrc[i*2] + audioSrc[i*2+1]) / 2);
-                int payloadBytes = audioFrames * sizeof(qint16);
+                int payloadBytes = audioFrames * static_cast<int>(sizeof(qint16));
                 QByteArray frame(sizeof(TciAudioHeader) + payloadBytes, Qt::Uninitialized);
                 TciAudioHeader hdr{};
                 hdr.receiver = 0;
@@ -531,7 +501,10 @@ void TciServer::onRxAudioReady(const QByteArray& pcm)
                 hdr.type = 1;
                 hdr.channels = 1;
                 std::memcpy(frame.data(), &hdr, sizeof(hdr));
-                std::memcpy(frame.data() + sizeof(hdr), monoBuf.constData(), payloadBytes);
+                auto* i16dst = reinterpret_cast<qint16*>(frame.data() + sizeof(hdr));
+                for (int i = 0; i < audioFrames; ++i)
+                    i16dst[i] = static_cast<qint16>(std::clamp(
+                        (audioSrc[i*2] + audioSrc[i*2+1]) * 0.5f * 32768.0f, -32768.0f, 32767.0f));
                 cs.socket->sendBinaryMessage(frame);
             }
         }
@@ -549,38 +522,32 @@ void TciServer::onDaxAudioReady(int channel, const QByteArray& pcm)
     }
     if (!anyAudio) return;
 
-    // Input: int16 stereo, 24 kHz, little-endian
-    const auto* src = reinterpret_cast<const qint16*>(pcm.constData());
-    int totalInt16 = pcm.size() / static_cast<int>(sizeof(qint16));
-    int stereoFrames = totalInt16 / 2;
+    // Input: float32 stereo, 24 kHz
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    int stereoFrames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
 
     // Map DAX channel to TRX: channel 1 → TRX 0, channel 2 → TRX 1, etc.
     int trx = channel - 1;
     if (trx < 0) trx = 0;
 
-    // Per-client resampling (same pattern as onRxAudioReady)
+    // Per-client resampling (float32 I/O)
     for (auto& cs : m_clients) {
         if (!cs.audioEnabled) continue;
 
-        const qint16* audioSrc = src;
+        const float* audioSrc = src;
         int audioFrames = stereoFrames;
         QByteArray resampledBuf;
 
         if (cs.resampler) {
             resampledBuf = cs.resampler->processStereoToStereo(src, stereoFrames);
-            audioSrc = reinterpret_cast<const qint16*>(resampledBuf.constData());
-            audioFrames = resampledBuf.size() / (2 * static_cast<int>(sizeof(qint16)));
+            audioSrc = reinterpret_cast<const float*>(resampledBuf.constData());
+            audioFrames = resampledBuf.size() / (2 * static_cast<int>(sizeof(float)));
         }
-
-        int srcSamples = audioFrames * 2;
-        QVector<float> floatBuf(srcSamples);
-        for (int i = 0; i < srcSamples; ++i)
-            floatBuf[i] = audioSrc[i] / 32768.0f;
 
         cs.socket->sendBinaryMessage(
             buildAudioFrame(trx, 1 /*RX_AUDIO_STREAM*/,
                             cs.audioSampleRate, 2,
-                            floatBuf.constData(), audioFrames));
+                            audioSrc, audioFrames));
     }
 }
 

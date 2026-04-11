@@ -39,7 +39,7 @@ jobs:
       - name: Restore Qt cache (Intel only)
         if: matrix.label == 'intel'
         id: qt-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: qt-install
           key: qt-6.7.3-macos-intel-deploy13
@@ -87,10 +87,17 @@ jobs:
             QT_PREFIX="$(brew --prefix)"
             DEPLOY_TARGET="14.0"
           fi
+          # Intel Mac: disable GPU rendering — QRhiWidget has issues on
+          # older Metal/OpenGL hardware. Apple Silicon uses GPU by default.
+          GPU_FLAG=""
+          if [ "${{ matrix.label }}" = "intel" ]; then
+            GPU_FLAG="-DAETHER_GPU_SPECTRUM=OFF"
+          fi
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET" \
-            -DCMAKE_PREFIX_PATH="$QT_PREFIX;$(brew --prefix)"
+            -DCMAKE_PREFIX_PATH="$QT_PREFIX;$(brew --prefix)" \
+            $GPU_FLAG
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)

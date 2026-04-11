@@ -280,7 +280,7 @@ void AppSettings::migrateFromQSettings()
         // No old settings — first launch. Set defaults.
         setValue("ApplicationVersion", QCoreApplication::applicationVersion());
         setValue("AutoConnect", "True");
-        setValue("StationName", "AetherSDR");
+        setValue("StationName", "");
         setValue("GUIClientID", QUuid::createUuid().toString(QUuid::WithoutBraces));
         setValue("IsSingleClickTuneEnabled", "False");
         setValue("IsSpotsEnabled", "True");
@@ -333,7 +333,7 @@ void AppSettings::migrateFromQSettings()
     // Set defaults for new keys
     setValue("ApplicationVersion", QCoreApplication::applicationVersion());
     setValue("AutoConnect", "True");
-    setValue("StationName", "AetherSDR");
+    setValue("StationName", "");
     setValue("GUIClientID", QUuid::createUuid().toString(QUuid::WithoutBraces));
     if (!contains("IsSingleClickTuneEnabled"))
         setValue("IsSingleClickTuneEnabled", "False");

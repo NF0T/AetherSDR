@@ -1,4 +1,5 @@
 #include "MemoryDialog.h"
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "core/RadioConnection.h"
@@ -10,6 +11,7 @@
 #include <QDebug>
 #include <QPointer>
 #include <QTimer>
+#include <QCloseEvent>
 
 namespace AetherSDR {
 
@@ -215,6 +217,12 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     // If cache is empty, memories may not have been pushed yet. As a fallback,
     // new memories created via Add will populate the table immediately.
     populateTable();
+
+}
+
+void MemoryDialog::closeEvent(QCloseEvent* event)
+{
+    QDialog::closeEvent(event);
 }
 
 void MemoryDialog::populateTable()
@@ -232,7 +240,8 @@ void MemoryDialog::populateTable()
         int col = 0;
         m_table->setItem(row, col++, new QTableWidgetItem(m.group));
         m_table->setItem(row, col++, new QTableWidgetItem(m.owner));
-        auto* freqItem = new MemoryTableItem(QString::number(m.freq, 'f', 3));
+        // Show the full MHz value so the last 3 digits (Hz) are not lost.
+        auto* freqItem = new MemoryTableItem(QString::number(m.freq, 'f', 6));
         freqItem->setData(Qt::UserRole, m.freq);
         m_table->setItem(row, col++, freqItem);
         m_table->setItem(row, col++, new QTableWidgetItem(m.name));

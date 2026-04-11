@@ -272,8 +272,8 @@ private:
     std::atomic<bool> m_dfnrEnabled{false};
 
     // Pre-allocated NR2 work buffers (avoid per-call heap allocation)
-    std::vector<int16_t> m_nr2Mono;
-    std::vector<int16_t> m_nr2Processed;
+    std::vector<float> m_nr2Mono;
+    std::vector<float> m_nr2Processed;
     QByteArray m_nr2Output;
 
     // RX audio buffer handling

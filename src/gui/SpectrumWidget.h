@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QColor>
 #include <QDateTime>
+#include <QTimer>
 
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -110,6 +111,9 @@ public:
     int stepSize() const { return m_stepHz; }
     void setStepSize(int hz) { m_stepHz = hz; }
 
+    // Set panadapter bandwidth zoom limits (MHz). Called per-radio model.
+    void setBandwidthLimits(double minMhz, double maxMhz) { m_minBwMhz = minMhz; m_maxBwMhz = maxMhz; }
+
     // Set the per-mode filter limits (Hz). Called when mode changes.
     void setFilterLimits(int minHz, int maxHz) { m_filterMinHz = minHz; m_filterMaxHz = maxHz; }
 
@@ -133,10 +137,15 @@ public:
     void setWnbActive(bool on) { m_wnbActive = on; markOverlayDirty(); }
     void setRfGain(int gain) { m_rfGainValue = gain; markOverlayDirty(); }
 
-    // HF propagation forecast overlay (K-index and Solar Flux Index).
+    // HF propagation forecast overlay (K-index, A-index, and Solar Flux Index).
     // Values of -1 mean not yet fetched; visible only when enabled.
     void setPropForecastVisible(bool on) { m_propForecastVisible = on; markOverlayDirty(); }
-    void setPropForecast(int kIndex, int sfi) { m_propKIndex = kIndex; m_propSfi = sfi; markOverlayDirty(); }
+    void setPropForecast(int kIndex, int aIndex, int sfi) {
+        m_propKIndex = kIndex;
+        m_propAIndex = aIndex;
+        m_propSfi = sfi;
+        markOverlayDirty();
+    }
     bool propForecastVisible() const { return m_propForecastVisible; }
 
     // NB Waterfall Blanker (#277) — client-side impulse suppression
@@ -152,6 +161,8 @@ public:
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
     void setShowCursorFreq(bool on) { m_showCursorFreq = on; update(); }
     bool showCursorFreq() const { return m_showCursorFreq; }
+    void setShowTuneGuides(bool on);
+    bool showTuneGuides() const { return m_showTuneGuides; }
     void setBackgroundImage(const QString& path);
     QString backgroundImagePath() const { return m_bgImagePath; }
     void setBackgroundOpacity(int pct) { m_bgOpacity = qBound(0, pct, 100); markOverlayDirty(); }
@@ -167,9 +178,13 @@ public:
     void setFftFillAlpha(float a);
     void setFftFillColor(const QColor& c);
     void setFftHeatMap(bool on);
+    void setShowGrid(bool on);
+    void setFftLineWidth(float w);
     float fftFillAlpha() const         { return m_fftFillAlpha; }
     QColor fftFillColor() const        { return m_fftFillColor; }
     bool fftHeatMap() const            { return m_fftHeatMap; }
+    bool showGrid() const              { return m_showGrid; }
+    float fftLineWidth() const         { return m_fftLineWidth; }
     int   fftAverage() const           { return m_fftAverage; }
     int   fftFps() const               { return m_fftFps; }
     bool  fftWeightedAvg() const       { return m_fftWeightedAvg; }
@@ -298,6 +313,7 @@ signals:
     void tnfDepthRequested(int id, int depthDb);
     void tnfPermanentRequested(int id, bool permanent);
     void sliceCloseRequested(int sliceId);
+    void sliceTuneRequested(int sliceId, double freqMhz);
     void sliceTxRequested(int sliceId);
     // Spot signals
     void spotAddRequested(double freqMhz, const QString& callsign,
@@ -319,6 +335,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    bool event(QEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
 public:
@@ -382,6 +399,10 @@ private:
     int m_angleAccum{0};    // mouse wheel angle accumulator (#390)
     qint64 m_lastWheelMs{0}; // debounce: timestamp of last accepted wheel step
 
+    // Panadapter bandwidth zoom limits (MHz), set per-radio model
+    double m_minBwMhz{0.010};   // 10 kHz default
+    double m_maxBwMhz{5.400};   // safe default for unknown radios
+
     // ── FFT display controls (radio-side via "display pan set") ──────────
     int   m_panIndex{0};             // per-pan settings index (0, 1, 2, 3)
     int   m_fftAverage{0};           // 0=off, 1-10 frames
@@ -390,6 +411,8 @@ private:
     float m_fftFillAlpha{0.70f};     // client-side fill opacity (0-1)
     QColor m_fftFillColor{0x00, 0xe5, 0xff};  // client-side fill color (default cyan)
     bool m_fftHeatMap{true};        // true = intensity heat map, false = solid color
+    bool m_showGrid{true};          // false = hide grid lines
+    float m_fftLineWidth{2.0f};     // spectrum trace width in pixels
 
     // ── Waterfall display controls (radio-side via "display panafall set") ─
     int   m_wfColorGain{50};         // 0-100, maps intensity to color range
@@ -438,6 +461,7 @@ private:
     int m_filterDragStartHz{0};     // filter edge Hz at grab time (#764)
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
+    int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)
     // dBm scale strip drag state
     static constexpr int DBM_STRIP_W = 36;  // width of the dBm scale strip
     static constexpr int DBM_ARROW_H = 14;  // height of each arrow button
@@ -455,6 +479,7 @@ private:
     // HF propagation forecast overlay
     bool m_propForecastVisible{false};
     int  m_propKIndex{-1};
+    int  m_propAIndex{-1};
     int  m_propSfi{-1};
 
     // Background image
@@ -467,6 +492,22 @@ private:
     // Cursor frequency label
     bool   m_showCursorFreq{false};
     QPoint m_cursorPos{-1, -1};
+
+    // Tune guide overlay (vertical line + freq label, auto-hides after 4s)
+    bool    m_showTuneGuides{false};
+    bool    m_tuneGuideVisible{false};
+    QTimer* m_tuneGuideTimer{nullptr};
+
+    // State change detector cache (per-instance, NOT static — multiple
+    // panadapters have different values and static vars cause an infinite
+    // render loop that starves the event loop)
+    double m_lastDetectCenter{0};
+    double m_lastDetectBw{0};
+    float  m_lastDetectRef{0};
+    float  m_lastDetectDyn{0};
+    float  m_lastDetectFrac{0};
+    bool   m_lastDetectWnb{false};
+    int    m_lastDetectRfGain{0};
 
     // NB Waterfall Blanker (#277)
     bool  m_wfBlankerEnabled{false};
@@ -533,9 +574,11 @@ private:
     QMap<int, VfoWidget*> m_vfoWidgets;
     VfoWidget* m_vfoWidget{nullptr};  // alias to active slice widget (compat)
 
-    // Bottom-left waterfall zoom buttons: S(egment), B(and)
+    // Bottom-left waterfall zoom buttons: S(egment), B(and), −/+ (bandwidth)
     QPushButton* m_zoomSegBtn{nullptr};
     QPushButton* m_zoomBandBtn{nullptr};
+    QPushButton* m_zoomOutBtn{nullptr};
+    QPushButton* m_zoomInBtn{nullptr};
 
 #ifdef AETHER_GPU_SPECTRUM
     bool m_rhiInitialized{false};

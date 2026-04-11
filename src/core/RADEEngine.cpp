@@ -136,11 +136,22 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
 #ifdef HAVE_RADE
     if (!m_rade || !m_lpcnetEnc) return;
 
-    // 1. Downsample 24kHz stereo → 16kHz mono for LPCNet
-    QByteArray mono16k = m_down24to16->processStereoToMono(reinterpret_cast<const int16_t*>(pcm.constData()), pcm.size() / 4);
+    // 1. Downsample 24kHz stereo float32 → 16kHz mono float32 for LPCNet
+    const auto* srcF = reinterpret_cast<const float*>(pcm.constData());
+    QByteArray mono16k = m_down24to16->processStereoToMono(srcF, pcm.size() / (2 * static_cast<int>(sizeof(float))));
 
-    // 2. Process 10ms frames (LPCNET_FRAME_SIZE = 160 samples @ 16kHz)
-    m_txAccum.append(reinterpret_cast<const char*>(mono16k.constData()), mono16k.size());
+    // 2. Convert float32 mono → int16 mono for LPCNet (requires int16 API)
+    {
+        const auto* mf = reinterpret_cast<const float*>(mono16k.constData());
+        const int nMono = mono16k.size() / static_cast<int>(sizeof(float));
+        QByteArray mono16kInt16(nMono * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
+        auto* mi = reinterpret_cast<int16_t*>(mono16kInt16.data());
+        for (int i = 0; i < nMono; ++i)
+            mi[i] = static_cast<int16_t>(std::clamp(mf[i] * 32768.0f, -32768.0f, 32767.0f));
+        m_txAccum.append(mono16kInt16);
+    }
+
+    // Process 10ms frames (LPCNET_FRAME_SIZE = 160 samples @ 16kHz)
     while ((m_txAccum.size() / sizeof(int16_t)) >= LPCNET_FRAME_SIZE) {
         auto sampleArray = m_txAccum.left(LPCNET_FRAME_SIZE * sizeof(int16_t));
         const int16_t* samples = reinterpret_cast<const int16_t*>(sampleArray.constData());
@@ -169,27 +180,16 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
 
             m_txFeatAccum.remove(0, n_features_in * sizeof(float));
 
-            // 3. Convert RADE_COMP → 8kHz mono int16 (take real part)
-            QByteArray modem8k(n_tx_out * 2, Qt::Uninitialized);
-            auto* out = reinterpret_cast<int16_t*>(modem8k.data());
-            for (int i = 0; i < n_tx_out; ++i) {
-                float v = tx_out[i].real * 32768.0f;  // full scale (matches rade_modulate_wav)
-                out[i] = static_cast<int16_t>(
-                    std::clamp(v, -32767.0f, 32767.0f));
-            }
+            // 3. Convert RADE_COMP → 8kHz mono float32 (take real part)
+            QByteArray modem8k(n_tx_out * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+            auto* out = reinterpret_cast<float*>(modem8k.data());
+            for (int i = 0; i < n_tx_out; ++i)
+                out[i] = tx_out[i].real;
 
-            // 4. Upsample 8kHz mono → 24kHz stereo int16
-            QByteArray stereo24k = m_up8to24->processMonoToStereo(reinterpret_cast<const int16_t*>(modem8k.constData()), modem8k.size() / 2);
+            // 4. Upsample 8kHz mono float32 → 24kHz stereo float32
+            QByteArray stereo24k = m_up8to24->processMonoToStereo(out, n_tx_out);
 
-            // 5. Convert int16 → float32 for feedDaxTxAudio
-            const auto* src = reinterpret_cast<const int16_t*>(stereo24k.constData());
-            int nSamples = stereo24k.size() / 2;
-            QByteArray float32pcm(nSamples * sizeof(float), Qt::Uninitialized);
-            auto* dst = reinterpret_cast<float*>(float32pcm.data());
-            for (int i = 0; i < nSamples; ++i)
-                dst[i] = src[i] / 32768.0f;
-
-            emit txModemReady(float32pcm);
+            emit txModemReady(stereo24k);
         }
     }
 #else
@@ -206,17 +206,18 @@ void RADEEngine::feedRxAudio(int channel, const QByteArray& pcm)
 
     QByteArray speech16k;
 
-    // 1. Downsample 24kHz stereo → 8kHz mono for RADE modem
-    QByteArray mono8k = m_down24to8->processStereoToMono(reinterpret_cast<const int16_t*>(pcm.constData()), pcm.size() / 4);
+    // 1. Downsample 24kHz stereo float32 → 8kHz mono float32 for RADE modem
+    const auto* srcF = reinterpret_cast<const float*>(pcm.constData());
+    QByteArray mono8k = m_down24to8->processStereoToMono(srcF, pcm.size() / (2 * static_cast<int>(sizeof(float))));
 
-    // 2. Convert int16 → RADE_COMP (real = sample/32768, imag = 0)
-    const auto* samples = reinterpret_cast<const int16_t*>(mono8k.constData());
-    int nSamples = mono8k.size() / 2;
+    // 2. Convert float32 → RADE_COMP (real = sample, imag = 0)
+    const auto* samples = reinterpret_cast<const float*>(mono8k.constData());
+    int nSamples = mono8k.size() / static_cast<int>(sizeof(float));
 
     // Append as RADE_COMP to accumulator
     for (int i = 0; i < nSamples; ++i) {
         RADE_COMP c;
-        c.real = samples[i] / 32768.0f;
+        c.real = samples[i];
         c.imag = 0.0f;
         m_rxAccum.append(reinterpret_cast<const char*>(&c), sizeof(RADE_COMP));
     }
@@ -258,13 +259,9 @@ void RADEEngine::feedRxAudio(int channel, const QByteArray& pcm)
             float fpcm[LPCNET_FRAME_SIZE];
             fargan_synthesize(fargan, fpcm, feat);
 
-            // Convert float → int16
-            for (int i = 0; i < LPCNET_FRAME_SIZE; ++i) {
-                float v = std::floor(0.5f + std::clamp(
-                    32768.0f * fpcm[i], -32767.0f, 32767.0f));
-                int16_t s = static_cast<int16_t>(v);
-                speech16k.append(reinterpret_cast<const char*>(&s), sizeof(int16_t));
-            }
+            // Append float32 samples directly
+            speech16k.append(reinterpret_cast<const char*>(fpcm),
+                             LPCNET_FRAME_SIZE * sizeof(float));
 
             m_rxFeatAccum.remove(0, sizeof(float) * NB_TOTAL_FEATURES);
         }
@@ -275,7 +272,7 @@ void RADEEngine::feedRxAudio(int channel, const QByteArray& pcm)
     // 5. Upsample 16kHz mono → 24kHz stereo for speaker
     if (!speech16k.isEmpty())
     {
-        auto tmp = m_up16to24->processMonoToStereo(reinterpret_cast<const int16_t*>(speech16k.constData()), speech16k.size() / sizeof(int16_t));
+        auto tmp = m_up16to24->processMonoToStereo(reinterpret_cast<const float*>(speech16k.constData()), speech16k.size() / static_cast<int>(sizeof(float)));
         m_rxOutAccum.append(tmp);
     }
 

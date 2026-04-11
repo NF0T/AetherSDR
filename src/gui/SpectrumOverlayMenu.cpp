@@ -907,9 +907,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
     int row = 0;
     // Grid columns: 0=label, 1=button (optional), 2=slider, 3=value
-    grid->setColumnMinimumWidth(1, 22);  // button column
 
-    // Helper: label col 0, slider col 2, value col 3
+    // Helper: label col 0, slider col 1-2, value col 3
     auto makeRow = [&](const QString& text, int lo, int hi, int def,
                        QSlider*& slider, QLabel*& valLbl) {
         auto* lbl = new QLabel(text);
@@ -920,7 +919,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         slider->setRange(lo, hi);
         slider->setValue(def);
         slider->setStyleSheet(sliderStyle);
-        grid->addWidget(slider, row, 2);
+        grid->addWidget(slider, row, 1, 1, 2);
 
         valLbl = new QLabel(QString::number(def));
         valLbl->setStyleSheet(valStyle);
@@ -933,15 +932,14 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     // Helper: label col 0, button col 1, slider col 2, value col 3
     auto makeRowWithBtn = [&](const QString& text, int lo, int hi, int def,
                               QSlider*& slider, QLabel*& valLbl,
-                              QPushButton*& btn, const QString& btnText,
-                              int btnW = 36) {
+                              QPushButton*& btn, const QString& btnText) {
         auto* lbl = new QLabel(text);
         lbl->setStyleSheet(labelStyle);
         grid->addWidget(lbl, row, 0);
 
         btn = new QPushButton(btnText);
         btn->setCheckable(true);
-        btn->setFixedSize(btnW, 18);
+        btn->setFixedSize(36, 18);
         btn->setStyleSheet(btnStyle);
         grid->addWidget(btn, row, 1);
 
@@ -959,20 +957,65 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         ++row;
     };
 
-    // ── FFT section ───────────────────────────────────────────────────────
+    // ── Sliders ───────────────────────────────────────────────────────────
+
+    // AVG
     makeRow("AVG:", 0, 100, 0, m_avgSlider, m_avgLabel);
     connect(m_avgSlider, &QSlider::valueChanged, this, [this](int v) {
         m_avgLabel->setText(QString::number(v));
         emit fftAverageChanged(v);
     });
 
+    // FPS
     makeRow("FPS:", 5, 30, 25, m_fpsSlider, m_fpsLabel);
     connect(m_fpsSlider, &QSlider::valueChanged, this, [this](int v) {
         m_fpsLabel->setText(QString::number(v));
         emit fftFpsChanged(v);
     });
 
-    // Fill row: color picker button in col 1, slider in col 2
+    // Line Width
+    {
+        auto* lbl = new QLabel("Line Width:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0);
+
+        m_lineWidthSlider = new QSlider(Qt::Horizontal);
+        m_lineWidthSlider->setRange(0, 10);
+        m_lineWidthSlider->setValue(4);
+        m_lineWidthSlider->setSingleStep(1);
+        m_lineWidthSlider->setPageStep(1);
+        m_lineWidthSlider->setStyleSheet(sliderStyle);
+        grid->addWidget(m_lineWidthSlider, row, 1, 1, 2);
+
+        m_lineWidthLabel = new QLabel("2.0");
+        m_lineWidthLabel->setStyleSheet(valStyle);
+        m_lineWidthLabel->setFixedWidth(28);
+        m_lineWidthLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        grid->addWidget(m_lineWidthLabel, row, 3);
+        ++row;
+
+        connect(m_lineWidthSlider, &QSlider::valueChanged, this, [this](int v) {
+            float w = v * 0.5f;
+            m_lineWidthLabel->setText(v == 0 ? "Off" : QString::number(w, 'f', 1));
+            emit fftLineWidthChanged(w);
+        });
+    }
+
+    // Gain
+    makeRow("Gain:", 0, 100, 50, m_gainSlider, m_gainLabel);
+    connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_gainLabel->setText(QString::number(v));
+        emit wfColorGainChanged(v);
+    });
+
+    // Rate
+    makeRow("Rate:", 1, 30, 15, m_rateSlider, m_rateLabel);
+    connect(m_rateSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_rateLabel->setText(QString::number(v));
+        emit wfLineDurationChanged(v + 70);
+    });
+
+    // Fill: color picker button + slider
     {
         auto* lbl = new QLabel("Fill:");
         lbl->setStyleSheet(labelStyle);
@@ -1018,78 +1061,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
-    // Heat Map toggle
-    {
-        auto* lbl = new QLabel("Heat Map:");
-        lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0, 1, 2);
-
-        m_heatMapBtn = new QPushButton("Off");
-        m_heatMapBtn->setCheckable(true);
-        m_heatMapBtn->setFixedSize(36, 18);
-        m_heatMapBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #304050;"
-            " border-radius: 3px; font-size: 10px; font-weight: bold; }"
-            "QPushButton:checked { background: #006040; color: #00ff88; border: 1px solid #00a060; }");
-        grid->addWidget(m_heatMapBtn, row, 2, 1, 2);
-        ++row;
-
-        connect(m_heatMapBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_heatMapBtn->setText(on ? "On" : "Off");
-            emit fftHeatMapChanged(on);
-        });
-    }
-
-    // Weighted Average: label spans col 0-1, button in col 2
-    {
-        auto* waLbl = new QLabel("Weighted Average:");
-        waLbl->setStyleSheet(labelStyle);
-        grid->addWidget(waLbl, row, 0, 1, 2);  // span label + button cols
-        m_weightedAvgBtn = new QPushButton("Off");
-        m_weightedAvgBtn->setCheckable(true);
-        m_weightedAvgBtn->setChecked(false);
-        m_weightedAvgBtn->setFixedSize(36, 18);
-        m_weightedAvgBtn->setStyleSheet(btnStyle);
-        grid->addWidget(m_weightedAvgBtn, row, 3, Qt::AlignRight);
-        connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_weightedAvgBtn->setText(on ? "On" : "Off");
-            emit fftWeightedAverageChanged(on);
-        });
-        ++row;
-    }
-
-    // ── Separator ─────────────────────────────────────────────────────────
-    auto* sep = new QFrame;
-    sep->setFrameShape(QFrame::HLine);
-    sep->setStyleSheet("QFrame { color: #304050; border: none; }");
-    sep->setFixedHeight(2);
-    grid->addWidget(sep, row, 0, 1, 4);
-    ++row;
-
-    // ── Waterfall section ─────────────────────────────────────────────────
-    // Color scheme selector
-    {
-        auto* lbl = new QLabel("Scheme:");
-        lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0, 1, 2);
-        m_colorSchemeCmb = new QComboBox;
-        m_colorSchemeCmb->setFixedHeight(18);
-        m_colorSchemeCmb->setStyleSheet(comboStyleSheet());
-        for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i)
-            m_colorSchemeCmb->addItem(wfSchemeName(static_cast<WfColorScheme>(i)));
-        grid->addWidget(m_colorSchemeCmb, row, 2, 1, 2);
-        connect(m_colorSchemeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this](int idx) { emit wfColorSchemeChanged(idx); });
-        ++row;
-    }
-
-    makeRow("Gain:", 0, 100, 50, m_gainSlider, m_gainLabel);
-    connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_gainLabel->setText(QString::number(v));
-        emit wfColorGainChanged(v);
-    });
-
-    // Black + Auto: Auto button in col 1
+    // Black + Auto
     makeRowWithBtn("Black:", 0, 100, 15, m_blackSlider, m_blackLabel,
                    m_autoBlackBtn, "Auto");
     m_autoBlackBtn->setChecked(true);
@@ -1103,23 +1075,10 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             emit wfBlackLevelChanged(m_blackSlider->value());
     });
 
-    makeRow("Rate:", 1, 30, 15, m_rateSlider, m_rateLabel);
-    connect(m_rateSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_rateLabel->setText(QString::number(v));
-        emit wfLineDurationChanged(v + 70);  // map 1-30 → 71-100
-    });
-
-    // NB Waterfall Blanker (#277) — uses same grid layout as other controls
-    makeRow("NB Blank:", 5, 95, 15, m_wfBlankerThreshSlider, m_wfBlankerThreshLabel);
-    m_wfBlankerBtn = new QPushButton("Off");
-    m_wfBlankerBtn->setCheckable(true);
-    m_wfBlankerBtn->setChecked(false);
-    m_wfBlankerBtn->setFixedSize(36, 18);
-    m_wfBlankerBtn->setStyleSheet(btnStyle);
+    // NB Blank + Off/On
+    makeRowWithBtn("NB Blank:", 5, 95, 15, m_wfBlankerThreshSlider, m_wfBlankerThreshLabel,
+                   m_wfBlankerBtn, "Off");
     m_wfBlankerBtn->setToolTip("Suppress impulse noise stripes in waterfall");
-    // Replace the label cell with the toggle button
-    grid->addWidget(m_wfBlankerBtn, row - 1, 1);
-
     connect(m_wfBlankerBtn, &QPushButton::toggled, this, [this](bool on) {
         m_wfBlankerBtn->setText(on ? "On" : "Off");
         emit wfBlankerEnabledChanged(on);
@@ -1130,55 +1089,16 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         emit wfBlankerThresholdChanged(t);
     });
 
-    // Cursor frequency label toggle (#456)
+    // BG Opacity
     {
-        auto* lbl = new QLabel("Cursor Freq:");
+        auto* lbl = new QLabel("BG Opacity:");
         lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0, 1, 2);
-        m_cursorFreqBtn = new QPushButton("Off");
-        m_cursorFreqBtn->setCheckable(true);
-        m_cursorFreqBtn->setChecked(false);
-        m_cursorFreqBtn->setFixedSize(36, 18);
-        m_cursorFreqBtn->setStyleSheet(btnStyle);
-        grid->addWidget(m_cursorFreqBtn, row, 3, Qt::AlignRight);
-        connect(m_cursorFreqBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_cursorFreqBtn->setText(on ? "On" : "Off");
-            emit cursorFreqToggled(on);
-        });
-        ++row;
-    }
-
-    // Background image (#611)
-    {
-        auto* lbl = new QLabel("Background:");
-        lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0, 1, 2);
-        auto* bgBtn = new QPushButton("Choose...");
-        bgBtn->setFixedSize(70, 18);
-        bgBtn->setStyleSheet(btnStyle);
-        connect(bgBtn, &QPushButton::clicked, this, [this] {
-            emit backgroundImageRequested();
-        });
-        grid->addWidget(bgBtn, row, 2);
-        auto* clearBtn = new QPushButton("Clear");
-        clearBtn->setFixedSize(42, 18);
-        clearBtn->setStyleSheet(btnStyle);
-        clearBtn->setToolTip("Revert to the default logo background");
-        connect(clearBtn, &QPushButton::clicked, this, [this] {
-            emit backgroundImageCleared();
-        });
-        grid->addWidget(clearBtn, row, 3);
-        ++row;
-
-        // Opacity slider
-        auto* opacLbl = new QLabel("Bg Opacity:");
-        opacLbl->setStyleSheet(labelStyle);
-        grid->addWidget(opacLbl, row, 0, 1, 2);
+        grid->addWidget(lbl, row, 0);
         m_bgOpacitySlider = new GuardedSlider(Qt::Horizontal);
         m_bgOpacitySlider->setRange(0, 100);
         m_bgOpacitySlider->setValue(80);
         m_bgOpacitySlider->setStyleSheet(sliderStyle);
-        grid->addWidget(m_bgOpacitySlider, row, 2);
+        grid->addWidget(m_bgOpacitySlider, row, 1, 1, 2);
         m_bgOpacityLabel = new QLabel("80");
         m_bgOpacityLabel->setStyleSheet(valStyle);
         m_bgOpacityLabel->setFixedWidth(28);
@@ -1191,7 +1111,84 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         ++row;
     }
 
-    // Reset all display settings to defaults
+    // ── Background buttons ────────────────────────────────────────────────
+    {
+        auto* lbl = new QLabel("Background:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0, 1, 2);
+        auto* bgBtn = new QPushButton("Choose...");
+        bgBtn->setFixedHeight(18);
+        bgBtn->setStyleSheet(btnStyle);
+        connect(bgBtn, &QPushButton::clicked, this, [this] {
+            emit backgroundImageRequested();
+        });
+        grid->addWidget(bgBtn, row, 2);
+        auto* clearBtn = new QPushButton("Clear");
+        clearBtn->setFixedHeight(18);
+        clearBtn->setStyleSheet(btnStyle);
+        clearBtn->setToolTip("Revert to the default logo background");
+        connect(clearBtn, &QPushButton::clicked, this, [this] {
+            emit backgroundImageCleared();
+        });
+        grid->addWidget(clearBtn, row, 3);
+        ++row;
+    }
+
+    // ── Toggle button row ─────────────────────────────────────────────────
+    {
+        auto* toggleRow = new QWidget;
+        auto* toggleLayout = new QHBoxLayout(toggleRow);
+        toggleLayout->setContentsMargins(0, 2, 0, 2);
+        toggleLayout->setSpacing(3);
+
+        auto makeToggle = [&](const QString& text, QPushButton*& btn, bool checked = false) {
+            btn = new QPushButton(text);
+            btn->setCheckable(true);
+            btn->setChecked(checked);
+            btn->setStyleSheet(btnStyle);
+            btn->setFixedHeight(20);
+            toggleLayout->addWidget(btn);
+        };
+
+        makeToggle("Heat Map", m_heatMapBtn);
+        makeToggle("Grid", m_showGridBtn, true);
+        makeToggle("Wt Avg", m_weightedAvgBtn);
+        makeToggle("Cursor", m_cursorFreqBtn);
+
+        grid->addWidget(toggleRow, row, 0, 1, 4);
+        ++row;
+
+        connect(m_heatMapBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit fftHeatMapChanged(on);
+        });
+        connect(m_showGridBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit showGridChanged(on);
+        });
+        connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit fftWeightedAverageChanged(on);
+        });
+        connect(m_cursorFreqBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit cursorFreqToggled(on);
+        });
+    }
+
+    // ── Scheme dropdown ───────────────────────────────────────────────────
+    {
+        auto* lbl = new QLabel("Scheme:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0);
+        m_colorSchemeCmb = new QComboBox;
+        m_colorSchemeCmb->setFixedHeight(18);
+        m_colorSchemeCmb->setStyleSheet(comboStyleSheet());
+        for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i)
+            m_colorSchemeCmb->addItem(wfSchemeName(static_cast<WfColorScheme>(i)));
+        grid->addWidget(m_colorSchemeCmb, row, 1, 1, 3);
+        connect(m_colorSchemeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int idx) { emit wfColorSchemeChanged(idx); });
+        ++row;
+    }
+
+    // ── Reset button ──────────────────────────────────────────────────────
     {
         auto* resetBtn = new QPushButton("Reset to Defaults");
         resetBtn->setStyleSheet(btnStyle);
@@ -1208,6 +1205,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_fpsSlider->setToolTip("FFT refresh rate in frames per second.");
     m_fillSlider->setToolTip("Opacity of the spectrum fill area below the trace.");
     if (m_heatMapBtn) m_heatMapBtn->setToolTip("Colors the spectrum trace by signal strength instead of a single color.");
+    if (m_showGridBtn) m_showGridBtn->setToolTip("Show or hide the frequency and dB grid lines on the panadapter.");
     if (m_weightedAvgBtn) m_weightedAvgBtn->setToolTip("Weights recent FFT frames more heavily for faster response to signal changes.");
     m_gainSlider->setToolTip("Waterfall color gain. Higher values brighten weak signals.");
     m_blackSlider->setToolTip("Waterfall black level. Increase to darken the noise floor.");
@@ -1227,7 +1225,9 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                bool weightedAvg, const QColor& fillColor,
                                                int gain, int black, bool autoBlack, int rate,
                                                int floorPos, bool floorEnable,
-                                               bool heatMap, int colorScheme)
+                                               bool heatMap, int colorScheme,
+                                               bool showGrid,
+                                               float lineWidth)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -1242,7 +1242,6 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     m_fillSlider->setValue(fillPct);
     m_fillLabel->setText(QString::number(fillPct));
     m_weightedAvgBtn->setChecked(weightedAvg);
-    m_weightedAvgBtn->setText(weightedAvg ? "On" : "Off");
     m_fillColor = fillColor;
     m_fillColorBtn->setStyleSheet(
         QString("QPushButton { background: %1; border: 1px solid #506070;"
@@ -1267,7 +1266,16 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     if (m_heatMapBtn) {
         QSignalBlocker bh(m_heatMapBtn);
         m_heatMapBtn->setChecked(heatMap);
-        m_heatMapBtn->setText(heatMap ? "On" : "Off");
+    }
+    if (m_showGridBtn) {
+        QSignalBlocker bg(m_showGridBtn);
+        m_showGridBtn->setChecked(showGrid);
+    }
+    if (m_lineWidthSlider) {
+        QSignalBlocker blw(m_lineWidthSlider);
+        int sliderVal = std::clamp(static_cast<int>(lineWidth / 0.5f), 0, 10);
+        m_lineWidthSlider->setValue(sliderVal);
+        m_lineWidthLabel->setText(sliderVal == 0 ? "Off" : QString::number(sliderVal * 0.5f, 'f', 1));
     }
     if (m_colorSchemeCmb) {
         QSignalBlocker bc(m_colorSchemeCmb);
@@ -1293,7 +1301,6 @@ void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blanker
     if (m_cursorFreqBtn) {
         QSignalBlocker b(m_cursorFreqBtn);
         m_cursorFreqBtn->setChecked(cursorFreq);
-        m_cursorFreqBtn->setText(cursorFreq ? "On" : "Off");
     }
     if (m_bgOpacitySlider) {
         QSignalBlocker b(m_bgOpacitySlider);

@@ -63,12 +63,14 @@ void TunerApplet::buildUI()
     // Forward Power gauge — default barefoot (0–200 W); switches to
     // 0–2000 W if a PGXL amplifier is detected via setAmplifierMode().
     m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "Fwd Pwr", "W",
-        {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}});
+        {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
+        this, 80.0f);
     vbox->addWidget(m_fwdGauge);
 
     // SWR gauge
     m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
-        {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}});
+        {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
+        this, 2.0f);
     vbox->addWidget(m_swrGauge);
 
     // Bottom section: relay bars (75% left) + buttons (25% right)

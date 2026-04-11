@@ -68,14 +68,16 @@ void TxApplet::buildUI()
 
     // ── Forward Power gauge (0–120 W, red > 100 W) ─────────────────────────
     m_fwdGauge = new HGauge(0.0f, 120.0f, 100.0f, "RF Pwr", "W",
-        {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}});
+        {{0, "0"}, {40, "40"}, {80, "80"}, {100, "100"}, {120, "120"}},
+        this, 80.0f);
     m_fwdGauge->setAccessibleName("Forward power gauge");
     m_fwdGauge->setAccessibleDescription("RF forward power in watts");
     vbox->addWidget(m_fwdGauge);
 
     // ── SWR gauge (1.0–3.0, red > 2.5) ─────────────────────────────────────
     m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
-        {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}});
+        {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
+        this, 2.0f);
     m_swrGauge->setAccessibleName("SWR gauge");
     m_swrGauge->setAccessibleDescription("Standing wave ratio");
     vbox->addWidget(m_swrGauge);

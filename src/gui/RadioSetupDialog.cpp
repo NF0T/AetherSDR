@@ -3,6 +3,7 @@
 #include "ComboStyle.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
+#include <QSysInfo>
 #include "core/AudioEngine.h"
 #ifdef HAVE_SERIALPORT
 #include "core/SerialPortController.h"
@@ -240,10 +241,12 @@ QWidget* RadioSetupDialog::buildRadioTab()
         });
 
         grid->addWidget(new QLabel("Station Name:"), 1, 2);
+        QString stationVal = AppSettings::instance().value("StationName", "").toString();
         auto* stationEdit = new QLineEdit(
-            AppSettings::instance().value("StationName", "AetherSDR").toString());
+            stationVal.isEmpty() ? QSysInfo::machineHostName() : stationVal);
         stationEdit->setStyleSheet(kEditStyle);
-        stationEdit->setToolTip("Identifies this client to other Multi-Flex stations");
+        stationEdit->setToolTip("Identifies this client to other Multi-Flex stations.\n"
+                                "Defaults to OS hostname if empty.");
         grid->addWidget(stationEdit, 1, 3);
         connect(stationEdit, &QLineEdit::editingFinished, this, [this, stationEdit] {
             auto& s = AppSettings::instance();
@@ -1017,12 +1020,12 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         row1->setSpacing(4);
         auto* biasBtn = mkTogBtn("BIAS", tx.micBias());
         connect(biasBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_model->sendCommand(QString("mic bias %1").arg(on ? 1 : 0));
+            m_model->transmitModel().setMicBias(on);
         });
         row1->addWidget(biasBtn);
         auto* boostBtn = mkTogBtn("+20dB", tx.micBoost());
         connect(boostBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_model->sendCommand(QString("mic boost %1").arg(on ? 1 : 0));
+            m_model->transmitModel().setMicBoost(on);
         });
         row1->addWidget(boostBtn);
         row1->addStretch(1);
@@ -1524,15 +1527,26 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
     // Wire device changes to AudioEngine
     if (m_audio) {
+        // Route through QueuedConnection so setInputDevice/setOutputDevice
+        // execute on the audio worker thread, preventing use-after-free on
+        // macOS CoreAudio when switching devices from the GUI thread (#1114).
         connect(inCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this, inCombo, inDevices](int idx) {
-            if (idx >= 0 && idx < inDevices.size())
-                m_audio->setInputDevice(inDevices[idx]);
+                this, [this, inDevices](int idx) {
+            if (idx >= 0 && idx < inDevices.size()) {
+                const QAudioDevice dev = inDevices[idx];
+                QMetaObject::invokeMethod(m_audio, [this, dev]() {
+                    m_audio->setInputDevice(dev);
+                }, Qt::QueuedConnection);
+            }
         });
         connect(outCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this, outCombo, outDevices](int idx) {
-            if (idx >= 0 && idx < outDevices.size())
-                m_audio->setOutputDevice(outDevices[idx]);
+                this, [this, outDevices](int idx) {
+            if (idx >= 0 && idx < outDevices.size()) {
+                const QAudioDevice dev = outDevices[idx];
+                QMetaObject::invokeMethod(m_audio, [this, dev]() {
+                    m_audio->setOutputDevice(dev);
+                }, Qt::QueuedConnection);
+            }
         });
     }
 
@@ -2863,7 +2877,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         static const QStringList actions = {
             "None", "StepUp", "StepDown", "ToggleMox",
             "ToggleTune", "ToggleMute", "ToggleLock",
-            "NextSlice", "PrevSlice"
+            "NextSlice", "PrevSlice",
+            "ToggleAgc", "VolumeUp", "VolumeDown"
         };
         static const char* defaultActions[3][2] = {
             {"StepUp", "StepDown"},
@@ -3048,6 +3063,23 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             [this]() { return m_tgxl->peerPort(); });
         connect(m_tgxl, &TgxlConnection::connected, this, updateTgxl);
         connect(m_tgxl, &TgxlConnection::disconnected, this, updateTgxl);
+        // Pre-fill radio-discovered TGXL IP when no saved IP and not connected (#1039)
+        auto* tgxlIpEdit = qobject_cast<QLineEdit*>(grid->itemAtPosition(1, 1)->widget());
+        if (tgxlIpEdit && tgxlIpEdit->text().isEmpty()) {
+            QString discovered = m_model->tunerModel().tgxlIp();
+            if (!discovered.isEmpty()) {
+                tgxlIpEdit->setText(discovered);
+            }
+        }
+        // Show TCP error reason in status column (#1039)
+        auto* tgxlStatus = qobject_cast<QLabel*>(grid->itemAtPosition(1, 4)->widget());
+        if (tgxlStatus) {
+            connect(m_tgxl, &TgxlConnection::connectionFailed, this,
+                    [tgxlStatus](const QString& err) {
+                tgxlStatus->setText("Error: " + err);
+                tgxlStatus->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
+            });
+        }
     }
 
     // Row 2: Power Genius XL (PGXL)

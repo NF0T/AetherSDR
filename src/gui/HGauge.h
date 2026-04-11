@@ -90,22 +90,22 @@ protected:
             int redX = static_cast<int>(((m_redStart - m_min) / (m_max - m_min)) * barW);
 
             if (fillW > 0) {
-                // Cyan portion (below yellow zone)
-                int cyanW = qMin(fillW, yellowX);
-                if (cyanW > 0)
-                    p.fillRect(barX + 1, barY + 1, cyanW, barH - 2, QColor(0x00, 0xb4, 0xd8));
+                // Green portion (below yellow zone)
+                int greenW = qMin(fillW, yellowX);
+                if (greenW > 0)
+                    p.fillRect(barX + 1, barY + 1, greenW, barH - 2, QColor(0x1a, 0x90, 0x30));
 
-                // Yellow portion (between yellow and red zones)
+                // Dirty yellow portion (between yellow and red zones)
                 if (fillW > yellowX && yellowX < redX) {
                     int yw = qMin(fillW, redX) - yellowX;
                     if (yw > 0)
-                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, QColor(0xdd, 0xbb, 0x00));
+                        p.fillRect(barX + yellowX + 1, barY + 1, yw, barH - 2, QColor(0x99, 0x88, 0x00));
                 }
 
                 // Red portion (above red zone)
                 if (fillW > redX) {
                     int rw = fillW - redX;
-                    p.fillRect(barX + redX + 1, barY + 1, rw, barH - 2, QColor(0xff, 0x44, 0x44));
+                    p.fillRect(barX + redX + 1, barY + 1, rw, barH - 2, QColor(0xcc, 0x33, 0x33));
                 }
             }
         }
@@ -136,8 +136,8 @@ protected:
         for (const auto& tick : m_ticks) {
             float tf = (tick.value - m_min) / (m_max - m_min);
             int tx = barX + static_cast<int>(tf * barW);
-            QColor tickColor = (tick.value >= m_redStart) ? QColor(0xff, 0x44, 0x44)
-                             : (tick.value >= m_yellowStart) ? QColor(0xdd, 0xbb, 0x00)
+            QColor tickColor = (tick.value >= m_redStart) ? QColor(0xcc, 0x33, 0x33)
+                             : (tick.value >= m_yellowStart) ? QColor(0x99, 0x88, 0x00)
                              : QColor(0xc8, 0xd8, 0xe8);
             p.setPen(tickColor);
             const QFontMetrics fm(tickFont);
@@ -152,7 +152,7 @@ protected:
         lblFont.setPixelSize(10);
         lblFont.setBold(true);
         p.setFont(lblFont);
-        p.setPen(QColor(0x80, 0x90, 0xa0));
+        p.setPen(QColor(0xff, 0xff, 0xff));
         const QFontMetrics lfm(lblFont);
         int labelW = lfm.horizontalAdvance(m_label);
         p.drawText((w - labelW) / 2, barY + barH / 2 + lfm.ascent() / 2 - 1, m_label);

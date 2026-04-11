@@ -105,6 +105,7 @@ private:
     SpectrumWidget* spectrum() const;
     void setActiveSlice(int sliceId);
     void updateFilterLimitsForMode(const QString& mode);
+    void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     void updateSplitState();
     void disableSplit();
@@ -118,6 +119,7 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void toggleMinimalMode(bool on);
+    void showMemoryDialog();
     void updateKeyerAvailability(const QString& mode);
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
@@ -250,6 +252,10 @@ private:
     QLabel* m_gpsLabel{nullptr};
     QLabel* m_gpsStatusLabel{nullptr};
     QLabel* m_gridLabel{nullptr};
+    QLabel* m_bandStackIndicator{nullptr};
+    QLabel* m_cpuLabel{nullptr};
+    QLabel* m_memLabel{nullptr};
+    QTimer* m_cpuTimer{nullptr};
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
     QLabel* m_networkLabel{nullptr};
@@ -268,6 +274,7 @@ private:
     // Guard: set true while updating controls from the model, so that
     // onFrequencyChanged doesn't echo the change back to the radio.
     bool m_updatingFromModel{false};
+    bool m_shuttingDown{false};
     void toggleConnectionDialog();
     bool m_useSystemClock{true};     // true when no GPS installed
     bool m_paTempUseFahrenheit{true};
@@ -280,6 +287,8 @@ private:
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     QTimer* m_heartbeatMissTimer{nullptr}; // fires every 1.5s to detect missed discovery beats
     bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (View menu)
+    bool m_startupCenterPending{false};      // one-shot: center active slice on launch
+    double m_startupCenterMhz{0.0};          // persisted frequency to center on launch
     bool m_spacePttActive{false};          // true while Space is held for PTT
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     QAction* m_minimalModeAction{nullptr};
@@ -297,7 +306,7 @@ private:
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
     DaxBridge* m_daxBridge{nullptr};
     QString m_savedMicSelection;  // restore on stopDax
-    void startDax();
+    bool startDax();
     void stopDax();
 #endif
 };
