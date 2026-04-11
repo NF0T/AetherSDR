@@ -142,6 +142,22 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
             close();
         });
         btnRow->addWidget(upgradeBtn);
+
+        auto* skipBtn = new QPushButton("Skip this version");
+        skipBtn->setFixedHeight(36);
+        skipBtn->setCursor(Qt::PointingHandCursor);
+        skipBtn->setStyleSheet(
+            "QPushButton { background: #1a2a3a; color: #8090a0; font-weight: bold; "
+            "font-size: 14px; border-radius: 18px; padding: 0 24px; "
+            "border: 1px solid #304050; }"
+            "QPushButton:hover { background: #203040; color: #c8d8e8; }");
+        connect(skipBtn, &QPushButton::clicked, this, [currentVersion, this] {
+            auto& s = AppSettings::instance();
+            s.setValue("LastSeenVersion", currentVersion);
+            s.save();
+            close();
+        });
+        btnRow->addWidget(skipBtn);
     }
 
     footerLayout->addLayout(btnRow);
