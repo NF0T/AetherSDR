@@ -176,10 +176,12 @@ public:
     void setFftFillColor(const QColor& c);
     void setFftHeatMap(bool on);
     void setShowGrid(bool on);
+    void setFftLineWidth(float w);
     float fftFillAlpha() const         { return m_fftFillAlpha; }
     QColor fftFillColor() const        { return m_fftFillColor; }
     bool fftHeatMap() const            { return m_fftHeatMap; }
     bool showGrid() const              { return m_showGrid; }
+    float fftLineWidth() const         { return m_fftLineWidth; }
     int   fftAverage() const           { return m_fftAverage; }
     int   fftFps() const               { return m_fftFps; }
     bool  fftWeightedAvg() const       { return m_fftWeightedAvg; }
@@ -407,6 +409,7 @@ private:
     QColor m_fftFillColor{0x00, 0xe5, 0xff};  // client-side fill color (default cyan)
     bool m_fftHeatMap{true};        // true = intensity heat map, false = solid color
     bool m_showGrid{true};          // false = hide grid lines
+    float m_fftLineWidth{2.0f};     // spectrum trace width in pixels
 
     // ── Waterfall display controls (radio-side via "display panafall set") ─
     int   m_wfColorGain{50};         // 0-100, maps intensity to color range

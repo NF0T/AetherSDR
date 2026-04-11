@@ -230,6 +230,7 @@ void SpectrumWidget::loadSettings()
     }
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
+    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
     m_wfColorScheme  = static_cast<WfColorScheme>(
         std::clamp(s.value(settingsKey("DisplayWfColorScheme"), "0").toInt(),
                    0, static_cast<int>(WfColorScheme::Count) - 1));
@@ -246,7 +247,8 @@ void SpectrumWidget::loadSettings()
         m_overlayMenu->syncDisplaySettings(m_fftAverage, m_fftFps,
             static_cast<int>(m_fftFillAlpha * 100), m_fftWeightedAvg, m_fftFillColor,
             m_wfColorGain, m_wfBlackLevel, m_wfAutoBlack, m_wfLineDuration,
-            75, false, m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid);
+            75, false, m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
+            m_fftLineWidth);
 }
 
 VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
@@ -318,6 +320,12 @@ void SpectrumWidget::setShowGrid(bool on) {
     s.setValue(settingsKey("DisplayShowGrid"), on ? "True" : "False");
     s.save();
     markOverlayDirty();
+}
+void SpectrumWidget::setFftLineWidth(float w) {
+    m_fftLineWidth = std::clamp(w, 0.0f, 5.0f);
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayFftLineWidth"), QString::number(m_fftLineWidth, 'f', 1));
+    s.save();
 }
 void SpectrumWidget::setFftFillAlpha(float a) {
     m_fftFillAlpha = std::clamp(a, 0.0f, 1.0f);
@@ -2002,9 +2010,9 @@ void SpectrumWidget::initSpectrumPipeline()
 {
     QRhi* r = rhi();
 
-    // Dynamic vertex buffers: N × 6 floats (x, y, r, g, b, a) per vertex
+    // Dynamic vertex buffers: 2N × 6 floats for triangle strip line expansion
     m_fftLineVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
-                                 kMaxFftBins * kFftVertStride * sizeof(float));
+                                 kMaxFftBins * 2 * kFftVertStride * sizeof(float));
     m_fftLineVbo->create();
 
     m_fftFillVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
@@ -2057,7 +2065,7 @@ void SpectrumWidget::initSpectrumPipeline()
         {QRhiShaderStage::Fragment, fs},
     });
     m_fftLinePipeline->setVertexInputLayout(layout);
-    m_fftLinePipeline->setTopology(QRhiGraphicsPipeline::LineStrip);
+    m_fftLinePipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
     m_fftLinePipeline->setShaderResourceBindings(m_fftSrb);
     m_fftLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_fftLinePipeline->setTargetBlends({blend});
@@ -2369,20 +2377,47 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 out[3] = topAlpha + gt * (botAlpha - topAlpha);
             };
 
-            // Line vertices: N × (x, y, r, g, b, a)
-            QVector<float> lineVerts(n * kFftVertStride);
+            // Line vertices: 2N × (x, y, r, g, b, a) — triangle strip expansion
+            // for variable-width lines on GPU (LineStrip is fixed at 1px)
+            QVector<float> lineVerts(n * 2 * kFftVertStride);
             // Fill vertices: 2N × (x, y, r, g, b, a)
             QVector<float> fillVerts(n * 2 * kFftVertStride);
 
+            // Pre-compute positions for normal calculation
+            struct Pt { float x, y; };
+            QVector<Pt> pts(n);
             for (int i = 0; i < n; ++i) {
-                float x = 2.0f * i / (n - 1) - 1.0f;
+                pts[i].x = 2.0f * i / (n - 1) - 1.0f;
                 float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
-                float y = yBot + t * (yTop - yBot);
+                pts[i].y = yBot + t * (yTop - yBot);
+            }
 
-                // Per-vertex color: heat map or solid from color picker
+            // Half-width in NDC — convert pixel width to NDC using viewport
+            const float halfW = m_fftLineWidth / static_cast<float>(qMax(1, width()));
+
+            for (int i = 0; i < n; ++i) {
+                float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
+
+                // Compute perpendicular normal from adjacent points
+                float dx, dy;
+                if (i == 0) {
+                    dx = pts[1].x - pts[0].x;
+                    dy = pts[1].y - pts[0].y;
+                } else if (i == n - 1) {
+                    dx = pts[n-1].x - pts[n-2].x;
+                    dy = pts[n-1].y - pts[n-2].y;
+                } else {
+                    dx = pts[i+1].x - pts[i-1].x;
+                    dy = pts[i+1].y - pts[i-1].y;
+                }
+                float len = std::sqrt(dx * dx + dy * dy);
+                if (len < 1e-8f) len = 1e-8f;
+                float nx = -dy / len * halfW;
+                float ny =  dx / len * halfW;
+
+                // Per-vertex color
                 float cr, cg, cb2;
                 if (m_fftHeatMap) {
-                    // Intensity heat map: blue → cyan → green → yellow → red
                     if (t < 0.25f) {
                         float s = t / 0.25f;
                         cr = 0.0f; cg = s; cb2 = 1.0f;
@@ -2400,20 +2435,26 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     cr = fr; cg = fg; cb2 = fb;
                 }
 
-                // Line vertex
-                int li = i * kFftVertStride;
-                lineVerts[li]     = x;
-                lineVerts[li + 1] = y;
+                // Two vertices per point: offset ± normal
+                int li = i * 2 * kFftVertStride;
+                lineVerts[li]     = pts[i].x + nx;
+                lineVerts[li + 1] = pts[i].y + ny;
                 lineVerts[li + 2] = cr;
                 lineVerts[li + 3] = cg;
                 lineVerts[li + 4] = cb2;
                 lineVerts[li + 5] = 0.9f;
+                lineVerts[li + 6]  = pts[i].x - nx;
+                lineVerts[li + 7]  = pts[i].y - ny;
+                lineVerts[li + 8]  = cr;
+                lineVerts[li + 9]  = cg;
+                lineVerts[li + 10] = cb2;
+                lineVerts[li + 11] = 0.9f;
 
                 // Fill vertices
                 int fi = i * 2 * kFftVertStride;
-                fillVerts[fi]     = x;
-                fillVerts[fi + 1] = y;
-                fillVerts[fi + 6] = x;
+                fillVerts[fi]     = pts[i].x;
+                fillVerts[fi + 1] = pts[i].y;
+                fillVerts[fi + 6] = pts[i].x;
                 fillVerts[fi + 7] = yBot;
 
                 if (m_fftHeatMap) {
@@ -2428,13 +2469,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     fillVerts[fi + 11] = fa;
                 } else {
                     // Solid: Y-based gradient (bright at line, dark+faint at base)
-                    yColor(y, &fillVerts[fi + 2]);
+                    yColor(pts[i].y, &fillVerts[fi + 2]);
                     yColor(yBot, &fillVerts[fi + 8]);
                 }
             }
 
             batch->updateDynamicBuffer(m_fftLineVbo, 0,
-                n * kFftVertStride * sizeof(float), lineVerts.constData());
+                n * 2 * kFftVertStride * sizeof(float), lineVerts.constData());
             batch->updateDynamicBuffer(m_fftFillVbo, 0,
                 n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
         }
@@ -2482,13 +2523,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         cb->setVertexInput(0, 1, &fillVbuf);
         cb->draw(n * 2);
 
-        // Line pass
-        cb->setGraphicsPipeline(m_fftLinePipeline);
-        cb->setShaderResources(m_fftSrb);
-        cb->setViewport(specVp);
-        const QRhiCommandBuffer::VertexInput lineVbuf(m_fftLineVbo, 0);
-        cb->setVertexInput(0, 1, &lineVbuf);
-        cb->draw(n);
+        // Line pass (skip when line width is 0 = "Off")
+        if (m_fftLineWidth > 0.0f) {
+            cb->setGraphicsPipeline(m_fftLinePipeline);
+            cb->setShaderResources(m_fftSrb);
+            cb->setViewport(specVp);
+            const QRhiCommandBuffer::VertexInput lineVbuf(m_fftLineVbo, 0);
+            cb->setVertexInput(0, 1, &lineVbuf);
+            cb->draw(n * 2);
+        }
     }
 
     // Draw overlay quad — on top of FFT fill/line

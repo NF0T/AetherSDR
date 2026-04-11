@@ -1060,6 +1060,34 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
+    // Line Width slider (0.5–5.0 px, step 0.5)
+    {
+        auto* lbl = new QLabel("Line Width:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0, 1, 2);
+
+        m_lineWidthSlider = new QSlider(Qt::Horizontal);
+        m_lineWidthSlider->setRange(0, 10);  // 0=off, 1=0.5px, 10=5.0px
+        m_lineWidthSlider->setValue(4);       // default 2.0px
+        m_lineWidthSlider->setSingleStep(1);
+        m_lineWidthSlider->setPageStep(1);
+        m_lineWidthSlider->setStyleSheet(sliderStyle);
+        grid->addWidget(m_lineWidthSlider, row, 2);
+
+        m_lineWidthLabel = new QLabel("2.0");
+        m_lineWidthLabel->setStyleSheet(valStyle);
+        m_lineWidthLabel->setFixedWidth(28);
+        m_lineWidthLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        grid->addWidget(m_lineWidthLabel, row, 3);
+        ++row;
+
+        connect(m_lineWidthSlider, &QSlider::valueChanged, this, [this](int v) {
+            float w = v * 0.5f;
+            m_lineWidthLabel->setText(v == 0 ? "Off" : QString::number(w, 'f', 1));
+            emit fftLineWidthChanged(w);
+        });
+    }
+
     // Weighted Average: label spans col 0-1, button in col 2
     {
         auto* waLbl = new QLabel("Weighted Average:");
@@ -1249,7 +1277,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                int gain, int black, bool autoBlack, int rate,
                                                int floorPos, bool floorEnable,
                                                bool heatMap, int colorScheme,
-                                               bool showGrid)
+                                               bool showGrid,
+                                               float lineWidth)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -1295,6 +1324,12 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
         QSignalBlocker bg(m_showGridBtn);
         m_showGridBtn->setChecked(showGrid);
         m_showGridBtn->setText(showGrid ? "On" : "Off");
+    }
+    if (m_lineWidthSlider) {
+        QSignalBlocker blw(m_lineWidthSlider);
+        int sliderVal = std::clamp(static_cast<int>(lineWidth / 0.5f), 0, 10);
+        m_lineWidthSlider->setValue(sliderVal);
+        m_lineWidthLabel->setText(sliderVal == 0 ? "Off" : QString::number(sliderVal * 0.5f, 'f', 1));
     }
     if (m_colorSchemeCmb) {
         QSignalBlocker bc(m_colorSchemeCmb);
