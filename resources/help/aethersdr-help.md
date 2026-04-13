@@ -344,6 +344,11 @@ Work outward from the slice:
 2. confirm AF, mute, and AGC behavior
 3. check `PC Audio`
 4. check local output device selection in `Radio Setup -> Audio`
+5. if using Opus compression (SmartLink/WAN), disable client-side spectral
+   noise reduction (NR2). NR2's noise estimator cannot distinguish Opus
+   codec artifacts from real noise, which causes rasping distortion.
+   Use RNNoise (RN2), NR4 (specbleach), or DFNR instead — these
+   neural/spectral filters handle lossy audio gracefully.
 
 ### When the display feels cluttered
 

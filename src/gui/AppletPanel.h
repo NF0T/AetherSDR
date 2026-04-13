@@ -26,6 +26,7 @@ class EqApplet;
 class CatApplet;
 class AntennaGeniusApplet;
 class MeterApplet;
+class MqttApplet;
 
 // AppletPanel — right-side panel with a row of toggle buttons at the top,
 // an S-Meter gauge below them, and a scrollable stack of applets.
@@ -51,6 +52,9 @@ public:
     CatApplet*      catApplet()      { return m_catApplet; }
     AntennaGeniusApplet* agApplet()  { return m_agApplet; }
     MeterApplet*  meterApplet()  { return m_meterApplet; }
+#ifdef HAVE_MQTT
+    MqttApplet*   mqttApplet()   { return m_mqttApplet; }
+#endif
 
     // Show/hide the TUNE button and applet based on tuner presence.
     void setTunerVisible(bool visible);
@@ -111,6 +115,9 @@ private:
     CatApplet*     m_catApplet{nullptr};
     AntennaGeniusApplet* m_agApplet{nullptr};
     MeterApplet* m_meterApplet{nullptr};
+#ifdef HAVE_MQTT
+    MqttApplet*  m_mqttApplet{nullptr};
+#endif
     QPushButton* m_tuneBtn{nullptr};
     QPushButton* m_agBtn{nullptr};
     QVBoxLayout* m_stack{nullptr};

@@ -249,6 +249,15 @@ void SliceModel::setAgcThreshold(int value)
     emit agcThresholdChanged(value);
 }
 
+void SliceModel::setAgcOffLevel(int value)
+{
+    value = qBound(0, value, 100);
+    if (m_agcOffLevel == value) return;
+    m_agcOffLevel = value;
+    sendCommand(QString("slice set %1 agc_off_level=%2").arg(m_id).arg(value));
+    emit agcOffLevelChanged(value);
+}
+
 void SliceModel::setSquelch(bool on, int level)
 {
     m_squelchOn    = on;
@@ -686,6 +695,10 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains("agc_threshold")) {
         m_agcThreshold = kvs["agc_threshold"].toInt();
         emit agcThresholdChanged(m_agcThreshold);
+    }
+    if (kvs.contains("agc_off_level")) {
+        m_agcOffLevel = kvs["agc_off_level"].toInt();
+        emit agcOffLevelChanged(m_agcOffLevel);
     }
     if (kvs.contains("squelch") || kvs.contains("squelch_level")) {
         if (kvs.contains("squelch"))       m_squelchOn    = kvs["squelch"] == "1";

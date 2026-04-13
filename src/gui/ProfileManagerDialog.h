@@ -39,7 +39,6 @@ private:
     QMap<QString, TabWidgets> m_tabWidgets;
 
     QCheckBox* m_autoSaveTx{nullptr};
-    QCheckBox* m_autoSaveMic{nullptr};
 };
 
 } // namespace AetherSDR

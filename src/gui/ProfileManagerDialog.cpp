@@ -218,22 +218,16 @@ QWidget* ProfileManagerDialog::buildAutoSaveTab()
     vbox->addWidget(desc);
     vbox->addSpacing(10);
 
-    m_autoSaveTx = new QCheckBox("Auto-save TX profile changes");
-    m_autoSaveMic = new QCheckBox("Auto-save Mic profile changes");
+    m_autoSaveTx = new QCheckBox("Auto-save profile changes");
 
-    // TODO: read initial state from radio (profile all auto_save_*)
-    m_autoSaveTx->setChecked(true);
-    m_autoSaveMic->setChecked(true);
+    // Read initial state from radio (auto_save in radio status)
+    m_autoSaveTx->setChecked(m_model->autoSave());
 
     connect(m_autoSaveTx, &QCheckBox::toggled, this, [this](bool on) {
-        m_model->sendCommand(QString("profile autosave \"%1\"").arg(on ? "on" : "off"));
-    });
-    connect(m_autoSaveMic, &QCheckBox::toggled, this, [this](bool on) {
-        m_model->sendCommand(QString("profile autosave \"%1\"").arg(on ? "on" : "off"));
+        m_model->sendCommand(QString("profile autosave %1").arg(on ? "on" : "off"));
     });
 
     vbox->addWidget(m_autoSaveTx);
-    vbox->addWidget(m_autoSaveMic);
     vbox->addStretch();
 
     return page;

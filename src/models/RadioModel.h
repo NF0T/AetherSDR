@@ -173,6 +173,7 @@ public:
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
     bool    muteLocalWhenRemote() const { return m_muteLocalWhenRemote; }
+    bool    autoSave() const { return m_autoSave; }
     int     freqErrorPpb() const { return m_freqErrorPpb; }
     double  calFreqMhz() const { return m_calFreqMhz; }
 
@@ -250,7 +251,8 @@ public:
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     void sendCwKey(bool down);                    // straight key via netcw stream
     void sendCwPaddle(bool dit, bool dah);        // iambic paddle via netcw stream
-    void cwAutoTune(int sliceId, bool intermittent); // slice auto_tune
+    void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
+    void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
     void addSlice();           // Create a new slice on the active panadapter
     void addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
     void createPanadapter();   // Create a new independent panadapter
@@ -442,6 +444,7 @@ private:
     bool        m_tcxoPresent{false};
     bool        m_binauralRx{false};
     bool        m_muteLocalWhenRemote{false};
+    bool        m_autoSave{true};
     int         m_lineoutGain{50};
     bool        m_lineoutMute{false};
     int         m_headphoneGain{50};
@@ -601,6 +604,12 @@ public:
     int     packetTotalCount() const;
     qint64  rxBytes()          const;
     qint64  txBytes()          const;
+    QString targetRadioIp()    const;
+    QString selectedSourceMode() const;
+    QString selectedSourcePath() const;
+    QString localTcpEndpoint() const;
+    QString localUdpEndpoint() const;
+    bool    firstUdpPacketSeen() const;
 
     // Per-category stream stats (Audio, FFT, Waterfall, Meter, DAX)
     PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;

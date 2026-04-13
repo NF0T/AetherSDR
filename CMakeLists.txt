@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(AetherSDR VERSION 0.8.9 LANGUAGES C CXX)
+project(AetherSDR VERSION 0.8.10 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -198,6 +198,21 @@ if(AETHER_GPU_SPECTRUM)
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
         find_package(Qt6GuiPrivate QUIET)
+
+        # Detect Debian paths early
+        if(NOT Qt6GuiPrivate_FOUND)
+            message(STATUS "Qt6GuiPrivate not found, checking Debian multi-arch paths...")
+            find_path(DEBIAN_PRIVATE_INC
+                NAMES "QtGui/${Qt6_VERSION}/QtGui/private/qhighdpiscaling_p.h"
+                PATHS "/usr/include/x86_64-linux-gnu/qt6" "/usr/include/qt6"
+                NO_DEFAULT_PATH
+            )
+            if(DEBIAN_PRIVATE_INC)
+                set(Qt6GuiPrivate_FOUND TRUE)
+                set(DEBIAN_GPU_FIX_REQUIRED TRUE) # Mark for Step 2
+            endif()
+        endif()
+
         if(Qt6GuiPrivate_FOUND)
             message(STATUS "GPU spectrum rendering enabled (QRhi, Qt ${Qt6_VERSION})")
         else()
@@ -339,12 +354,33 @@ if(ENABLE_DFNR)
     endif()
 endif()
 
+# MQTT client support — bundled libmosquitto (#699)
+option(ENABLE_MQTT "Enable MQTT client support" ON)
+if(ENABLE_MQTT)
+    set(MOSQUITTO_DIR ${CMAKE_SOURCE_DIR}/third_party/mosquitto)
+    file(GLOB MOSQUITTO_SOURCES ${MOSQUITTO_DIR}/src/*.c)
+    # Remove broker-only and optional files we don't need
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "socks_mosq\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "tls_mosq\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "http_client\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "picohttpparser\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "extended_auth\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "cjson_common\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "password_common\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "base64_common\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "json_help\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "srv_mosq\\.c$")
+    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "file_common\\.c$")
+    message(STATUS "MQTT client support enabled (bundled libmosquitto)")
+endif()
+
 # Sources
 set(CORE_SOURCES
     src/core/AppSettings.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
+    src/core/NetworkPathResolver.cpp
     src/core/TgxlConnection.cpp
     src/core/CommandParser.cpp
     src/core/AudioEngine.cpp
@@ -362,6 +398,7 @@ set(CORE_SOURCES
     src/core/RigctlServer.cpp
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
+    src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/DvkWavTransfer.cpp
@@ -427,6 +464,7 @@ set(GUI_SOURCES
     src/gui/DxClusterDialog.cpp
     src/gui/CwxPanel.cpp
     src/gui/BandStackPanel.cpp
+    src/gui/PanFloatingWindow.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/MeterApplet.cpp
@@ -445,6 +483,7 @@ set(GUI_SOURCES
     src/gui/PhoneApplet.cpp
     src/gui/EqApplet.cpp
     src/gui/CatApplet.cpp
+    src/gui/MqttApplet.cpp
     src/gui/MeterSlider.cpp
     src/gui/PhaseKnob.cpp
     src/gui/AntennaGeniusApplet.cpp
@@ -605,6 +644,34 @@ endif()
 if(Qt6Keychain_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_KEYCHAIN)
     target_link_libraries(AetherSDR PRIVATE Qt6Keychain::Qt6Keychain)
+endif()
+
+if(AETHER_GPU_SPECTRUM)
+    target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
+
+    # Apply the Debian include paths now that AetherSDR exists
+    if(DEBIAN_GPU_FIX_REQUIRED)
+        message(STATUS "Applying Debian GPU include paths to AetherSDR")
+        target_include_directories(AetherSDR PRIVATE
+            "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
+            "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
+        )
+    endif()
+
+    if(TARGET Qt6::GuiPrivate)
+        target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
+    endif()
+
+    qt_add_shaders(AetherSDR "aether_shaders"
+        PREFIX "/shaders"
+        FILES
+            resources/shaders/texturedquad.vert
+            resources/shaders/texturedquad.frag
+            resources/shaders/overlay.vert
+            resources/shaders/overlay.frag
+            resources/shaders/spectrum.vert
+            resources/shaders/spectrum.frag
+    )
 endif()
 
 # Bundled RtMidi (MIT license) — MIDI controller support on all platforms
@@ -816,6 +883,15 @@ if(ENABLE_DFNR)
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/AetherSDR"
             OPTIONAL)
     endif()
+endif()
+
+if(ENABLE_MQTT)
+    target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT)
+    target_include_directories(AetherSDR PRIVATE
+        ${MOSQUITTO_DIR}/include
+        ${MOSQUITTO_DIR}/src)
+    target_sources(AetherSDR PRIVATE ${MOSQUITTO_SOURCES})
+    set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
 endif()
 
 if(AETHER_GPU_SPECTRUM)

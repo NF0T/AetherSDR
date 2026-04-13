@@ -3,6 +3,90 @@
 All notable changes to AetherSDR are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.8.10] — 2026-04-11
+
+### Pop-Out Panadapters, VPN Source-Path Binding, Float32 Fixes
+
+### New Features
+
+**Pop-out panadapters (community: rfoust)**
+- SmartSDR-style title bar with pop-out (⬈), maximize (□), and close (×) icons
+- Right-click "Pop out" in spectrum context menu to detach into floating window
+- Dock back via title bar button; multi-pan mode updates automatically
+
+**VPN source-path binding (#1218, community: jensenpat)**
+- Manual connections can select a specific network interface for TCP+UDP
+- Auto-follows TCP path for VPN/routed radios on multihomed systems
+- Per-target profile persistence in RoutedProfilesJson
+- Network Diagnostics dialog shows target IP, source path, TCP/UDP endpoints
+- 250ms UDP registration retry for routed connections
+
+**Show Tune Guides (#1198)**
+- Visual tune guides in spectrum/waterfall context menu
+
+**Reset settings cleanup flow (#1207)**
+- Guided settings reset from Help menu
+
+**Expanded Slice Troubleshooter (#1206)**
+- Additional diagnostics in troubleshooter dialog
+
+**Center startup slice (#1204)**
+- Slice centered on panadapter at launch
+
+**Center go-to-frequency (#1203)**
+- Frequency entry centers pan on target
+
+### Bug Fixes
+
+**AGC off level in VFO widget (#1217, community: jensenpat)**
+- AGC slider routes to `agc_off_level` when AGC mode is Off
+- Tooltip and accessible name update to match active mode
+
+**AGC off level in RX applet (#1183)**
+- Same fix for the RX applet AGC slider
+
+**CW decoder broken by float32 (#1191)**
+- Float32→int16 conversion at ggmorse boundary
+
+**DAX audio path**
+- DAX emission converted to float32 for TCI/PipeWire clients
+- PipeWire bridge reads float32 input correctly (fixes pumping audio)
+
+**CW autotune stop**
+- Separated one-shot and loop commands; stop now sends `int=0`
+
+**TX audio broken by float32 (#1175)**
+- Restored TX mic path to int16; separate RX/TX audio formats
+
+**Auto-save command (#1195)**
+- Uses correct `profile autosave on/off` command; reads from radio status
+- Support dialog made modeless
+
+**Multi-Flex UDP port conflict**
+- Countdown fallback tries ports 4991, 4990, 4989...
+
+**Band menu reopen (#1209)**
+- Fixed band menu not reopening after close
+
+**Stop persisting LCK (#1205)**
+- Lock state no longer saved across restarts
+
+**What's New auto-popup removed**
+- No longer pops up on launch; available via Help → What's New
+
+### Infrastructure
+
+- Skip this version button in upgrade dialog
+- CMake find_package fix (#1210, community: jensenpat)
+- CI dependency bumps: actions/cache v5 (#1177), dorny/paths-filter v4 (#1178)
+
+### Contributors
+
+- **rfoust** — Pop-out panadapters (foundation code)
+- **jensenpat** — VPN source-path binding, AGC off level in VFO, CMake fix
+
+---
+
 ## [v0.8.9] — 2026-04-11
 
 ### Float32 Audio, Display Panel Redesign, Community PR Blitz

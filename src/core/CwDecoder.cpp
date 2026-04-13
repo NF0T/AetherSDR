@@ -111,13 +111,15 @@ void CwDecoder::feedAudio(const QByteArray& pcm24kStereo)
 {
     if (!m_running) return;
 
-    // Downmix stereo int16 → mono int16 (average L+R)
-    const auto* src = reinterpret_cast<const int16_t*>(pcm24kStereo.constData());
-    const int stereoSamples = pcm24kStereo.size() / 4;  // L+R pairs
-    QByteArray mono(stereoSamples * 2, Qt::Uninitialized);
+    // Downmix stereo float32 → mono int16 for ggmorse (requires int16)
+    const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
+    const int stereoSamples = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
+    QByteArray mono(stereoSamples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
     auto* dst = reinterpret_cast<int16_t*>(mono.data());
-    for (int i = 0; i < stereoSamples; ++i)
-        dst[i] = static_cast<int16_t>((src[2 * i] + src[2 * i + 1]) / 2);
+    for (int i = 0; i < stereoSamples; ++i) {
+        float avg = (src[2 * i] + src[2 * i + 1]) * 0.5f;
+        dst[i] = static_cast<int16_t>(std::clamp(avg * 32768.0f, -32768.0f, 32767.0f));
+    }
 
     QMutexLocker lock(&m_bufMutex);
     m_ringBuf.append(mono);

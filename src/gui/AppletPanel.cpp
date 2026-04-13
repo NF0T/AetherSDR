@@ -13,6 +13,9 @@
 #include "CatApplet.h"
 #include "AntennaGeniusApplet.h"
 #include "MeterApplet.h"
+#ifdef HAVE_MQTT
+#include "MqttApplet.h"
+#endif
 #include "models/SliceModel.h"
 #include <QComboBox>
 #include <QLabel>
@@ -686,6 +689,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         });
         m_appletOrder.append({"AG", wrapper, titleBar, m_agBtn});
     }
+
+#ifdef HAVE_MQTT
+    m_mqttApplet = new MqttApplet;
+    m_appletOrder.append(makeEntry("MQTT", "MQTT", m_mqttApplet, false, btnRow2, btnLayout2));
+#endif
 
     btnLayout1->addStretch();
     btnLayout2->addStretch();

@@ -1,4 +1,7 @@
 #include "MainWindow.h"
+#ifdef HAVE_MQTT
+#include "MqttApplet.h"
+#endif
 #include "ConnectionPanel.h"
 #include "TitleBar.h"
 #include "PanadapterApplet.h"
@@ -401,6 +404,23 @@ MainWindow::MainWindow(QWidget* parent)
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
 #endif
+#ifdef HAVE_MQTT
+    m_mqttClient = new MqttClient(this);
+    m_appletPanel->mqttApplet()->setMqttClient(m_mqttClient);
+
+    connect(m_appletPanel->mqttApplet(), &MqttApplet::connectRequested,
+            this, [this](const QString& host, quint16 port,
+                         const QString& user, const QString& pass,
+                         const QStringList& topics) {
+        m_mqttClient->connectToBroker(host, port, user, pass);
+        for (const QString& t : topics) {
+            m_mqttClient->subscribe(t);
+        }
+    });
+    connect(m_appletPanel->mqttApplet(), &MqttApplet::disconnectRequested,
+            this, [this] { m_mqttClient->disconnect(); });
+#endif
+
     m_spotThread = new QThread(this);
     m_spotThread->setObjectName("SpotClients");
     m_dxCluster->moveToThread(m_spotThread);
@@ -850,10 +870,6 @@ MainWindow::MainWindow(QWidget* parent)
             spectrum()->setRfGain(rfGain);
             spectrum()->overlayMenu()->setWnbState(wnbOn, wnbLevel);
             spectrum()->overlayMenu()->setRfGain(rfGain);
-            bool cursorFreq = s.value(spectrum()->settingsKey("CursorFreqLabel"), "False").toString() == "True";
-            spectrum()->setShowCursorFreq(cursorFreq);
-            if (spectrum()->overlayMenu()->cursorFreqButton())
-                spectrum()->overlayMenu()->cursorFreqButton()->setChecked(cursorFreq);
             QString bgPath = s.value(spectrum()->settingsKey("BackgroundImage")).toString();
             if (!bgPath.isEmpty())
                 spectrum()->setBackgroundImage(bgPath);
@@ -1901,42 +1917,15 @@ MainWindow::MainWindow(QWidget* parent)
             showMemoryDialog();
     });
 
-    // What's New dialog — show on version change (#483)
-    // Also check for newer release and offer upgrade (#486)
-    QTimer::singleShot(600, this, [this]() {
+    // Track last-seen version (used by Help → What's New)
+    {
         auto& settings = AppSettings::instance();
-        QString lastSeen = settings.value("LastSeenVersion").toString();
         QString current = QCoreApplication::applicationVersion();
-
-        // Version changed since last launch — show What's New immediately
-        if (lastSeen != current) {
+        if (settings.value("LastSeenVersion").toString() != current) {
             settings.setValue("LastSeenVersion", current);
             settings.save();
-            m_whatsNewDialog = new WhatsNewDialog(lastSeen, current, this);
-            m_whatsNewDialog->show();
-            return;  // don't also check for upgrade on the same launch
         }
-
-        // Same version — check if a newer release is available
-        auto* nam = new QNetworkAccessManager(this);
-        auto* reply = nam->get(QNetworkRequest(
-            QUrl("https://api.github.com/repos/ten9876/AetherSDR/releases/latest")));
-        connect(reply, &QNetworkReply::finished, this, [this, reply, nam, current] {
-            reply->deleteLater();
-            nam->deleteLater();
-            if (reply->error() != QNetworkReply::NoError) return;
-            auto doc = QJsonDocument::fromJson(reply->readAll());
-            QString latest = doc.object().value("tag_name").toString();
-            if (latest.startsWith('v')) latest = latest.mid(1);
-            auto latestVer = VersionNumber::parse(latest);
-            auto currentVer = VersionNumber::parse(current);
-            if (latestVer.isNull() || currentVer >= latestVer) return;
-
-            // Newer version available — show What's New with upgrade button
-            m_whatsNewDialog = new WhatsNewDialog(current, latest, this, true);
-            m_whatsNewDialog->show();
-        });
-    });
+    }
 }
 
 MainWindow::~MainWindow()
@@ -1980,6 +1969,7 @@ MainWindow::~MainWindow()
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     m_shuttingDown = true;
+    m_panStack->prepareShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
@@ -1994,8 +1984,24 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (sl) {
         s.setValue("LastFrequency", QString::number(sl->frequency(), 'f', 6));
         s.setValue("LastMode", sl->mode());
-        s.setValue("LastDaxChannel", QString::number(sl->daxChannel()));
     }
+
+    // Save per-slice DAX channel assignments for restore on next launch.
+    // Keyed by slice index (A=0, B=1, ...) since radio-assigned IDs change.
+    {
+        const QList<SliceModel*> slices = m_radioModel.slices();
+        for (int i = 0; i < slices.size(); ++i) {
+            const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + i));
+            if (slices[i]->daxChannel() > 0) {
+                s.setValue(key, QString::number(slices[i]->daxChannel()));
+            } else {
+                s.remove(key);
+            }
+        }
+    }
+
+    // DAX IQ channel is radio-authoritative — no client-side persistence needed.
+    // The radio echoes daxiq_channel in pan status on reconnect.
 
     // Save client-side DSP state before destructor disables them
     s.setValue("ClientNr2Enabled", m_audio->nr2Enabled() ? "True" : "False");
@@ -2373,8 +2379,6 @@ void MainWindow::buildMenuBar()
                 qDebug() << "MainWindow: audio compression changed from" << prevComp
                          << "to" << newComp << "— recreating audio stream";
                 m_radioModel.removeRxAudioStream();
-                // TX always uses Opus (radio enforces it on remote_audio_tx).
-                // RX compression change doesn't affect TX encoding.
                 QTimer::singleShot(500, this, [this]() {
                     m_radioModel.createRxAudioStream();
                 });
@@ -3188,9 +3192,11 @@ void MainWindow::buildMenuBar()
     });
     helpMenu->addSeparator();
     helpMenu->addAction("Support...", this, [this]() {
-        SupportDialog dlg(this);
-        dlg.setRadioModel(&m_radioModel);
-        dlg.exec();
+        auto* dlg = new SupportDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setRadioModel(&m_radioModel);
+        dlg->show();
+        dlg->raise();
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         SliceTroubleshootingDialog dlg(&m_radioModel, m_audio, this);
@@ -3678,10 +3684,6 @@ void MainWindow::buildUI()
 
     // ── Center stretch → STATION → stretch ───────────────────────────────
     hbox->addStretch(1);
-
-    auto* stationPrefix = new QLabel("RADIO:");
-    stationPrefix->setStyleSheet(valStyle);
-    hbox->addWidget(stationPrefix);
 
     m_stationNickLabel = new QLabel("N0CALL");
     m_stationNickLabel->setStyleSheet(
@@ -4329,11 +4331,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 m_radioModel.createRxAudioStream();
         }
 
-        // Restore saved DAX channel from last session
-        int savedDax = AppSettings::instance().value("LastDaxChannel", "0").toInt();
-        if (savedDax > 0)
-            s->setDaxChannel(savedDax);
-
         // Restore client-side DSP (NR2/RN2) from last session.
         // Deferred so the VFO widget exists for button sync.
         QTimer::singleShot(500, this, [this]() {
@@ -4371,6 +4368,21 @@ void MainWindow::onSliceAdded(SliceModel* s)
                     m_cwDecoder.start();
             }
         });
+    }
+
+    // Restore per-slice DAX channel from last session (#1221).
+    // Deferred so the radio's initial slice status has arrived first.
+    {
+        const int sliceIdx = m_radioModel.slices().indexOf(s);
+        if (sliceIdx >= 0) {
+            const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + sliceIdx));
+            int savedDax = AppSettings::instance().value(key, "0").toInt();
+            if (savedDax > 0) {
+                QTimer::singleShot(300, this, [s, savedDax]() {
+                    if (s) { s->setDaxChannel(savedDax); }
+                });
+            }
+        }
     }
 
     // Re-claim TX assignment after profile load or slice recreation (#145).
@@ -4960,15 +4972,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     }
 
-    // Restore per-pan cursor freq state from AppSettings
-    {
-        auto& s = AppSettings::instance();
-        bool cursorFreq = s.value(sw->settingsKey("CursorFreqLabel"), "False").toString() == "True";
-        sw->setShowCursorFreq(cursorFreq);
-        if (menu->cursorFreqButton())
-            menu->cursorFreqButton()->setChecked(cursorFreq);
-    }
-
     // ── Tuning step size → this pan's spectrum widget ─────────────────────
     // The global connection only covers AppSettings + radio command.
     // Each pan must also receive stepSizeChanged so scroll-to-tune
@@ -5122,17 +5125,43 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::noiseFloorEnableChanged,
             sw, &SpectrumWidget::setNoiseFloorEnable);
 
+    // Pop out / dock panadapter
+    connect(sw, &SpectrumWidget::popOutRequested, this, [this, applet](bool popOut) {
+        if (popOut) {
+            m_panStack->floatPanadapter(applet->panId());
+        } else {
+            m_panStack->dockPanadapter(applet->panId());
+        }
+    });
+    connect(applet, &PanadapterApplet::popOutClicked, this, [this, applet]() {
+        m_panStack->floatPanadapter(applet->panId());
+    });
+
     // ── DAX IQ pan routing from overlay menu ───────────────────────────
     // The overlay controls which pan feeds which IQ channel (routing only).
     // Stream create/destroy and rate are managed by the DIGI applet.
     connect(menu, &SpectrumOverlayMenu::daxIqChannelChanged,
             this, [this, applet](int channel) {
         auto* pan = m_radioModel.panadapter(applet->panId());
-        if (!pan || pan->waterfallId().isEmpty()) return;
+        if (!pan) return;
         m_radioModel.sendCommand(
-            QString("display panafall set %1 daxiq_channel=%2")
-                .arg(pan->waterfallId()).arg(channel));
+            QString("display pan set %1 daxiq_channel=%2")
+                .arg(applet->panId()).arg(channel));
     });
+
+    // Sync DAX IQ combo from radio status + restore saved assignment (#1221)
+    {
+        auto* pan = m_radioModel.panadapter(applet->panId());
+        if (pan) {
+            connect(pan, &PanadapterModel::daxiqChannelChanged,
+                    menu, &SpectrumOverlayMenu::syncDaxIqChannel);
+            menu->syncDaxIqChannel(pan->daxiqChannel());
+
+            // DAX IQ channel restore deferred — the radio persists
+            // daxiq_channel on the pan, so it arrives via status echo.
+            // Overlay combo syncs automatically via daxiqChannelChanged.
+        }
+    }
 
     // ── Per-pan display controls → radio commands ────────────────────────
     // Each pan's overlay sends commands with its own panId/wfId, not the
@@ -5190,21 +5219,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setWfBlankerEnabled);
     connect(menu, &SpectrumOverlayMenu::wfBlankerThresholdChanged,
             sw, &SpectrumWidget::setWfBlankerThreshold);
-    connect(menu, &SpectrumOverlayMenu::cursorFreqToggled,
-            this, [sw](bool on) {
-        sw->setShowCursorFreq(on);
-        auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("CursorFreqLabel"), on ? "True" : "False");
-        s.save();
-    });
-
     disconnect(menu, &SpectrumOverlayMenu::backgroundImageRequested, this, nullptr);
     disconnect(menu, &SpectrumOverlayMenu::backgroundImageCleared, this, nullptr);
     disconnect(menu, &SpectrumOverlayMenu::backgroundOpacityChanged, this, nullptr);
     disconnect(menu, &SpectrumOverlayMenu::displaySettingsReset, this, nullptr);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
             this, [this, sw] {
-        QString path = QFileDialog::getOpenFileName(this, "Choose Background Image",
+        QString path = QFileDialog::getOpenFileName(sw, "Choose Background Image",
             QString(), "Images (*.png *.jpg *.jpeg *.bmp)");
         if (path.isEmpty()) return;
         sw->setBackgroundImage(path);
@@ -5290,7 +5311,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // Sync all Display panel UI controls
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
                                   50, 15, true, 100, 75, false, true, 0);
-        menu->syncExtraDisplaySettings(false, 1.15f, false, 80);
+        menu->syncExtraDisplaySettings(false, 1.15f, 80);
     });
 
     // ── Click-to-tune ────────────────────────────────────────────────────
@@ -5639,6 +5660,10 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
         if (m_radioModel.slice(sliceId))
             m_radioModel.cwAutoTune(sliceId, intermittent);
+    });
+    connect(w, &VfoWidget::autotuneOnceRequested, this, [this, sliceId]() {
+        if (m_radioModel.slice(sliceId))
+            m_radioModel.cwAutoTuneOnce(sliceId);
     });
     connect(w, &VfoWidget::addSpotRequested, this, [this](double freqMhz) {
         spectrum()->showAddSpotDialog(freqMhz);
@@ -7028,6 +7053,8 @@ bool MainWindow::startDax()
         if (!obj.startsWith("stream ")) return;
         QString type = kvs.value("type");
         if (type == "dax_iq") {
+            qDebug() << "DAX IQ STREAM STATUS:" << obj << "keys=" << kvs.keys()
+                     << "ch=" << kvs.value("daxiq_channel") << "ip=" << kvs.value("ip");
             quint32 streamId = obj.mid(7).toUInt(nullptr, 0);
             if (kvs.contains("removed")) {
                 m_radioModel.panStream()->unregisterIqStream(streamId);

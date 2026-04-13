@@ -14,6 +14,9 @@
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
 #include "core/DxClusterClient.h"
+#ifdef HAVE_MQTT
+#include "core/MqttClient.h"
+#endif
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
@@ -161,6 +164,9 @@ private:
     CwDecoder         m_cwDecoder;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
+#ifdef HAVE_MQTT
+    MqttClient*        m_mqttClient{nullptr};
+#endif
     WsjtxClient*       m_wsjtxClient{nullptr};
     SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};

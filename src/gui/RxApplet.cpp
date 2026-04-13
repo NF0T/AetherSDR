@@ -761,8 +761,15 @@ void RxApplet::buildUI()
         agcRow->addWidget(m_agcTSlider, 1);
 
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
-            m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(v));
-            if (m_slice) m_slice->setAgcThreshold(v);
+            if (m_slice) {
+                if (m_slice->agcMode() == "off") {
+                    m_agcTSlider->setToolTip(QString("AGC Off Level: %1").arg(v));
+                    m_slice->setAgcOffLevel(v);
+                } else {
+                    m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(v));
+                    m_slice->setAgcThreshold(v);
+                }
+            }
         });
         rightCol->addWidget(m_agcContainer);
     }
@@ -1146,16 +1153,41 @@ void RxApplet::connectSlice(SliceModel* s)
         updateAgcCombo();
     });
 
-    // AGC threshold
+    // AGC threshold / off level — slider switches based on AGC mode
     {
         QSignalBlocker b(m_agcTSlider);
-        m_agcTSlider->setValue(s->agcThreshold());
-        m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(s->agcThreshold()));
+        if (s->agcMode() == "off") {
+            m_agcTSlider->setValue(s->agcOffLevel());
+            m_agcTSlider->setToolTip(QString("AGC Off Level: %1").arg(s->agcOffLevel()));
+        } else {
+            m_agcTSlider->setValue(s->agcThreshold());
+            m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(s->agcThreshold()));
+        }
     }
     connect(s, &SliceModel::agcThresholdChanged, this, [this](int v) {
+        if (m_slice && m_slice->agcMode() != "off") {
+            QSignalBlocker b(m_agcTSlider);
+            m_agcTSlider->setValue(v);
+            m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(v));
+        }
+    });
+    connect(s, &SliceModel::agcOffLevelChanged, this, [this](int v) {
+        if (m_slice && m_slice->agcMode() == "off") {
+            QSignalBlocker b(m_agcTSlider);
+            m_agcTSlider->setValue(v);
+            m_agcTSlider->setToolTip(QString("AGC Off Level: %1").arg(v));
+        }
+    });
+    connect(s, &SliceModel::agcModeChanged, this, [this](const QString& mode) {
+        if (!m_slice) return;
         QSignalBlocker b(m_agcTSlider);
-        m_agcTSlider->setValue(v);
-        m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(v));
+        if (mode == "off") {
+            m_agcTSlider->setValue(m_slice->agcOffLevel());
+            m_agcTSlider->setToolTip(QString("AGC Off Level: %1").arg(m_slice->agcOffLevel()));
+        } else {
+            m_agcTSlider->setValue(m_slice->agcThreshold());
+            m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(m_slice->agcThreshold()));
+        }
     });
 
     // Audio mute

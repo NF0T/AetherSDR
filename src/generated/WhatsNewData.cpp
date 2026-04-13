@@ -6,6 +6,26 @@ namespace AetherSDR {
 
 const std::vector<ReleaseEntry>& whatsNewEntries() {
     static const std::vector<ReleaseEntry> entries = {
+        {QStringLiteral("0.8.10"), QStringLiteral("2026-04-11"), QStringLiteral("Contributors"), {
+            {ChangeCategory::Feature, QStringLiteral("Pop-out panadapters (community: rfoust)"), QStringLiteral("SmartSDR-style title bar with pop-out (⬈), maximize (□), and close (×) icons Right-click \"Pop out\" in spectrum context menu to detach into floating window Dock back via title bar button; multi-pan ...")},
+            {ChangeCategory::Feature, QStringLiteral("VPN source-path binding (#1218, community: jensenpat)"), QStringLiteral("Manual connections can select a specific network interface for TCP+UDP Auto-follows TCP path for VPN/routed radios on multihomed systems Per-target profile persistence in RoutedProfilesJson Network...")},
+            {ChangeCategory::Feature, QStringLiteral("Show Tune Guides"), QStringLiteral("Visual tune guides in spectrum/waterfall context menu")},
+            {ChangeCategory::Feature, QStringLiteral("Reset settings cleanup flow"), QStringLiteral("Guided settings reset from Help menu")},
+            {ChangeCategory::Feature, QStringLiteral("Expanded Slice Troubleshooter"), QStringLiteral("Additional diagnostics in troubleshooter dialog")},
+            {ChangeCategory::Feature, QStringLiteral("Center startup slice"), QStringLiteral("Slice centered on panadapter at launch")},
+            {ChangeCategory::Feature, QStringLiteral("Center go-to-frequency"), QStringLiteral("Frequency entry centers pan on target")},
+            {ChangeCategory::BugFix, QStringLiteral("AGC off level in VFO widget (#1217, community: jensenpat)"), QStringLiteral("AGC slider routes to `agc_off_level` when AGC mode is Off Tooltip and accessible name update to match active mode")},
+            {ChangeCategory::BugFix, QStringLiteral("AGC off level in RX applet"), QStringLiteral("Same fix for the RX applet AGC slider")},
+            {ChangeCategory::BugFix, QStringLiteral("CW decoder broken by float32"), QStringLiteral("Float32→int16 conversion at ggmorse boundary")},
+            {ChangeCategory::BugFix, QStringLiteral("DAX audio path"), QStringLiteral("DAX emission converted to float32 for TCI/PipeWire clients PipeWire bridge reads float32 input correctly (fixes pumping audio)")},
+            {ChangeCategory::BugFix, QStringLiteral("CW autotune stop"), QStringLiteral("Separated one-shot and loop commands; stop now sends `int=0`")},
+            {ChangeCategory::BugFix, QStringLiteral("TX audio broken by float32"), QStringLiteral("Restored TX mic path to int16; separate RX/TX audio formats")},
+            {ChangeCategory::BugFix, QStringLiteral("Auto-save command"), QStringLiteral("Uses correct `profile autosave on/off` command; reads from radio status Support dialog made modeless")},
+            {ChangeCategory::BugFix, QStringLiteral("Multi-Flex UDP port conflict"), QStringLiteral("Countdown fallback tries ports 4991, 4990, 4989...")},
+            {ChangeCategory::BugFix, QStringLiteral("Band menu reopen"), QStringLiteral("Fixed band menu not reopening after close")},
+            {ChangeCategory::BugFix, QStringLiteral("Stop persisting LCK"), QStringLiteral("Lock state no longer saved across restarts")},
+            {ChangeCategory::BugFix, QStringLiteral("What's New auto-popup removed"), QStringLiteral("No longer pops up on launch; available via Help → What's New")},
+        }},
         {QStringLiteral("0.8.9"), QStringLiteral("2026-04-11"), QStringLiteral("Float32 Audio, Display Panel Redesign, Community PR Blitz"), {
             {ChangeCategory::Feature, QStringLiteral("Float32 audio pipeline"), QStringLiteral("End-to-end float32 from radio to speaker — eliminates distortion at high AF slider levels All DSP filters (NR2, RN2, NR4, DFNR, BNR) now process in native float32 Resampler converted to float32 I/O...")},
             {ChangeCategory::Feature, QStringLiteral("Adjustable spectrum trace thickness"), QStringLiteral("GPU triangle strip expansion for variable-width spectrum line (0.5–5.0 px) Line Width slider in Display panel, persisted per-pan Setting to \"Off\" hides trace entirely, showing only fill gradient")},

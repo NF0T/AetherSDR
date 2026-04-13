@@ -94,7 +94,8 @@ Q_SIGNALS:
     void playToggled(bool on);
     void splitToggled();
     void swapRequested();
-    void autotuneRequested(bool intermittent);  // CW auto-tune: false=once, true=loop
+    void autotuneRequested(bool intermittent);  // CW auto-tune: false=stop, true=loop
+    void autotuneOnceRequested();               // CW auto-tune one-shot
     void addSpotRequested(double freqMhz);
     void sliceActivationRequested(int sliceId);
 
@@ -117,6 +118,7 @@ private:
     void updateFilterHighlight();
     void applyFilterPreset(int widthHz);
     void saveFilterPresets();
+    void updateAgcSliderFromSlice();
     static QString formatFilterLabel(int hz);
 
     SliceModel*    m_slice{nullptr};
@@ -181,6 +183,7 @@ private:
     QSlider* m_sqlSlider{nullptr};
     QComboBox* m_agcCmb{nullptr};
     QSlider* m_agcTSlider{nullptr};
+    QLabel* m_agcValueLbl{nullptr};
     // DSP tab
     QPushButton* m_nbBtn{nullptr};
     QPushButton* m_nrBtn{nullptr};

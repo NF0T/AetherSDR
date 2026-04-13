@@ -263,17 +263,17 @@ void PipeWireAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
     auto& rx = m_rx[channel - 1];
     if (rx.fd < 0) return;
 
-    // Input is int16 stereo — convert to mono (average L+R) with gain
-    const auto* src = reinterpret_cast<const int16_t*>(pcm.constData());
-    int stereoSamples = pcm.size() / sizeof(int16_t);
-    int monoSamples = stereoSamples / 2;
+    // Input is float32 stereo — convert to mono int16 (average L+R) with gain
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    int stereoFloats = pcm.size() / static_cast<int>(sizeof(float));
+    int monoSamples = stereoFloats / 2;
     float chGain = m_channelGain[channel - 1];
 
-    QByteArray mono(monoSamples * sizeof(int16_t), Qt::Uninitialized);
+    QByteArray mono(monoSamples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
     auto* dst = reinterpret_cast<int16_t*>(mono.data());
     for (int i = 0; i < monoSamples; ++i) {
         float avg = (src[i * 2] + src[i * 2 + 1]) * 0.5f * chGain;
-        dst[i] = static_cast<int16_t>(std::clamp(avg, -32767.0f, 32767.0f));
+        dst[i] = static_cast<int16_t>(std::clamp(avg * 32768.0f, -32768.0f, 32767.0f));
     }
     ::write(rx.fd, mono.constData(), mono.size());
 

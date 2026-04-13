@@ -217,14 +217,14 @@ void SpectrumOverlayMenu::buildBandPanel()
             if (idx == 15) {
                 // XVTR button → open Radio Setup XVTR tab (#571)
                 connect(btn, &QPushButton::clicked, this, [this]() {
-                    m_bandPanel->hide();
-                    m_bandPanelVisible = false;
+                    hideAllSubPanels();
                     emit xvtrSetupRequested();
                 });
             } else if (bandName.isEmpty()) {
                 btn->setEnabled(false);
             } else {
                 connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
+                    hideAllSubPanels();
                     emit bandSelected(bandName, freq, mode);
                 });
             }
@@ -522,14 +522,6 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
     m_dspRows[13].btn->setVisible(false);
 #endif
 
-    // DAX
-    connect(m_slice, &SliceModel::daxChannelChanged, this, [this](int ch) {
-        m_updatingFromModel = true;
-        QSignalBlocker sb(m_daxCmb);
-        m_daxCmb->setCurrentIndex(ch);
-        m_updatingFromModel = false;
-    });
-
     syncAntPanel();
     syncDspPanel();
     syncDaxPanel();
@@ -735,23 +727,6 @@ void SpectrumOverlayMenu::buildDaxPanel()
     vb->setContentsMargins(6, 6, 6, 6);
     vb->setSpacing(4);
 
-    auto* row = new QHBoxLayout;
-    row->setSpacing(4);
-    auto* lbl = new QLabel("DAX Ch");
-    lbl->setStyleSheet(kLabelStyle);
-    row->addWidget(lbl);
-    m_daxCmb = new GuardedComboBox;
-    m_daxCmb->addItems({"Off", "1", "2", "3", "4"});
-    AetherSDR::applyComboStyle(m_daxCmb);
-    row->addWidget(m_daxCmb, 1);
-    vb->addLayout(row);
-
-    connect(m_daxCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int idx) {
-        if (!m_updatingFromModel && m_slice)
-            m_slice->setDaxChannel(idx);
-    });
-
     auto* iqRow = new QHBoxLayout;
     iqRow->setSpacing(4);
     auto* iqLbl = new QLabel("IQ Ch");
@@ -775,11 +750,16 @@ void SpectrumOverlayMenu::buildDaxPanel()
 
 void SpectrumOverlayMenu::syncDaxPanel()
 {
-    if (!m_slice) return;
-    m_updatingFromModel = true;
-    QSignalBlocker sb(m_daxCmb);
-    m_daxCmb->setCurrentIndex(m_slice->daxChannel());
-    m_updatingFromModel = false;
+    // DAX IQ combo is synced via syncDaxIqChannel() from PanadapterModel.
+    // Regular DAX channel is managed by the VFO widget.
+}
+
+void SpectrumOverlayMenu::syncDaxIqChannel(int channel)
+{
+    if (!m_daxIqCmb) return;
+    QSignalBlocker sb(m_daxIqCmb);
+    int idx = qBound(0, channel, m_daxIqCmb->count() - 1);
+    m_daxIqCmb->setCurrentIndex(idx);
 }
 
 void SpectrumOverlayMenu::toggleDaxPanel()
@@ -802,12 +782,18 @@ void SpectrumOverlayMenu::toggleDaxPanel()
 
 void SpectrumOverlayMenu::hideAllSubPanels()
 {
-    if (m_bandPanelVisible)    { m_bandPanelVisible = false;    m_bandPanel->hide(); }
-    if (m_xvtrPanelVisible)    { m_xvtrPanelVisible = false;    if (m_xvtrPanel) m_xvtrPanel->hide(); }
-    if (m_antPanelVisible)     { m_antPanelVisible = false;     m_antPanel->hide(); }
-    if (m_dspPanelVisible)     { m_dspPanelVisible = false;     m_dspPanel->hide(); }
-    if (m_daxPanelVisible)     { m_daxPanelVisible = false;     m_daxPanel->hide(); }
-    if (m_displayPanelVisible) { m_displayPanelVisible = false; m_displayPanel->hide(); }
+    m_bandPanelVisible = false;
+    if (m_bandPanel) m_bandPanel->hide();
+    m_xvtrPanelVisible = false;
+    if (m_xvtrPanel) m_xvtrPanel->hide();
+    m_antPanelVisible = false;
+    if (m_antPanel) m_antPanel->hide();
+    m_dspPanelVisible = false;
+    if (m_dspPanel) m_dspPanel->hide();
+    m_daxPanelVisible = false;
+    if (m_daxPanel) m_daxPanel->hide();
+    m_displayPanelVisible = false;
+    if (m_displayPanel) m_displayPanel->hide();
     m_menuBtns[2]->setStyleSheet(kMenuBtnNormal);  // Band
     m_menuBtns[3]->setStyleSheet(kMenuBtnNormal);  // ANT
     m_menuBtns[4]->setStyleSheet(kMenuBtnNormal);  // DSP
@@ -815,17 +801,24 @@ void SpectrumOverlayMenu::hideAllSubPanels()
     m_menuBtns[6]->setStyleSheet(kMenuBtnNormal);  // DAX
 }
 
+void SpectrumOverlayMenu::showBandPanelAt(const QPoint& pos)
+{
+    if (!m_bandPanel)
+        return;
+
+    m_bandPanelVisible = true;
+    m_bandPanel->move(pos);
+    m_bandPanel->raise();
+    m_bandPanel->show();
+    m_menuBtns[2]->setStyleSheet(kMenuBtnActive);
+}
+
 void SpectrumOverlayMenu::toggleBandPanel()
 {
-    bool wasVisible = m_bandPanelVisible;
+    const bool wasVisible = m_bandPanel && m_bandPanel->isVisible();
     hideAllSubPanels();
-    if (!wasVisible) {
-        m_bandPanelVisible = true;
-        m_bandPanel->move(x() + width(), y());
-        m_bandPanel->raise();
-        m_bandPanel->show();
-        m_menuBtns[2]->setStyleSheet(kMenuBtnActive);
-    }
+    if (!wasVisible)
+        showBandPanelAt(QPoint(x() + width(), y()));
 }
 
 void SpectrumOverlayMenu::toggleAntPanel()
@@ -1153,7 +1146,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         makeToggle("Heat Map", m_heatMapBtn);
         makeToggle("Grid", m_showGridBtn, true);
         makeToggle("Wt Avg", m_weightedAvgBtn);
-        makeToggle("Cursor", m_cursorFreqBtn);
 
         grid->addWidget(toggleRow, row, 0, 1, 4);
         ++row;
@@ -1166,9 +1158,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
         connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
             emit fftWeightedAverageChanged(on);
-        });
-        connect(m_cursorFreqBtn, &QPushButton::toggled, this, [this](bool on) {
-            emit cursorFreqToggled(on);
         });
     }
 
@@ -1213,7 +1202,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_rateSlider->setToolTip("Waterfall line duration. Lower values scroll faster.");
     if (m_wfBlankerThreshSlider) m_wfBlankerThreshSlider->setToolTip("Waterfall noise blanking threshold. Higher values blank more aggressively.");
     if (m_colorSchemeCmb) m_colorSchemeCmb->setToolTip("Selects the waterfall color palette.");
-    if (m_cursorFreqBtn) m_cursorFreqBtn->setToolTip("Shows the frequency at the mouse cursor position on the panadapter.");
     if (m_bgOpacitySlider) m_bgOpacitySlider->setToolTip("Opacity of the background image overlay.");
     if (m_floorEnableBtn) m_floorEnableBtn->setToolTip("Shows a noise floor reference line on the spectrum display.");
     if (m_floorSlider) m_floorSlider->setToolTip("Vertical position of the noise floor reference line.");
@@ -1284,7 +1272,7 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
 }
 
 void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
-                                                    bool cursorFreq, int bgOpacity)
+                                                    int bgOpacity)
 {
     if (m_wfBlankerBtn) {
         QSignalBlocker b(m_wfBlankerBtn);
@@ -1297,10 +1285,6 @@ void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blanker
         m_wfBlankerThreshSlider->setValue(sliderVal);
         if (m_wfBlankerThreshLabel)
             m_wfBlankerThreshLabel->setText(QString::number(blankerThresh, 'f', 2));
-    }
-    if (m_cursorFreqBtn) {
-        QSignalBlocker b(m_cursorFreqBtn);
-        m_cursorFreqBtn->setChecked(cursorFreq);
     }
     if (m_bgOpacitySlider) {
         QSignalBlocker b(m_bgOpacitySlider);
@@ -1357,6 +1341,10 @@ void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step)
 
 void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
 {
+    const bool bandPanelWasVisible = m_bandPanel && m_bandPanel->isVisible();
+    const QPoint bandPanelPos = m_bandPanel ? m_bandPanel->pos()
+                                            : QPoint(x() + width(), y());
+
     // Remove old XVTR band buttons from main band panel
     for (auto* btn : m_xvtrBandBtns)
         btn->deleteLater();
@@ -1366,6 +1354,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     // HF bands and utility buttons (WWV/GEN/2200/630/XVTR). (#571)
     if (m_bandPanel) {
         // Delete existing band panel and rebuild
+        m_bandPanel->hide();
         m_bandPanel->deleteLater();
         m_bandPanel = nullptr;
     }
@@ -1374,6 +1363,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     m_bandPanel->setStyleSheet("QWidget { background: rgba(15, 15, 26, 220); "
                                 "border: 1px solid #304050; border-radius: 3px; }");
     m_bandPanel->hide();
+    m_bandPanel->installEventFilter(this);
 
     auto* grid = new QGridLayout(m_bandPanel);
     grid->setContentsMargins(2, 2, 2, 2);
@@ -1413,6 +1403,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             double freq = BAND_GRID[idx].freqMhz;
             QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
             connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
+                hideAllSubPanels();
                 emit bandSelected(bandName, freq, mode);
             });
             grid->addWidget(btn, row, col);
@@ -1429,9 +1420,8 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         const double freq = bands[i].rfFreqMhz;
         const QString name = bands[i].name;
         connect(btn, &QPushButton::clicked, this, [this, name, freq]() {
+            hideAllSubPanels();
             emit bandSelected(name, freq, "USB");
-            m_bandPanel->hide();
-            m_bandPanelVisible = false;
         });
         grid->addWidget(btn, row + i / 3, i % 3);
         m_xvtrBandBtns.append(btn);
@@ -1456,14 +1446,14 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
             if (idx == 15) {
                 connect(btn, &QPushButton::clicked, this, [this]() {
-                    m_bandPanel->hide();
-                    m_bandPanelVisible = false;
+                    hideAllSubPanels();
                     emit xvtrSetupRequested();
                 });
             } else if (bandName.isEmpty()) {
                 btn->setEnabled(false);
             } else {
                 connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
+                    hideAllSubPanels();
                     emit bandSelected(bandName, freq, mode);
                 });
             }
@@ -1473,6 +1463,11 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_bandPanel->adjustSize();
+    m_bandPanelVisible = bandPanelWasVisible;
+    if (bandPanelWasVisible)
+        showBandPanelAt(bandPanelPos);
+    else
+        m_menuBtns[2]->setStyleSheet(kMenuBtnNormal);
 
     // Rebuild the XVTR sub-panel (kept as fallback)
     if (m_xvtrPanel) {
@@ -1485,6 +1480,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
                                 "border: 1px solid #304050; border-radius: 3px; }");
     m_xvtrPanel->hide();
     m_xvtrPanel->installEventFilter(this);
+    m_xvtrPanelVisible = false;
 
     auto* xvGrid = new QGridLayout(m_xvtrPanel);
     xvGrid->setContentsMargins(2, 2, 2, 2);
@@ -1540,12 +1536,11 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     hfBtn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
     hfBtn->setStyleSheet(btnStyle);
     connect(hfBtn, &QPushButton::clicked, this, [this]() {
-        m_xvtrPanel->hide();
+        const QPoint pos = m_xvtrPanel->pos();
+        if (m_xvtrPanel)
+            m_xvtrPanel->hide();
         m_xvtrPanelVisible = false;
-        m_bandPanel->move(m_xvtrPanel->pos());
-        m_bandPanel->show();
-        m_bandPanel->raise();
-        m_bandPanelVisible = true;
+        showBandPanelAt(pos);
     });
     xvGrid->addWidget(hfBtn, slot / XVTR_COLS, slot % XVTR_COLS);
 

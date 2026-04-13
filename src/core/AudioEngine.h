@@ -113,7 +113,6 @@ public:
     void setNr2GainMethod(int method);
     void setNr2NpeMethod(int method);
     void setNr2AeFilter(bool on);
-
     // Client-side RN2 (RNNoise neural noise suppression)
     Q_INVOKABLE void setRn2Enabled(bool on);
     bool rn2Enabled() const { return m_rn2Enabled.load(); }
@@ -148,6 +147,7 @@ public:
     // Ensure FFTW wisdom is loaded/generated. Returns true if wisdom
     // needs to be generated (slow). Call generateWisdom() in that case.
     static bool needsWisdomGeneration();
+    static QString wisdomFilePath();
     // Must be called from a worker thread — blocks for several minutes.
     static void generateWisdom(std::function<void(int,int,const std::string&)> progress = nullptr);
 
@@ -244,7 +244,6 @@ private:
     // Client-side NR2 (spectral)
     std::unique_ptr<SpectralNR> m_nr2;
     std::atomic<bool> m_nr2Enabled{false};
-
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH
     std::unique_ptr<SpecbleachFilter> m_nr4;

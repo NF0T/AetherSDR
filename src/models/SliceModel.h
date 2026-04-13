@@ -61,6 +61,7 @@ public:
     int     anflLevel()   const { return m_anflLevel; }
     QString agcMode()      const { return m_agcMode; }
     int     agcThreshold() const { return m_agcThreshold; }
+    int     agcOffLevel()  const { return m_agcOffLevel; }
     bool    audioMute()   const { return m_audioMute; }
     bool    squelchOn()   const { return m_squelchOn; }
     int     squelchLevel()const { return m_squelchLevel; }
@@ -133,6 +134,7 @@ public:
     void setAnflLevel(int v);
     void setAgcMode(const QString& mode);
     void setAgcThreshold(int value);
+    void setAgcOffLevel(int value);
     void setSquelch(bool on, int level);
     void setRit(bool on, int hz);
     void setXit(bool on, int hz);
@@ -193,6 +195,7 @@ signals:
     void anflLevelChanged(int v);
     void agcModeChanged(const QString& mode);
     void agcThresholdChanged(int value);
+    void agcOffLevelChanged(int value);
     void audioMuteChanged(bool mute);
     void diversityChanged(bool on);
     void escEnabledChanged(bool on);
@@ -270,6 +273,7 @@ private:
     int     m_anflLevel{50};
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
+    int     m_agcOffLevel{10};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
     int     m_stepHz{100};

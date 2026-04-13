@@ -96,9 +96,10 @@ void PropForecastClient::fetch()
             if (!xml.isStartElement()) { continue; }
             QString tag = xml.name().toString();
             if (tag == QLatin1String("kindex")) {
-                fc.kIndex = xml.readElementText().toInt();
+                // K-index can be decimal (e.g. "1.33") — round to nearest int (#1232)
+                fc.kIndex = qRound(xml.readElementText().toDouble());
             } else if (tag == QLatin1String("aindex")) {
-                fc.aIndex = xml.readElementText().toInt();
+                fc.aIndex = qRound(xml.readElementText().toDouble());
             } else if (tag == QLatin1String("solarflux")) {
                 fc.sfi = xml.readElementText().toInt();
             }

@@ -25,6 +25,7 @@ Q_LOGGING_CATEGORY(lcFirmware,   "aether.firmware",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcTuner,      "aether.tuner",       QtWarningMsg)
 Q_LOGGING_CATEGORY(lcGui,        "aether.gui",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDxCluster,  "aether.dxcluster",   QtWarningMsg)
+Q_LOGGING_CATEGORY(lcMqtt,       "aether.mqtt",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
 
