@@ -891,8 +891,12 @@ if(ENABLE_MQTT)
         ${MOSQUITTO_DIR}/include
         ${MOSQUITTO_DIR}/src)
     target_sources(AetherSDR PRIVATE ${MOSQUITTO_SOURCES})
-    set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
-        COMPILE_FLAGS "-w -DWITH_THREADING")
+    if(WIN32)
+        set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
+    else()
+        set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
+            COMPILE_FLAGS "-w -DWITH_THREADING")
+    endif()
     if(NOT WIN32)
         target_link_libraries(AetherSDR PRIVATE pthread)
     endif()

@@ -28,6 +28,13 @@ MqttClient::MqttClient(QObject* parent)
             connectToBroker(m_host, m_port, m_username, m_password);
         }
     });
+
+#ifdef HAVE_MQTT
+    // Windows fallback: poll mosquitto_loop() since pthreads not available
+    connect(&m_pollTimer, &QTimer::timeout, this, [this] {
+        if (m_mosq) { mosquitto_loop(m_mosq, 0, 1); }
+    });
+#endif
 }
 
 MqttClient::~MqttClient()
@@ -88,8 +95,13 @@ void MqttClient::connectToBroker(const QString& host, quint16 port,
         return;
     }
 
-    mosquitto_loop_start(m_mosq);
+#ifdef Q_OS_WIN
+    // Windows: no pthreads, poll via QTimer instead of mosquitto_loop_start()
+    m_pollTimer.start(50);
 #else
+    mosquitto_loop_start(m_mosq);
+#endif
+#else  // !HAVE_MQTT
     Q_UNUSED(host); Q_UNUSED(port);
     Q_UNUSED(username); Q_UNUSED(password);
     qCWarning(lcMqtt) << "MqttClient: MQTT support not compiled (install libmosquitto-dev)";
@@ -99,11 +111,14 @@ void MqttClient::connectToBroker(const QString& host, quint16 port,
 void MqttClient::disconnect()
 {
     m_reconnectTimer.stop();
+    m_pollTimer.stop();
     m_reconnectAttempts = 0;
 #ifdef HAVE_MQTT
     if (m_mosq) {
         mosquitto_disconnect(m_mosq);
+#ifndef Q_OS_WIN
         mosquitto_loop_stop(m_mosq, false);
+#endif
     }
 #endif
     m_connected = false;

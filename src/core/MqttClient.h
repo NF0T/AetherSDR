@@ -50,6 +50,7 @@ private:
     QStringList m_pendingTopics;  // topics to subscribe after connect
 #endif
     QTimer m_reconnectTimer;
+    QTimer m_pollTimer;       // Windows fallback: poll mosquitto_loop()
     QString m_host;
     quint16 m_port{1883};
     QString m_username;
