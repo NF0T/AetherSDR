@@ -245,7 +245,7 @@ static bool isTextInputFocused()
     if (!w) return false;
     return qobject_cast<QLineEdit*>(w) || qobject_cast<QTextEdit*>(w)
         || qobject_cast<QPlainTextEdit*>(w) || qobject_cast<QSpinBox*>(w)
-        || qobject_cast<QComboBox*>(w);
+        || qobject_cast<QComboBox*>(w) || qobject_cast<QAbstractSlider*>(w);
 }
 
 static bool shortcutGuard() {
