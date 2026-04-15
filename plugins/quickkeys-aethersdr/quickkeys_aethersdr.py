@@ -5,7 +5,7 @@ quickkeys_aethersdr.py — Xencelabs Quick Keys daemon for AetherSDR.
 Reads HID reports from the Quick Keys (USB VID:PID 28BD:5202) and sends
 TCI commands to AetherSDR's TCI WebSocket server (ws://localhost:50001).
 
-HID report format (9 bytes, hidraw, report ID 0x02):
+HID report format (9 bytes, report ID 0x02):
   byte 0: 0x02  (report ID)
   byte 1: 0xF0  (always)
   byte 2: button bitmask  (0x01=Btn1 .. 0x80=Btn8, 0=release)
@@ -16,15 +16,13 @@ Usage:
   python3 quickkeys_aethersdr.py [--config path/to/config.json] [--verbose]
 
 Requires:
-  pip install websocket-client
+  pip install websocket-client hid
 """
 
 import argparse
-import glob
 import json
 import logging
 import os
-import select
 import sys
 import threading
 import time
@@ -35,12 +33,18 @@ except ImportError:
     print("ERROR: websocket-client not installed. Run: pip install websocket-client")
     sys.exit(1)
 
+try:
+    import hid
+except ImportError:
+    print("ERROR: hid not installed. Run: pip install hid")
+    sys.exit(1)
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-VENDOR_ID  = 0x28BD
-PRODUCT_ID = 0x5202
-REPORT_ID  = 0x02
-REPORT_LEN = 9
+VENDOR_ID   = 0x28BD
+PRODUCT_ID  = 0x5202
+REPORT_ID   = 0x02
+REPORT_LEN  = 9
 REPORT_SYNC = 0xF0
 
 # Byte 2 — 8 labeled buttons
@@ -57,27 +61,35 @@ _BANDS = [
     ("10m",  28_400_000), ("6m",  50_150_000),
 ]
 
+# SmartSDR standard tune step sizes in Hz.  Inferred steps are snapped to the
+# nearest value in this list to avoid spurious steps from click-tunes that
+# happen to land on a "valid" delta.
+_KNOWN_STEPS = [1, 10, 50, 100, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000]
+
+# UI-driven VFO deltas larger than this are band-changes or click-tunes — skip.
+_MAX_INFER_STEP_HZ = 500_000
+
 log = logging.getLogger("quickkeys")
 
 
 # ── Device discovery ───────────────────────────────────────────────────────────
 
-def find_hidraw_devices() -> list[str]:
-    """Return all hidraw paths matching the Xencelabs Quick Keys VID:PID."""
-    found = []
-    for node in sorted(glob.glob("/dev/hidraw*")):
-        name = node.replace("/dev/hidraw", "")
-        uevent = f"/sys/class/hidraw/hidraw{name}/device/uevent"
-        try:
-            with open(uevent) as f:
-                content = f.read()
-            if f"{VENDOR_ID:08X}:{PRODUCT_ID:08X}".upper() in content.upper():
-                found.append(node)
-        except OSError:
-            continue
-    if found:
-        log.info(f"Found Quick Keys interfaces: {found}")
-    return found
+def find_hid_devices() -> list[dict]:
+    """Return all hidapi device-info dicts matching the Xencelabs Quick Keys VID:PID."""
+    devices = hid.enumerate(VENDOR_ID, PRODUCT_ID)
+    if devices:
+        for d in devices:
+            path_str = d.get("path", b"")
+            if isinstance(path_str, bytes):
+                path_str = path_str.decode("utf-8", errors="replace")
+            log.info(
+                "Found Quick Keys: %s (usage_page=0x%04X usage=0x%04X interface=%d)",
+                path_str,
+                d.get("usage_page", 0),
+                d.get("usage", 0),
+                d.get("interface_number", -1),
+            )
+    return devices
 
 
 # ── TCI client ─────────────────────────────────────────────────────────────────
@@ -154,11 +166,6 @@ class TciClient:
 _VFO_RE     = __import__("re").compile(r"^vfo:(\d+),\d+,(\d+);?$")
 _TXEN_RE    = __import__("re").compile(r"^tx_enable:(\d+),(true|false);?$")
 
-# SmartSDR standard step sizes — used to validate inferred steps.
-# Only deltas that are multiples of 10 Hz and ≤ 500 kHz are treated as steps;
-# larger jumps (click-tune, band changes) are ignored.
-_MAX_INFER_STEP_HZ = 500_000
-
 
 class BuiltinActions:
     def __init__(self, tci: TciClient, config: dict):
@@ -203,12 +210,15 @@ class BuiltinActions:
             return
 
         # UI-driven change on the TX slice — infer step if it looks like one.
+        # Snap to the nearest known SmartSDR step size to avoid treating a
+        # click-tune that happens to land on a "valid" delta as a step change.
         if trx == self._tx_trx:
             delta = abs(hz - prev)
             if 10 <= delta <= _MAX_INFER_STEP_HZ and delta % 10 == 0:
-                if delta != self._tune_step:
-                    log.info(f"Step size inferred from UI: {delta} Hz")
-                    self._tune_step = delta
+                snapped = min(_KNOWN_STEPS, key=lambda s: abs(s - delta))
+                if snapped != self._tune_step:
+                    log.info("Step size inferred from UI: %d Hz (raw delta: %d Hz)", snapped, delta)
+                    self._tune_step = snapped
 
         self._freq_hz[trx] = hz
 
@@ -265,7 +275,6 @@ class BuiltinActions:
             log.warning(f"Unknown built-in action: {action!r}")
 
 
-
 # ── HID event dispatcher ───────────────────────────────────────────────────────
 
 class QuickKeysDispatcher:
@@ -284,6 +293,7 @@ class QuickKeysDispatcher:
         # Track previous button state for release detection
         self._prev_btn_mask = 0x00
         self._prev_b3       = 0x00
+        self._lock = threading.Lock()
 
     def _dispatch(self, action: str):
         if not action:
@@ -309,112 +319,108 @@ class QuickKeysDispatcher:
         b3       = report[3]
         b7       = report[7]
 
-        # ── 8 labeled buttons (byte 2 bitmask) ──
-        changed = btn_mask ^ self._prev_btn_mask
-        for bit, name in _BTN_BITS.items():
-            if changed & bit:
-                cfg = self._buttons_cfg.get(name, {})
-                if btn_mask & bit:
-                    log.debug(f"{name} press")
+        # Serialize access since multiple reader threads may call handle_report.
+        with self._lock:
+            # ── 8 labeled buttons (byte 2 bitmask) ──
+            changed = btn_mask ^ self._prev_btn_mask
+            for bit, name in _BTN_BITS.items():
+                if changed & bit:
+                    cfg = self._buttons_cfg.get(name, {})
+                    if btn_mask & bit:
+                        log.debug(f"{name} press")
+                        self._dispatch(cfg.get("press", ""))
+                    else:
+                        log.debug(f"{name} release")
+                        self._dispatch(cfg.get("release", ""))
+            self._prev_btn_mask = btn_mask
+
+            # ── Left button (byte 3 bit 0) ──
+            left_now  = bool(b3 & 0x01)
+            left_prev = bool(self._prev_b3 & 0x01)
+            if left_now != left_prev:
+                cfg = self._buttons_cfg.get("left", {})
+                if left_now:
+                    log.debug("left press")
                     self._dispatch(cfg.get("press", ""))
                 else:
-                    log.debug(f"{name} release")
+                    log.debug("left release")
                     self._dispatch(cfg.get("release", ""))
-        self._prev_btn_mask = btn_mask
 
-        # ── Left button (byte 3 bit 0) ──
-        left_now  = bool(b3 & 0x01)
-        left_prev = bool(self._prev_b3 & 0x01)
-        if left_now != left_prev:
-            cfg = self._buttons_cfg.get("left", {})
-            if left_now:
-                log.debug("left press")
-                self._dispatch(cfg.get("press", ""))
-            else:
-                log.debug("left release")
-                self._dispatch(cfg.get("release", ""))
+            # ── Knob press (byte 3 bit 1) ──
+            knob_now  = bool(b3 & 0x02)
+            knob_prev = bool(self._prev_b3 & 0x02)
+            if knob_now != knob_prev:
+                cfg = self._buttons_cfg.get("knob", {})
+                if knob_now:
+                    log.debug("knob press")
+                    self._dispatch(cfg.get("press", ""))
+                else:
+                    log.debug("knob release")
+                    self._dispatch(cfg.get("release", ""))
 
-        # ── Knob press (byte 3 bit 1) ──
-        knob_now  = bool(b3 & 0x02)
-        knob_prev = bool(self._prev_b3 & 0x02)
-        if knob_now != knob_prev:
-            cfg = self._buttons_cfg.get("knob", {})
-            if knob_now:
-                log.debug("knob press")
-                self._dispatch(cfg.get("press", ""))
-            else:
-                log.debug("knob release")
-                self._dispatch(cfg.get("release", ""))
+            self._prev_b3 = b3
 
-        self._prev_b3 = b3
-
-        # ── Knob rotation (byte 7) ──
-        if b7 == 0x01:
-            log.debug("knob CW")
-            self._dispatch(self._knob_cw)
-        elif b7 == 0x02:
-            log.debug("knob CCW")
-            self._dispatch(self._knob_ccw)
+            # ── Knob rotation (byte 7) ──
+            if b7 == 0x01:
+                log.debug("knob CW")
+                self._dispatch(self._knob_cw)
+            elif b7 == 0x02:
+                log.debug("knob CCW")
+                self._dispatch(self._knob_ccw)
 
 
-# ── Main read loop ─────────────────────────────────────────────────────────────
+# ── HID read loop ──────────────────────────────────────────────────────────────
 
-def _consume(buf: bytes, dispatcher: QuickKeysDispatcher) -> bytes:
-    """Parse all complete 9-byte reports from buf, return leftover bytes."""
-    while len(buf) >= REPORT_LEN:
-        idx = buf.find(bytes([REPORT_ID, REPORT_SYNC]))
-        if idx < 0:
-            return b""
-        if idx > 0:
-            buf = buf[idx:]
-        if len(buf) < REPORT_LEN:
-            break
-        dispatcher.handle_report(buf[:REPORT_LEN])
-        buf = buf[REPORT_LEN:]
-    return buf
+def _reader_thread(path: bytes, dispatcher: QuickKeysDispatcher, stop_evt: threading.Event):
+    """Open one HID interface by path and dispatch reports until stop_evt is set."""
+    path_str = path.decode("utf-8", errors="replace") if isinstance(path, bytes) else str(path)
+    dev = hid.device()
+    try:
+        dev.open_path(path)
+        log.info("Opened %s", path_str)
+        while not stop_evt.is_set():
+            # read() returns a list of ints (one complete report) or [] on timeout.
+            data = dev.read(REPORT_LEN, timeout_ms=500)
+            if data:
+                dispatcher.handle_report(bytes(data))
+    except PermissionError:
+        log.error("Permission denied: %s — on Linux add your user to the 'input' group.", path_str)
+        stop_evt.set()
+    except OSError as e:
+        log.warning("%s: device error: %s", path_str, e)
+        stop_evt.set()
+    finally:
+        try:
+            dev.close()
+        except Exception:
+            pass
 
 
-def run(hidraw_paths: list[str], dispatcher: QuickKeysDispatcher):
-    """Open all hidraw interfaces and dispatch events from whichever produces data."""
+def run(dispatcher: QuickKeysDispatcher):
+    """Enumerate Quick Keys HID interfaces and dispatch events in a reconnect loop."""
     while True:
-        fds = {}
-        bufs = {}
-        for path in hidraw_paths:
-            try:
-                # buffering=0 → unbuffered raw I/O — each read() goes straight
-                # to the kernel so knob rotation events are dispatched immediately
-                # rather than sitting in Python's internal read buffer.
-                f = open(path, "rb", buffering=0)
-                fds[f] = path
-                bufs[f] = b""
-                log.info(f"Opened {path}")
-            except PermissionError:
-                log.error(f"Permission denied: {path}. Add user to 'input' group.")
-            except OSError as e:
-                log.warning(f"Could not open {path}: {e}")
-
-        if not fds:
-            log.error("No Quick Keys interfaces could be opened. Retrying in 5s.")
+        devices = find_hid_devices()
+        if not devices:
+            log.error("Xencelabs Quick Keys not found. Is it plugged in? Retrying in 5s.")
             time.sleep(5)
             continue
 
-        try:
-            while True:
-                readable, _, _ = select.select(list(fds.keys()), [], [], 1.0)
-                for f in readable:
-                    chunk = f.read(64)
-                    if not chunk:
-                        raise OSError("Device disconnected")
-                    bufs[f] += chunk
-                    bufs[f] = _consume(bufs[f], dispatcher)
-        except OSError as e:
-            log.warning(f"Device error: {e} — reopening in 2s")
-            for f in fds:
-                try:
-                    f.close()
-                except OSError:
-                    pass
-            time.sleep(2)
+        stop_evt = threading.Event()
+        threads = []
+        for info in devices:
+            t = threading.Thread(
+                target=_reader_thread,
+                args=(info["path"], dispatcher, stop_evt),
+                daemon=True,
+            )
+            t.start()
+            threads.append(t)
+
+        log.info("Started %d reader thread(s) for Quick Keys", len(threads))
+        # Block until any thread signals a device error or disconnect.
+        stop_evt.wait()
+        log.info("Device disconnected — re-enumerating in 2s")
+        time.sleep(2)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -423,8 +429,6 @@ def main():
     parser = argparse.ArgumentParser(description="Xencelabs Quick Keys → AetherSDR TCI daemon")
     parser.add_argument("--config", default=os.path.join(os.path.dirname(__file__), "config.json"),
                         help="Path to config.json (default: config.json next to this script)")
-    parser.add_argument("--device", default=None,
-                        help="hidraw device path (default: auto-detect by VID:PID)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
@@ -447,15 +451,6 @@ def main():
         log.error(f"Config parse error: {e}")
         sys.exit(1)
 
-    # Find device(s)
-    if args.device:
-        hidraw_paths = [args.device]
-    else:
-        hidraw_paths = find_hidraw_devices()
-    if not hidraw_paths:
-        log.error("Xencelabs Quick Keys not found. Is it plugged in?")
-        sys.exit(1)
-
     # Connect TCI
     host = config.get("tci_host", "localhost")
     port = int(config.get("tci_port", 50001))
@@ -463,8 +458,8 @@ def main():
 
     dispatcher = QuickKeysDispatcher(tci, config)
 
-    log.info(f"Quick Keys daemon starting — interfaces={hidraw_paths} tci={host}:{port}")
-    run(hidraw_paths, dispatcher)
+    log.info(f"Quick Keys daemon starting — tci={host}:{port}")
+    run(dispatcher)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Installing Quick Keys daemon to $DEST..."
 mkdir -p "$DEST" "$SERVICE_DIR"
 
+# Install Python dependencies (websocket-client + hid/hidapi cross-platform wrapper)
+pip install --user websocket-client hid
+
 cp "$SCRIPT_DIR/quickkeys_aethersdr.py" "$DEST/"
 chmod +x "$DEST/quickkeys_aethersdr.py"
 
