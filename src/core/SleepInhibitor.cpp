@@ -44,7 +44,7 @@ void SleepInhibitor::acquire(const QString& reason)
 
 #ifdef Q_OS_WIN
     EXECUTION_STATE prev = SetThreadExecutionState(
-        ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
     if (prev != 0 || true) { // SetThreadExecutionState returns previous state, 0 only on error
         m_held = true;
         qDebug() << "SleepInhibitor: acquired (Windows SetThreadExecutionState)";
