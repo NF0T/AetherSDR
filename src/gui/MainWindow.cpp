@@ -5799,6 +5799,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
 
     // ── WNB / RF Gain ────────────────────────────────────────────────────
+    // Disconnect first to avoid duplicate sends on re-wire (same issue as #381).
+    disconnect(menu, &SpectrumOverlayMenu::wnbToggled,     this, nullptr);
+    disconnect(menu, &SpectrumOverlayMenu::wnbLevelChanged, this, nullptr);
+    disconnect(menu, &SpectrumOverlayMenu::rfGainChanged,  this, nullptr);
     connect(menu, &SpectrumOverlayMenu::wnbToggled,
             this, [this, sw](bool on) {
         m_radioModel.setPanWnb(on);
