@@ -314,6 +314,15 @@ private:
     QElapsedTimer m_lastAudioFeedTime;
     static constexpr qint64 kAudioLivenessTimeoutMs = 15000;
 
+    // processedUSecs stall detector: catches the case where the sink appears
+    // healthy (accepts data, reports free space) but the underlying WASAPI
+    // session is detached from the output device after Windows Modern Standby
+    // or display-off. processedUSecs() stops advancing while data is written.
+    // Restart after ~3 seconds of stall. (#1490)
+    qint64 m_lastProcessedUSecs{-1};
+    int    m_processedStallTicks{0};
+    static constexpr int kProcessedStallThreshold = 300;  // 300 × 10ms = 3s
+
     // RX audio buffer handling
     QTimer*       m_rxTimer{nullptr};
     QByteArray    m_rxBuffer;

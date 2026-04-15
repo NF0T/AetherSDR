@@ -148,6 +148,34 @@ AudioEngine::AudioEngine(QObject* parent)
             return;
         }
 
+        // processedUSecs stall detector: catches stale WASAPI sessions after
+        // Windows Modern Standby / display-off where the sink appears healthy
+        // (ActiveState, bytesFree > 0) but silently consumes data without
+        // producing audible output. processedUSecs() stops advancing. (#1490)
+        if (!m_rxBuffer.isEmpty()) {
+            qint64 processed = m_audioSink->processedUSecs();
+            if (processed == m_lastProcessedUSecs) {
+                if (++m_processedStallTicks >= kProcessedStallThreshold) {
+                    m_processedStallTicks = 0;
+                    m_lastProcessedUSecs = -1;
+                    qCWarning(lcAudio) << "AudioEngine: processedUSecs stalled at"
+                                       << processed << "for" << kProcessedStallThreshold * 10
+                                       << "ms, restarting RX (#1490)";
+                    QMetaObject::invokeMethod(this, [this]() {
+                        if (!m_audioSink) return;
+                        stopRxStream();
+                        startRxStream();
+                    }, Qt::QueuedConnection);
+                    return;
+                }
+            } else {
+                m_processedStallTicks = 0;
+                m_lastProcessedUSecs = processed;
+            }
+        } else {
+            m_processedStallTicks = 0;
+        }
+
         qsizetype len = freeBytes;
         len = std::min(len, m_rxBuffer.size());
         if (len > 0)
@@ -188,6 +216,8 @@ bool AudioEngine::startRxStream()
     m_rxBufferUnderrunCount.store(0);
     m_rxBufferSampleRate.store(DEFAULT_SAMPLE_RATE);
     m_rxZombieTickCount = 0;
+    m_lastProcessedUSecs = -1;    // reset processedUSecs stall detector (#1490)
+    m_processedStallTicks = 0;
     m_lastAudioFeedTime.start();  // initialize liveness watchdog (#1411)
 
     QAudioFormat fmt = makeFormat();
