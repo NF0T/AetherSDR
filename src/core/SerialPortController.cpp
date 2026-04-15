@@ -40,7 +40,7 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     m_port.setFlowControl(QSerialPort::NoFlowControl);
 
     if (!m_port.open(QIODevice::ReadWrite)) {
-        qCWarning(lcCat) << "SerialPortController: failed to open" << portName
+        qCWarning(lcDevices) << "SerialPortController: failed to open" << portName
                          << m_port.errorString();
         emit errorOccurred(m_port.errorString());
         return false;
@@ -53,12 +53,13 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     // Reset input state
     m_lastCtsActive = false;
     m_lastDsrActive = false;
+    m_pollLogged = false;
     m_debounceTimer.start();
 
     // Start polling if any input function is configured
     updatePolling();
 
-    qCDebug(lcCat) << "SerialPortController: opened" << portName << "at" << baudRate;
+    qCDebug(lcDevices) << "SerialPortController: opened" << portName << "at" << baudRate;
     return true;
 #else
     Q_UNUSED(portName); Q_UNUSED(baudRate);
@@ -76,7 +77,7 @@ void SerialPortController::close()
         m_port.setDataTerminalReady(!m_dtrActiveHigh);
         m_port.setRequestToSend(!m_rtsActiveHigh);
         m_port.close();
-        qCDebug(lcCat) << "SerialPortController: closed";
+        qCDebug(lcDevices) << "SerialPortController: closed";
     }
 #endif
 }
@@ -145,6 +146,20 @@ void SerialPortController::pollInputPins()
     if (!m_port.isOpen()) return;
 
     auto pinState = m_port.pinoutSignals();
+
+    if (m_port.error() != QSerialPort::NoError) {
+        qCWarning(lcDevices) << "SerialPortController: pinoutSignals() error:"
+                             << m_port.errorString();
+        return;
+    }
+
+    // One-shot: log raw pin state on first successful poll for diagnostics (#1413)
+    if (!m_pollLogged) {
+        m_pollLogged = true;
+        qCDebug(lcDevices) << "SerialPortController: first poll — raw pinoutSignals ="
+                           << Qt::hex << static_cast<int>(pinState);
+    }
+
     bool cts = pinState.testFlag(QSerialPort::ClearToSendSignal);
     bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
 

@@ -1,6 +1,7 @@
 #ifdef HAVE_MIDI
 
 #include "MidiControlManager.h"
+#include "LogManager.h"
 
 #include <RtMidi.h>
 #include <QDateTime>
@@ -61,7 +62,7 @@ QStringList MidiControlManager::availablePorts() const
         for (unsigned int i = 0; i < n; ++i)
             result.append(QString::fromStdString(probe.getPortName(i)));
     } catch (const RtMidiError& e) {
-        qWarning() << "MidiControlManager: error enumerating ports:" << e.what();
+        qCWarning(lcDevices) << "MidiControlManager: error enumerating ports:" << e.what();
     }
     return result;
 }
@@ -72,7 +73,7 @@ bool MidiControlManager::openPort(int portIndex)
     try {
         m_midiIn = std::make_unique<RtMidiIn>();
         if (static_cast<unsigned>(portIndex) >= m_midiIn->getPortCount()) {
-            qWarning() << "MidiControlManager: port index" << portIndex << "out of range";
+            qCWarning(lcDevices) << "MidiControlManager: port index" << portIndex << "out of range";
             m_midiIn.reset();
             return false;
         }
@@ -80,12 +81,12 @@ bool MidiControlManager::openPort(int portIndex)
         m_midiIn->openPort(portIndex);
         m_midiIn->setCallback(&rtmidiCallback, this);
         m_midiIn->ignoreTypes(true, true, true); // ignore sysex, timing, active sensing
-        qDebug() << "MidiControlManager: opened port" << m_portName;
+        qCDebug(lcDevices) << "MidiControlManager: opened port" << m_portName;
         m_hotplugTimer->start();
         emit portOpened(m_portName);
         return true;
     } catch (const RtMidiError& e) {
-        qWarning() << "MidiControlManager: open failed:" << e.what();
+        qCWarning(lcDevices) << "MidiControlManager: open failed:" << e.what();
         m_midiIn.reset();
         emit portError(QString::fromStdString(e.getMessage()));
         return false;
@@ -177,7 +178,7 @@ void MidiControlManager::startLearn(const QString& paramId)
 {
     m_learning = true;
     m_learnParamId = paramId;
-    qDebug() << "MidiControlManager: learning for" << paramId;
+    qCDebug(lcDevices) << "MidiControlManager: learning for" << paramId;
 }
 
 void MidiControlManager::cancelLearn()
@@ -248,7 +249,7 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2)
 
         addBinding(binding);
         m_learning = false;
-        qDebug() << "MidiControlManager: learned" << binding.sourceDisplayName()
+        qCDebug(lcDevices) << "MidiControlManager: learned" << binding.sourceDisplayName()
                  << "→" << m_learnParamId;
         emit learnCompleted(m_learnParamId, binding);
         m_learnParamId.clear();

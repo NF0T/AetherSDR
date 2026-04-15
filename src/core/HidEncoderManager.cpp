@@ -7,7 +7,7 @@
 
 namespace AetherSDR {
 
-Q_LOGGING_CATEGORY(lcHid, "aether.hid", QtWarningMsg)
+// HID logging now uses lcDevices from LogManager (shared with serial, FlexControl, MIDI)
 
 HidEncoderManager::HidEncoderManager(QObject* parent)
     : QObject(parent)
@@ -51,7 +51,7 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 
     m_device = hid_open(vid, pid, nullptr);
     if (!m_device) {
-        qCDebug(lcHid) << "HidEncoderManager: failed to open"
+        qCDebug(lcDevices) << "HidEncoderManager: failed to open"
                         << QString("0x%1:0x%2").arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0'));
         return false;
     }
@@ -60,7 +60,7 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 
     m_parser = HidDeviceParser::create(vid, pid);
     if (!m_parser) {
-        qCWarning(lcHid) << "HidEncoderManager: no parser for"
+        qCWarning(lcDevices) << "HidEncoderManager: no parser for"
                          << QString("0x%1:0x%2").arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0'));
         hid_close(m_device);
         m_device = nullptr;
@@ -83,7 +83,7 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 
     m_pollTimer->start();
 
-    qCDebug(lcHid) << "HidEncoderManager: opened" << m_deviceName
+    qCDebug(lcDevices) << "HidEncoderManager: opened" << m_deviceName
                     << QString("0x%1:0x%2").arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0'));
     emit connectionChanged(true, m_deviceName);
     return true;
@@ -98,7 +98,7 @@ void HidEncoderManager::close()
     }
     m_parser.reset();
     if (!m_deviceName.isEmpty()) {
-        qCDebug(lcHid) << "HidEncoderManager: closed" << m_deviceName;
+        qCDebug(lcDevices) << "HidEncoderManager: closed" << m_deviceName;
         m_deviceName.clear();
         emit connectionChanged(false, {});
     }
@@ -113,7 +113,7 @@ void HidEncoderManager::poll()
         int res = hid_read(m_device, m_buf, m_parser->reportSize());
         if (res < 0) {
             // Device disconnected
-            qCDebug(lcHid) << "HidEncoderManager: device disconnected, starting hotplug";
+            qCDebug(lcDevices) << "HidEncoderManager: device disconnected, starting hotplug";
             close();
             m_hotplugTimer->start();
             return;

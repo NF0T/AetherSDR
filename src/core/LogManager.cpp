@@ -27,6 +27,7 @@ Q_LOGGING_CATEGORY(lcGui,        "aether.gui",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDxCluster,  "aether.dxcluster",   QtWarningMsg)
 Q_LOGGING_CATEGORY(lcMqtt,       "aether.mqtt",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
+Q_LOGGING_CATEGORY(lcDevices,    "aether.devices",     QtWarningMsg)
 Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
 
 LogManager::LogManager()
@@ -50,6 +51,7 @@ LogManager::LogManager()
         {"aether.gui",        "GUI",          "Window, applets, dialogs"},
         {"aether.dxcluster",  "DX Cluster",   "DX cluster telnet connection and spot parsing"},
         {"aether.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
+        {"aether.devices",    "Ext Devices",  "Serial port, FlexControl, MIDI, HID encoder"},
         {"aether.perf",       "Performance",  "Render timing and CPU profiling data"},
     };
 

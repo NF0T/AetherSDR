@@ -1,6 +1,7 @@
 #ifdef HAVE_SERIALPORT
 
 #include "FlexControlManager.h"
+#include "LogManager.h"
 
 #include <QSerialPortInfo>
 #include <QDebug>
@@ -44,13 +45,13 @@ bool FlexControlManager::open(const QString& portName)
     m_port.setFlowControl(QSerialPort::NoFlowControl);
 
     if (!m_port.open(QIODevice::ReadOnly)) {
-        qWarning() << "FlexControlManager: failed to open" << portName
+        qCWarning(lcDevices) << "FlexControlManager: failed to open" << portName
                    << m_port.errorString();
         return false;
     }
 
     m_buffer.clear();
-    qDebug() << "FlexControlManager: opened" << portName;
+    qCDebug(lcDevices) << "FlexControlManager: opened" << portName;
     emit connectionChanged(true);
     return true;
 }
@@ -60,7 +61,7 @@ void FlexControlManager::close()
     if (!m_port.isOpen()) return;
     m_port.close();
     m_buffer.clear();
-    qDebug() << "FlexControlManager: closed";
+    qCDebug(lcDevices) << "FlexControlManager: closed";
     emit connectionChanged(false);
 }
 
@@ -110,7 +111,7 @@ void FlexControlManager::processCommand(const QByteArray& cmd)
 
     } else if (cmd.startsWith('F')) {
         // Init/reset — log and ignore
-        qDebug() << "FlexControlManager: device reset" << cmd;
+        qCDebug(lcDevices) << "FlexControlManager: device reset" << cmd;
     }
 }
 
