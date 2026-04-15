@@ -62,6 +62,28 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         });
     }
 
+    // Capture DAX RX stream creation responses so we can register them
+    // in PanadapterStream for VITA-49 routing (#1331).
+    if (m_model) {
+        connect(m_model, &RadioModel::statusReceived,
+                this, [this](const QString& obj, const QMap<QString,QString>& kvs) {
+            if (!obj.startsWith("stream ")) return;
+            if (kvs.value("type") != "dax_rx") return;
+            quint32 streamId = obj.mid(7).toUInt(nullptr, 16);
+            int ch = kvs.value("dax_channel").toInt();
+            if (!streamId || ch < 1 || ch > 4) return;
+            // Only register if this channel is one we requested (placeholder = 0)
+            if (!m_tciDaxStreamIds.contains(ch)) return;
+            if (m_tciDaxStreamIds[ch] != 0) return; // already registered
+            m_tciDaxStreamIds[ch] = streamId;
+            if (m_model->panStream()) {
+                m_model->panStream()->registerDaxStream(streamId, ch);
+                qCInfo(lcCat) << "TCI: registered DAX RX stream" << Qt::hex << streamId
+                              << "for channel" << ch << "(#1331)";
+            }
+        });
+    }
+
     // Periodic status broadcast (200ms — S-meter, TX sensors, TX state)
     m_meterTimer = new QTimer(this);
     m_meterTimer->setInterval(200);
@@ -221,6 +243,13 @@ void TciServer::onClientDisconnected()
             delete m_clients[i].protocol;
             delete m_clients[i].resampler;
             m_clients.removeAt(i);
+
+            // Release DAX if no remaining clients want audio (#1331)
+            bool anyAudio = false;
+            for (const auto& cs : m_clients) {
+                if (cs.audioEnabled) { anyAudio = true; break; }
+            }
+            if (!anyAudio) releaseDaxForTci();
             break;
         }
     }
@@ -253,6 +282,7 @@ void TciServer::onTextMessage(const QString& msg)
         // Handle audio start/stop at server level (affects per-client state)
         if (trimmed.startsWith("audio_start")) {
             client.audioEnabled = true;
+            ensureDaxForTci();
             ws->sendTextMessage(cmd.trimmed() + ";");
             qCInfo(lcCat) << "TCI: audio started for client"
                           << ws->peerAddress().toString()
@@ -263,6 +293,12 @@ void TciServer::onTextMessage(const QString& msg)
         }
         if (trimmed.startsWith("audio_stop")) {
             client.audioEnabled = false;
+            // Release DAX if no other clients still want audio
+            bool anyAudio = false;
+            for (const auto& cs : m_clients) {
+                if (cs.audioEnabled) { anyAudio = true; break; }
+            }
+            if (!anyAudio) releaseDaxForTci();
             ws->sendTextMessage(cmd.trimmed() + ";");
             qCInfo(lcCat) << "TCI: audio stopped for client"
                           << ws->peerAddress().toString();
@@ -889,6 +925,82 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
         if (cs.iqEnabled && cs.iqChannel == trx)
             cs.socket->sendBinaryMessage(frame);
     }
+}
+
+// ── DAX channel management for TCI audio (#1331) ─────────────────────────────
+//
+// TCI audio feeds from daxAudioReady (not audioDataReady) so that audio_mute
+// doesn't kill TCI audio. We auto-assign a DAX channel to each slice that
+// doesn't already have one, and release it when the last TCI audio client
+// disconnects.
+
+void TciServer::ensureDaxForTci()
+{
+    if (!m_model || !m_model->isConnected()) return;
+
+    QSet<int> channelsNeeded;
+
+    for (auto* s : m_model->slices()) {
+        if (s->daxChannel() != 0) continue;  // user already assigned a channel
+
+        // Find an available DAX channel (1-4)
+        QSet<int> used;
+        for (auto* sl : m_model->slices()) {
+            if (sl->daxChannel() > 0)
+                used.insert(sl->daxChannel());
+        }
+        for (int ch = 1; ch <= 4; ++ch) {
+            if (!used.contains(ch)) {
+                qCInfo(lcCat) << "TCI: auto-assigning DAX channel" << ch
+                              << "to slice" << s->sliceId() << "for TCI audio (#1331)";
+                s->setDaxChannel(ch);
+                m_tciDaxSlices.insert(s->sliceId());
+                channelsNeeded.insert(ch);
+                break;
+            }
+        }
+    }
+
+    // Create DAX RX streams for channels we just assigned (if not already
+    // running from user's DAX bridge).  Insert placeholder (streamId=0) so
+    // the statusReceived handler knows to register the response.
+    for (int ch : channelsNeeded) {
+        if (m_tciDaxStreamIds.contains(ch)) continue; // already have/pending
+        m_tciDaxStreamIds[ch] = 0;  // placeholder — filled by statusReceived
+        m_model->sendCommand(QString("stream create type=dax_rx dax_channel=%1").arg(ch));
+        qCInfo(lcCat) << "TCI: creating DAX RX stream for channel" << ch << "(#1331)";
+    }
+}
+
+void TciServer::releaseDaxForTci()
+{
+    if (!m_model) return;
+
+    // Remove DAX RX streams we created
+    for (auto it = m_tciDaxStreamIds.begin(); it != m_tciDaxStreamIds.end(); ++it) {
+        quint32 streamId = it.value();
+        if (streamId != 0) {
+            if (m_model->panStream()) {
+                m_model->panStream()->unregisterDaxStream(streamId);
+            }
+            if (m_model->isConnected()) {
+                m_model->sendCommand(QString("stream remove 0x%1")
+                    .arg(streamId, 8, 16, QChar('0')));
+            }
+            qCInfo(lcCat) << "TCI: removed DAX RX stream" << Qt::hex << streamId
+                          << "channel" << it.key() << "(#1331)";
+        }
+    }
+    m_tciDaxStreamIds.clear();
+
+    // Release DAX channel assignments we made
+    for (int sliceId : m_tciDaxSlices) {
+        if (auto* s = m_model->slice(sliceId)) {
+            qCInfo(lcCat) << "TCI: releasing DAX channel from slice" << sliceId << "(#1331)";
+            s->setDaxChannel(0);
+        }
+    }
+    m_tciDaxSlices.clear();
 }
 
 } // namespace AetherSDR

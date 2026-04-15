@@ -3,6 +3,90 @@
 All notable changes to AetherSDR are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.8.15] — 2026-04-15
+
+### Waterfall Scrollback, Pan-Follow Animation, TCI-via-DAX, Community Contributions
+
+### Features
+
+**Waterfall history scrollback (#1432, community: rfoust)**
+- 20-minute ring buffer with scrub controls on the right-side time strip
+- Pull up on the time strip to scroll back in time; LIVE button to return
+- Paused viewport ages forward as new rows arrive; reprojects on pan/zoom
+
+**HF Propagation Dashboard**
+- Click K/A/SFI on the spectrum overlay to open a rich dashboard
+- 3-day Kp forecast, band conditions, VHF, X-ray, solar wind, SDO solar images, lunar phase
+
+**Memory dialog search and CSV export (#1436, #1438, community: jensenpat)**
+- Search field filters memories by name as you type
+- Arrow key navigation with Enter to apply; double-click for inline edit
+- CSV export in SmartSDR-compatible 22-column format
+
+**5-8 pan layouts for FLEX-6700 (#1435)**
+- New layouts: 3h2, 2x3, 4h3, 2x4 for up to 8 panadapters
+
+**Active Slice Follows TX toggle (#1351)**
+- Switch active/displayed slice when TX moves externally (e.g. WSJT-X)
+- Mutually exclusive with TX Follows Active Slice; both can be off
+
+**TCI audio via DAX (#1331)**
+- TCI audio feeds from DAX instead of main RX path
+- Muting PC audio no longer kills TCI client audio
+- DAX RX streams created/torn down automatically on audio_start/stop
+
+**Configurable frequency grid spacing (#1390, #1428)**
+- Manual grid spacing option in spectrum overlay menu
+
+**System sleep inhibition (#1420, #1427)**
+- Prevent system sleep while connected to radio (macOS/Windows/Linux)
+
+**Activate slice on passband click (#1422)**
+- Left-click a slice passband to make it active
+
+**S-meter color gradient (#1430, #1434)**
+- SmartSDR-style green→yellow→red gradient on VFO and slice flag S-meter bars
+
+### Bug Fixes
+
+**Fix panadapter/VFO scroll jitter, blank spectrum, and floor level revert (#989, community: chibondking)**
+- Smooth 200ms pan-follow animation with QVariantAnimation
+- Stale echo-back guard prevents pre-animation center from reversing animation
+- Per-pan levelChanged signal prevents stale echo-backs from reverting dBm floor
+- VFO edge-flip 20px hysteresis prevents oscillation during animation
+
+**Fix duplicate wirePanadapter connections (#989, community: chibondking)**
+- Bulk disconnect(this) guard replaces scattered per-signal disconnects
+
+**Fix MQTT "Socket is not connected" on macOS (#1348)**
+- Handle MOSQ_ERR_CONN_PENDING for non-blocking connect
+- Handle ENOTCONN on Unix/macOS in vendored libmosquitto
+
+**Audio liveness watchdog (#1411)**
+- Restart RX stream after 15 seconds of no audio data (fixes silent audio loss after hours of idle)
+
+**Fix SIGSEGV on band change with 2 panadapters (#1433)**
+- Null-guard spectrumForSlice() during pan creation/destruction
+
+**Fix manual grid spacing (#1390)**
+- Grid lines respect user's manual choice; only labels thin at narrow spacing
+
+**Fix Windows audio silence (#1405, #1419)**
+- Remove IdleState restart logic that caused audio restart loops on Windows
+
+**Fix K-index regex capturing UTC time (#1401, #1410)**
+- Anchor on "was" keyword to avoid capturing UTC time as K value
+
+**Fix DAX TX stream conflict with SmartSDR DAX on Windows (#1394)**
+- DAX RX stream lifecycle managed by TCI server; streams cleaned up on disconnect
+
+### Contributors
+
+Special thanks to the community contributors in this release:
+- **Robbie Foust (rfoust)** — waterfall history scrollback
+- **CJ Johnson / WT2P (chibondking)** — pan-follow animation, duplicate command fix
+- **jensenpat** — memory search/navigation, CSV export
+
 ## [v0.8.12.2] — 2026-04-14
 
 ### Bug Fixes, Meter Smoothing, Maestro Disconnect Fix

@@ -1,20 +1,30 @@
 #include "MemoryDialog.h"
 #include "core/AppSettings.h"
+#include "core/MemoryCsvCompat.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "core/RadioConnection.h"
 
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QComboBox>
+#include <QLineEdit>
 #include <QLabel>
 #include <QHeaderView>
 #include <QDebug>
+#include <QMessageBox>
 #include <QPointer>
+#include <QSaveFile>
 #include <QTimer>
 #include <QCloseEvent>
+#include <QKeyEvent>
 
 namespace AetherSDR {
 
@@ -132,6 +142,34 @@ bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item,
     }
 }
 
+QString defaultExportFilePath()
+{
+    const QString baseName = QString("AetherSDR_Memories_%1_v%2.csv")
+        .arg(QDateTime::currentDateTime().toString("MM-dd-yy_hh_mm"))
+        .arg(QCoreApplication::applicationVersion());
+    return QDir::home().filePath(QString("Documents/%1").arg(baseName));
+}
+
+QList<MemoryCsvRecord> currentExportRecords(const QMap<int, MemoryEntry>& memories,
+                                            const QString& filterProfile)
+{
+    QList<MemoryCsvRecord> records;
+    for (auto it = memories.cbegin(); it != memories.cend(); ++it) {
+        const MemoryEntry& memory = it.value();
+        if (!filterProfile.isEmpty() && memory.group != filterProfile)
+            continue;
+        records << MemoryCsvCompat::fromMemoryEntry(memory);
+    }
+
+    std::sort(records.begin(), records.end(),
+              [](const MemoryCsvRecord& lhs, const MemoryCsvRecord& rhs) {
+        if (!qFuzzyCompare(lhs.memory.freq + 1.0, rhs.memory.freq + 1.0))
+            return lhs.memory.freq < rhs.memory.freq;
+        return lhs.memory.index < rhs.memory.index;
+    });
+    return records;
+}
+
 } // namespace
 
 static const QStringList COLUMNS = {
@@ -149,15 +187,26 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
 
     auto* root = new QVBoxLayout(this);
 
-    // ── Profile filter ───────────────────────────────────────────────────
+    // ── Search + profile filter ──────────────────────────────────────────
     auto* filterRow = new QHBoxLayout;
-    filterRow->addWidget(new QLabel("Filter by Profile:"));
+    filterRow->addWidget(new QLabel("Search:"));
+    m_searchEdit = new QLineEdit;
+    m_searchEdit->setPlaceholderText("Type a memory name and press Enter");
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_searchEdit->installEventFilter(this);
+    filterRow->addWidget(m_searchEdit, 1);
+    filterRow->addWidget(new QLabel("Profile:"));
     m_filterCombo = new QComboBox;
-    m_filterCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_filterCombo->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     rebuildFilterCombo();
     filterRow->addWidget(m_filterCombo);
     root->addLayout(filterRow);
 
+    connect(m_searchEdit, &QLineEdit::textChanged,
+            this, [this](const QString&) { populateTable(); });
+    connect(m_searchEdit, &QLineEdit::returnPressed,
+            this, [this]() { activateMemoryRow(m_table->currentRow()); });
     connect(m_filterCombo, &QComboBox::currentIndexChanged,
             this, [this](int) { populateTable(); });
 
@@ -171,6 +220,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_table->verticalHeader()->setVisible(false);
     m_table->setAlternatingRowColors(true);
     m_table->setSortingEnabled(false);
+    m_table->installEventFilter(this);
     m_table->setStyleSheet(
         "QTableWidget { alternate-background-color: #1a1a2e; }"
         "QTableWidget::item:selected { background: #2060a0; }");
@@ -195,15 +245,18 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
 
     // ── Buttons ───────────────────────────────────────────────────────────
     auto* btnRow = new QHBoxLayout;
+    auto* exportBtn = new QPushButton("Export...");
     auto* addBtn = new QPushButton("Add");
     auto* selectBtn = new QPushButton("Select");
     auto* removeBtn = new QPushButton("Remove");
     btnRow->addWidget(addBtn);
     btnRow->addWidget(selectBtn);
+    btnRow->addWidget(exportBtn);
     btnRow->addStretch();
     btnRow->addWidget(removeBtn);
     root->addLayout(btnRow);
 
+    connect(exportBtn, &QPushButton::clicked, this, &MemoryDialog::onExport);
     connect(addBtn, &QPushButton::clicked, this, &MemoryDialog::onAdd);
     connect(selectBtn, &QPushButton::clicked, this, &MemoryDialog::onSelect);
     connect(removeBtn, &QPushButton::clicked, this, &MemoryDialog::onRemove);
@@ -232,6 +285,8 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     connect(m_table, &QTableWidget::cellChanged, this, [this](int row, int col) {
         submitCellEdit(row, col);
     });
+    // Note: double-click starts inline cell editing (DoubleClicked edit trigger).
+    // Memory apply uses Enter key or the Select button — not double-click.
 
     // The radio doesn't support "sub memory all" or "memory list".
     // Populate from RadioModel cache (filled from status pushes during connect).
@@ -246,13 +301,85 @@ void MemoryDialog::closeEvent(QCloseEvent* event)
     QDialog::closeEvent(event);
 }
 
+bool MemoryDialog::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        const int key = keyEvent->key();
+
+        if (watched == m_searchEdit) {
+            if (key == Qt::Key_Up || key == Qt::Key_Down) {
+                const int rowCount = m_table ? m_table->rowCount() : 0;
+                if (rowCount <= 0)
+                    return true;
+
+                const int currentRow = qMax(0, m_table->currentRow());
+                const int nextRow = (key == Qt::Key_Down)
+                    ? qMin(currentRow + 1, rowCount - 1)
+                    : qMax(currentRow - 1, 0);
+                m_table->selectRow(nextRow);
+                m_table->setCurrentCell(nextRow, 0);
+                return true;
+            }
+            if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+                activateMemoryRow(m_table ? m_table->currentRow() : -1);
+                return true;
+            }
+        }
+
+        if (watched == m_table && (key == Qt::Key_Return || key == Qt::Key_Enter)) {
+            // Don't intercept Enter while editing a cell — let the delegate handle it.
+            // QAbstractItemView::state() is protected, so check for an active editor
+            // via indexWidget on the current index instead.
+            QModelIndex idx = m_table->currentIndex();
+            if (!m_table->indexWidget(idx) && !m_table->isPersistentEditorOpen(m_table->currentItem())) {
+                activateMemoryRow(m_table->currentRow());
+                return true;
+            }
+        }
+    }
+
+    return QDialog::eventFilter(watched, event);
+}
+
+void MemoryDialog::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
+    if (m_searchEdit)
+        m_searchEdit->setFocus(Qt::OtherFocusReason);
+}
+
+void MemoryDialog::activateMemoryRow(int row)
+{
+    if (row < 0)
+        return;
+
+    auto* indexItem = m_table->item(row, 0);
+    if (!indexItem)
+        return;
+
+    const int idx = indexItem->data(Qt::UserRole).toInt();
+    const auto memoryIt = m_model->memories().constFind(idx);
+    if (memoryIt == m_model->memories().constEnd())
+        return;
+
+    m_table->setCurrentCell(row, 0);
+    m_model->sendCommand(QString("memory apply %1").arg(idx));
+    m_model->setPanCenter(memoryIt->freq);
+}
+
 void MemoryDialog::populateTable()
 {
     const QSignalBlocker blocker(m_table);
+    const int currentMemoryIndex = (m_table->currentRow() >= 0 && m_table->item(m_table->currentRow(), 0))
+        ? m_table->item(m_table->currentRow(), 0)->data(Qt::UserRole).toInt()
+        : -1;
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);
     const auto& memories = m_model->memories();
     const QString filterProfile = m_filterCombo->currentData().toString();
+    const QString nameFilter = m_searchEdit ? m_searchEdit->text().trimmed() : QString();
+    bool hasRows = false;
 
     for (auto it = memories.begin(); it != memories.end(); ++it) {
         const auto& m = it.value();
@@ -261,8 +388,12 @@ void MemoryDialog::populateTable()
         if (!filterProfile.isEmpty() && m.group != filterProfile) {
             continue;
         }
+        if (!nameFilter.isEmpty() && !m.name.contains(nameFilter, Qt::CaseInsensitive)) {
+            continue;
+        }
         int row = m_table->rowCount();
         m_table->insertRow(row);
+        hasRows = true;
 
         int col = 0;
         m_table->setItem(row, col++, new QTableWidgetItem(m.group));
@@ -323,6 +454,21 @@ void MemoryDialog::populateTable()
         m_table->sortItems(m_sortColumn, m_sortOrder);
     }
     m_table->setSortingEnabled(true);
+
+    if (hasRows) {
+        int selectedRow = 0;
+        if (currentMemoryIndex >= 0) {
+            for (int row = 0; row < m_table->rowCount(); ++row) {
+                auto* item = m_table->item(row, 0);
+                if (item && item->data(Qt::UserRole).toInt() == currentMemoryIndex) {
+                    selectedRow = row;
+                    break;
+                }
+            }
+        }
+        m_table->selectRow(selectedRow);
+        m_table->setCurrentCell(selectedRow, 0);
+    }
 }
 
 bool MemoryDialog::isSortableColumn(int column) const
@@ -458,12 +604,68 @@ void MemoryDialog::onAdd()
     });
 }
 
+void MemoryDialog::onExport()
+{
+    const QString filterProfile = m_filterCombo->currentData().toString();
+    const QList<MemoryCsvRecord> records =
+        currentExportRecords(m_model->memories(), filterProfile);
+
+    if (records.isEmpty()) {
+        QMessageBox::information(this, "Export Memories",
+                                 filterProfile.isEmpty()
+                                     ? "There are no memories to export."
+                                     : "There are no memories in the current filter to export.");
+        return;
+    }
+
+    const QString path = QFileDialog::getSaveFileName(
+        this,
+        "Export Memories",
+        defaultExportFilePath(),
+        "CSV Files (*.csv)");
+    if (path.isEmpty())
+        return;
+
+    const QByteArray csv = MemoryCsvCompat::serialize(records);
+    const MemoryCsvParseResult validation = MemoryCsvCompat::parse(csv);
+    if (!validation.ok()) {
+        QMessageBox::warning(this, "Export Memories",
+                             QString("The generated SmartSDR CSV failed validation:\n%1")
+                                 .arg(validation.errors.join('\n')));
+        return;
+    }
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, "Export Memories",
+                             QString("Couldn't open %1 for writing.")
+                                 .arg(QDir::toNativeSeparators(path)));
+        return;
+    }
+
+    if (file.write(csv) != csv.size()) {
+        QMessageBox::warning(this, "Export Memories",
+                             QString("Couldn't write the SmartSDR CSV to %1.")
+                                 .arg(QDir::toNativeSeparators(path)));
+        return;
+    }
+
+    if (!file.commit()) {
+        QMessageBox::warning(this, "Export Memories",
+                             QString("Couldn't save %1.")
+                                 .arg(QDir::toNativeSeparators(path)));
+        return;
+    }
+
+    QMessageBox::information(this, "Export Memories",
+                             QString("Exported %1 memories to %2.")
+                                 .arg(records.size())
+                                 .arg(QDir::toNativeSeparators(QFileInfo(path).fileName())));
+}
+
 void MemoryDialog::onSelect()
 {
-    const int row = m_table->currentRow();
-    if (row < 0) return;
-    const int idx = m_table->item(row, 0)->data(Qt::UserRole).toInt();
-    m_model->sendCommand(QString("memory apply %1").arg(idx));
+    activateMemoryRow(m_table->currentRow());
 }
 
 void MemoryDialog::onRemove()

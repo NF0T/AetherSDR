@@ -970,8 +970,10 @@ MainWindow::MainWindow(QWidget* parent)
             });
         }
     });
-    connect(&m_radioModel, &RadioModel::panadapterLevelChanged,
-            spectrum(), &SpectrumWidget::setDbmRange);
+    // NOTE: panadapterLevelChanged → spectrum()::setDbmRange has been removed.
+    // Level updates are routed per-pan via PanadapterModel::levelChanged in
+    // wirePanadapter() so that PanadapterModel's change-guard prevents stale
+    // echo-backs from overwriting in-flight user changes.
     // ── Multi-panadapter lifecycle ──────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::panadapterAdded,
             this, [this](PanadapterModel* pan) {
@@ -1011,8 +1013,8 @@ MainWindow::MainWindow(QWidget* parent)
         wirePanadapter(applet);
         connect(pan, &PanadapterModel::infoChanged,
                 applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
-        connect(pan, &PanadapterModel::levelChanged,
-                applet->spectrumWidget(), &SpectrumWidget::setDbmRange);
+        // NOTE: levelChanged → setDbmRange is wired in wirePanadapter() above;
+        // don't connect it here again or setDbmRange fires twice per level change.
         connect(pan, &PanadapterModel::rfGainInfoChanged,
                 applet->spectrumWidget()->overlayMenu(),
                 &SpectrumOverlayMenu::setRfGainRange);
@@ -1567,6 +1569,7 @@ MainWindow::MainWindow(QWidget* parent)
         double target = m_flexTargetMhz;
         // Use slice tune (not slice m) — doesn't recenter pan, correct for encoder
         s->setFrequency(target);
+        panFollowVfo(s, target);  // re-center pan if VFO stepped outside visible window (#989)
     });
     // FlexControl signals (auto-queued from worker → main)
     connect(m_flexControl, &FlexControlManager::tuneSteps,
@@ -1719,6 +1722,7 @@ MainWindow::MainWindow(QWidget* parent)
             long long snapped = ((curHz + stepHz / 2) / stepHz) * stepHz;
             double newMhz = (snapped + steps * stepHz) / 1e6;
             s->setFrequency(newMhz);
+            panFollowVfo(s, newMhz);  // re-center pan if VFO stepped outside visible window (#989)
         }
     });
 
@@ -1907,10 +1911,10 @@ MainWindow::MainWindow(QWidget* parent)
         m_tciServer->wireSlice(s->sliceId(), s);
     m_tciServer->wireSpotModel();
 
-    // Wire RX audio from PanadapterStream → TCI server for audio streaming
+    // Wire RX audio from PanadapterStream → TCI server for audio streaming.
+    // TCI audio feeds exclusively from DAX (not audioDataReady) so that
+    // audio_mute doesn't kill TCI audio (#1331).
     if (m_radioModel.panStream()) {
-        connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-                m_tciServer, &TciServer::onRxAudioReady);
         connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
                 m_tciServer, &TciServer::onDaxAudioReady);
         connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
@@ -4692,6 +4696,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 s->mode(), s->rttyMark(), s->rttyShift(),
                 s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq());
         updateSplitState();
+
+        // Active follows TX slice (#1351) — switch the displayed/active slice
+        // when an external program (e.g. WSJT-X) moves the TX flag
+        if (tx && s->sliceId() != m_activeSliceId
+            && AppSettings::instance().value("ActiveFollowsTxSlice", "False").toString() == "True") {
+            setActiveSlice(s->sliceId());
+        }
     });
 
     // When the radio notifies us that this slice became active, switch to it
@@ -5186,6 +5197,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
 
+    // Guard: wirePanadapter() is called once at startup (for m_panApplet) and
+    // again from panadapterAdded for the same widget.  Without these disconnects
+    // every sw/menu/applet → this signal would be connected twice, causing each
+    // user gesture to fire two identical radio commands (e.g. duplicate
+    // "display pan set … min_dbm= max_dbm=").  Clearing prior connections here
+    // replaces the scattered per-signal disconnect guards below.
+    sw->disconnect(this);
+    menu->disconnect(this);
+    applet->disconnect(this);
+
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
 
@@ -5218,6 +5239,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         connect(pan, &PanadapterModel::wideChanged,
                 sw, &SpectrumWidget::setWideActive);
         sw->setWideActive(pan->wideActive());
+
+        // Route confirmed level changes (min_dbm / max_dbm) from the radio to
+        // this pan's spectrum widget.  Using the per-pan PanadapterModel signal
+        // (guarded by change detection) rather than the RadioModel-level
+        // panadapterLevelChanged signal ensures that:
+        //   a) stale echo-backs (same value) don't overwrite the user's in-flight
+        //      local change while waiting for the radio to confirm the command, and
+        //   b) in multi-pan setups, a level update on pan B doesn't incorrectly
+        //      update pan A's dBm scale.
+        connect(pan, &PanadapterModel::levelChanged,
+                sw, &SpectrumWidget::setDbmRange);
     }
 
     // ── Tuning step size → this pan's spectrum widget ─────────────────────
@@ -5366,6 +5398,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setFftHeatMap);
     connect(menu, &SpectrumOverlayMenu::showGridChanged,
             sw, &SpectrumWidget::setShowGrid);
+    connect(menu, &SpectrumOverlayMenu::freqGridSpacingChanged,
+            sw, &SpectrumWidget::setFreqGridSpacing);
     connect(menu, &SpectrumOverlayMenu::fftLineWidthChanged,
             sw, &SpectrumWidget::setFftLineWidth);
     connect(menu, &SpectrumOverlayMenu::noiseFloorPositionChanged,
@@ -5467,10 +5501,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setWfBlankerEnabled);
     connect(menu, &SpectrumOverlayMenu::wfBlankerThresholdChanged,
             sw, &SpectrumWidget::setWfBlankerThreshold);
-    disconnect(menu, &SpectrumOverlayMenu::backgroundImageRequested, this, nullptr);
-    disconnect(menu, &SpectrumOverlayMenu::backgroundImageCleared, this, nullptr);
-    disconnect(menu, &SpectrumOverlayMenu::backgroundOpacityChanged, this, nullptr);
-    disconnect(menu, &SpectrumOverlayMenu::displaySettingsReset, this, nullptr);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
             this, [this, sw] {
         QString path = QFileDialog::getOpenFileName(sw, "Choose Background Image",
@@ -5517,6 +5547,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setBackgroundOpacity(80);
         sw->setNoiseFloorEnable(false);
         sw->setNoiseFloorPosition(75);
+        sw->setFreqGridSpacing(0);  // Auto (#1390)
 
         // Radio commands for radio-authoritative display settings
         m_radioModel.sendCommand(
@@ -5554,12 +5585,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("CursorFreqLabel"),            "False");
         s.setValue(sw->settingsKey("BackgroundImage"),            ":/bg-default.jpg");
         s.setValue(sw->settingsKey("BackgroundOpacity"),          "80");
+        s.setValue(sw->settingsKey("DisplayFreqGridSpacing"),     "0");
         s.save();
 
         // Sync all Display panel UI controls
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
                                   50, 15, true, 100, 75, false, true, 0);
-        menu->syncExtraDisplaySettings(false, 1.15f, 80);
+        menu->syncExtraDisplaySettings(false, 1.15f, 80, 0);
     });
 
     // ── Click-to-tune ────────────────────────────────────────────────────
@@ -5692,10 +5724,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
 
     // ── Manual spot add/remove (#36)
-    // Note: wirePanadapter() can be called multiple times for the same widget
-    // (layout changes, reconnect), so disconnect first to avoid duplicate sends.
-    disconnect(sw, &SpectrumWidget::spotAddRequested, this, nullptr);
-    disconnect(sw, &SpectrumWidget::spotRemoveRequested, this, nullptr);
     connect(sw, &SpectrumWidget::spotAddRequested, this,
             [this](double freqMhz, const QString& callsign, const QString& comment,
                    int lifetimeSec, bool forwardToCluster) {
@@ -5743,8 +5771,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                     .arg(m_radioModel.model()).arg(limit), 4000);
         }
     });
-    // Disconnect first to avoid duplicate sends on re-wire (#381)
-    disconnect(menu, &SpectrumOverlayMenu::addTnfClicked, this, nullptr);
     connect(menu, &SpectrumOverlayMenu::addTnfClicked,
             this, [this]() {
         auto* s = activeSlice();
@@ -5788,7 +5814,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
 
     // XVTR button → open Radio Setup XVTR tab (#571)
-    disconnect(menu, &SpectrumOverlayMenu::xvtrSetupRequested, this, nullptr);
     connect(menu, &SpectrumOverlayMenu::xvtrSetupRequested,
             this, [this]() {
         auto* dlg = new RadioSetupDialog(&m_radioModel, m_audio, &m_tgxlConn, &m_pgxlConn, &m_antennaGenius, this);
@@ -5871,6 +5896,44 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QPoint& pos) { showDfnrParamPopup(pos); });
 }
 
+void MainWindow::panFollowVfo(SliceModel* s, double mhz)
+{
+    // Note: centerActiveSliceInPanadapter() is intentionally not reused here.
+    // That helper snaps to dead center and does extra work (pan stack activation,
+    // VFO widget update) that is redundant or wrong for incremental step-tuning.
+    PanadapterModel* pan = m_radioModel.panadapter(s->panId());
+    if (!pan) return;
+    const double halfBw = pan->bandwidthMhz() / 2.0;
+    if (halfBw <= 0.0) return;  // guard: bandwidth not yet received from radio
+
+    // Trigger when VFO enters the outer 20% of the visible window — matches the
+    // radio's built-in autopan threshold so all tuning paths (keyboard, wheel,
+    // FlexControl, MIDI) feel identical. (#989)
+    static constexpr double kTriggerFrac = 0.20;
+    const double triggerHalfBw = halfBw * (1.0 - kTriggerFrac);
+    if (mhz >= pan->centerMhz() - triggerHalfBw &&
+        mhz <= pan->centerMhz() + triggerHalfBw) return;
+
+    // Place VFO 30% from the nearer edge after the nudge.
+    // kMarginFrac must be > kTriggerFrac so the post-nudge position is inside
+    // the safe zone and doesn't immediately re-trigger. (#989)
+    static constexpr double kMarginFrac = 0.30;
+    const double margin = halfBw * kMarginFrac;
+    double newCenter;
+    if (mhz < pan->centerMhz()) {
+        newCenter = mhz + halfBw - margin;   // VFO lands 30% from left edge
+    } else {
+        newCenter = mhz - halfBw + margin;   // VFO lands 30% from right edge
+    }
+
+    // Optimistic local update: apply new center immediately so SpectrumWidget
+    // repaints without waiting for the radio echo-back round-trip. (#989)
+    pan->applyPanStatus({{"center", QString::number(newCenter, 'f', 6)}});
+    m_radioModel.sendCommand(
+        QString("display pan set %1 center=%2")
+            .arg(pan->panId()).arg(newCenter, 0, 'f', 6));
+}
+
 void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 {
     const int sliceId = s->sliceId();
@@ -5881,6 +5944,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
         if (m_radioModel.slices().size() <= 1) return;
         m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
+    });
+    // Pan-follow-VFO (#989): wheel uses setFrequency(autopan=0) so re-center
+    // the pan explicitly when the stepped frequency falls outside the window.
+    connect(w, &VfoWidget::stepTuned, this, [this, sliceId](double mhz) {
+        if (auto* sl = m_radioModel.slice(sliceId))
+            panFollowVfo(sl, mhz);
     });
     connect(w, &VfoWidget::lockToggled, this, [this, sliceId](bool locked) {
         if (auto* sl = m_radioModel.slice(sliceId))
@@ -6313,7 +6382,10 @@ void MainWindow::registerShortcutActions()
         if (!s || s->isLocked()) return;
         int stepHz = spectrum() ? spectrum()->stepSize() : 100;
         double newMhz = s->frequency() + steps * stepHz / 1e6;
-        s->tuneAndRecenter(newMhz);
+        // Use setFrequency (autopan=0) + panFollowVfo so all step-tuning paths
+        // (keyboard, wheel, FlexControl, MIDI) share the same pan-follow logic. (#989)
+        s->setFrequency(newMhz);
+        panFollowVfo(s, newMhz);
     };
 
     // Step cycle helper
@@ -6944,7 +7016,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
 
     static const QMap<QString, int> kPanCounts = {
         {"1", 1}, {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"3v", 3},
-        {"2x2", 4}, {"4v", 4}
+        {"2x2", 4}, {"4v", 4}, {"3h2", 5}, {"2x3", 6}, {"4h3", 7}, {"2x4", 8}
     };
     const int needed = kPanCounts.value(layoutId, 1);
     const int existing = m_panStack->count();
@@ -7135,6 +7207,7 @@ void MainWindow::onFrequencyChanged(double mhz)
     if (!m_updatingFromModel) {
         if (auto* s = activeSlice()) {
             s->setFrequency(mhz);
+            panFollowVfo(s, mhz);  // re-center pan if VFO stepped outside visible window (#989)
 
             // Diversity: immediately mirror freq to child VFO (no radio round-trip)
             if (s->isDiversityParent()) {

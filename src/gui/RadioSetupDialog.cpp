@@ -948,28 +948,58 @@ QWidget* RadioSetupDialog::buildTxTab()
         });
         grid->addWidget(swBtn, 2, 1);
 
-        // TX Follows Active Slice (#441)
-        auto* tfLbl = new QLabel("TX Follows Active Slice:");
-        tfLbl->setStyleSheet(kLabelStyle);
-        grid->addWidget(tfLbl, 3, 0);
-        bool txFollows = AppSettings::instance().value("TxFollowsActiveSlice", "False").toString() == "True";
-        auto* tfBtn = new QPushButton(txFollows ? "Enabled" : "Disabled");
-        tfBtn->setCheckable(true);
-        tfBtn->setChecked(txFollows);
-        tfBtn->setToolTip("Automatically assign TX to the active slice.\nDisabled during Split operation.");
-        tfBtn->setStyleSheet(
+        // Slice–TX Follow Mode (#441, #1351) — mutually exclusive toggles
+        auto* followLbl = new QLabel("Slice/TX Follow:");
+        followLbl->setStyleSheet(kLabelStyle);
+        grid->addWidget(followLbl, 3, 0);
+
+        const QString kFollowBtnStyle =
             "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
             "border-radius: 3px; color: #c8d8e8; font-size: 11px; font-weight: bold; "
-            "padding: 3px 10px; }"
+            "padding: 3px 8px; }"
             "QPushButton:checked { background: #1a5030; color: #00e060; "
-            "border: 1px solid #20a040; }");
-        connect(tfBtn, &QPushButton::toggled, this, [tfBtn](bool on) {
-            tfBtn->setText(on ? "Enabled" : "Disabled");
+            "border: 1px solid #20a040; }";
+
+        bool txFollows = AppSettings::instance().value("TxFollowsActiveSlice", "False").toString() == "True";
+        auto* tfBtn = new QPushButton("TX Follows Active Slice");
+        tfBtn->setCheckable(true);
+        tfBtn->setChecked(txFollows);
+        tfBtn->setToolTip("TX follows the active slice.\nDisabled during Split operation.");
+        tfBtn->setStyleSheet(kFollowBtnStyle);
+
+        bool activeFollows = AppSettings::instance().value("ActiveFollowsTxSlice", "False").toString() == "True";
+        auto* afBtn = new QPushButton("Active Slice Follows TX");
+        afBtn->setCheckable(true);
+        afBtn->setChecked(activeFollows);
+        afBtn->setToolTip("Switch active slice when TX moves externally\n(e.g. WSJT-X or CAT command).");
+        afBtn->setStyleSheet(kFollowBtnStyle);
+
+        auto* followRow = new QHBoxLayout;
+        followRow->setSpacing(6);
+        followRow->addWidget(tfBtn);
+        followRow->addWidget(afBtn);
+        followRow->addStretch(1);
+        grid->addLayout(followRow, 3, 1);
+
+        // Mutual exclusion: enabling one disables the other
+        connect(tfBtn, &QPushButton::toggled, this, [tfBtn, afBtn](bool on) {
+            Q_UNUSED(tfBtn);
             auto& s = AppSettings::instance();
             s.setValue("TxFollowsActiveSlice", on ? "True" : "False");
+            if (on && afBtn->isChecked()) {
+                afBtn->setChecked(false);
+            }
             s.save();
         });
-        grid->addWidget(tfBtn, 3, 1);
+        connect(afBtn, &QPushButton::toggled, this, [tfBtn, afBtn](bool on) {
+            Q_UNUSED(afBtn);
+            auto& s = AppSettings::instance();
+            s.setValue("ActiveFollowsTxSlice", on ? "True" : "False");
+            if (on && tfBtn->isChecked()) {
+                tfBtn->setChecked(false);
+            }
+            s.save();
+        });
 
         vbox->addLayout(grid);
     }
@@ -1505,6 +1535,23 @@ QWidget* RadioSetupDialog::buildAudioTab()
         compLayout->addWidget(hint);
 
         vbox->addWidget(compGroup);
+    }
+
+    // ── Prevent Sleep ───────────────────────────────────────────────────
+    {
+        auto* sleepCheck = new QCheckBox("Prevent system sleep while connected");
+        sleepCheck->setStyleSheet("QCheckBox { color: #c8d8e8; font-size: 11px; }");
+        sleepCheck->setToolTip("Hold a system power assertion to prevent idle sleep\n"
+                               "while connected to a radio. Keeps TCP/UDP/audio\n"
+                               "streams alive during long sessions.");
+        sleepCheck->setChecked(
+            AppSettings::instance().value("InhibitSleepWhileConnected", "False").toString() == "True");
+        connect(sleepCheck, &QCheckBox::toggled, this, [](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("InhibitSleepWhileConnected", on ? "True" : "False");
+            s.save();
+        });
+        vbox->addWidget(sleepCheck);
     }
 
     // ── PC Audio Devices ────────────────────────────────────────────────

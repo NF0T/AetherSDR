@@ -125,6 +125,25 @@ AudioEngine::AudioEngine(QObject* parent)
             m_rxZombieTickCount = 0;
         }
 
+        // Audio liveness watchdog: if no audio data has arrived via
+        // feedAudioData() for ~15 seconds while the sink is still running,
+        // the audio backend may have silently stopped (CoreAudio after
+        // extended idle, or the radio stopped sending VITA-49 packets).
+        // Restart the sink to re-acquire a fresh handle. (#1411)
+        if (m_lastAudioFeedTime.isValid()
+            && m_lastAudioFeedTime.elapsed() > kAudioLivenessTimeoutMs
+            && m_rxBuffer.isEmpty()) {
+            qCWarning(lcAudio) << "AudioEngine: no audio data received for"
+                               << m_lastAudioFeedTime.elapsed() << "ms, restarting RX (#1411)";
+            m_lastAudioFeedTime.start();  // prevent repeated rapid restarts
+            QMetaObject::invokeMethod(this, [this]() {
+                if (!m_audioSink) return;
+                stopRxStream();
+                startRxStream();
+            }, Qt::QueuedConnection);
+            return;
+        }
+
         qsizetype len = freeBytes;
         len = std::min(len, m_rxBuffer.size());
         if (len > 0)
@@ -165,6 +184,7 @@ bool AudioEngine::startRxStream()
     m_rxBufferUnderrunCount.store(0);
     m_rxBufferSampleRate.store(DEFAULT_SAMPLE_RATE);
     m_rxZombieTickCount = 0;
+    m_lastAudioFeedTime.start();  // initialize liveness watchdog (#1411)
 
     QAudioFormat fmt = makeFormat();
     const QAudioDevice dev = m_outputDevice.isNull()
@@ -309,6 +329,7 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm)
 void AudioEngine::feedAudioData(const QByteArray& pcm)
 {
     if (!m_audioSink) return;  // PC audio disabled
+    m_lastAudioFeedTime.start();  // reset liveness watchdog (#1411)
     // Note: m_radeMode no longer blocks feedAudioData globally.
     // The RADE slice's raw OFDM noise is muted at the slice level (audio_mute=1)
     // so it doesn't reach the speaker. Other slices' audio plays normally.
