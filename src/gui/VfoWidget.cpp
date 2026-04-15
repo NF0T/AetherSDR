@@ -209,6 +209,7 @@ void VfoWidget::wheelEvent(QWheelEvent* ev)
             if (steps != 0) {
                 double newMhz = m_slice->frequency() + steps * stepHz / 1e6;
                 m_slice->setFrequency(newMhz);
+                emit stepTuned(newMhz);
             }
         }
         ev->accept();
@@ -227,6 +228,7 @@ void VfoWidget::wheelEvent(QWheelEvent* ev)
             if (steps != 0) {
                 double newMhz = m_slice->frequency() + steps * stepHz / 1e6;
                 m_slice->setFrequency(newMhz);
+                emit stepTuned(newMhz);
             }
             ev->accept();
             return;
@@ -1926,18 +1928,24 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
         onLeft = !lowerSideband;
     }
 
+    // 20px dead-band: only flip side when the widget clearly overruns the edge.
+    // Without this, the flip threshold can oscillate frame-to-frame while
+    // m_centerMhz is animating, snapping the VFO panel back and forth.
+    constexpr int kEdgeHysteresis = 20;
+
     int x;
     if (onLeft) {
         x = vfoX - w;
-        // Flip to right if would clip off left edge
-        if (x < 0) {
+        // Flip to right only when clearly clipping the left edge
+        if (x < -kEdgeHysteresis) {
             x = vfoX;
             onLeft = false;
         }
     } else {
         x = vfoX;
-        // Flip to left if would clip off right edge
-        if (parentWidget() && x + w > parentWidget()->width()) {
+        // Flip to left only when clearly clipping the right edge
+        const int parentW = parentWidget() ? parentWidget()->width() : INT_MAX;
+        if (x + w > parentW + kEdgeHysteresis) {
             x = vfoX - w;
             onLeft = true;
         }
@@ -2062,7 +2070,7 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     // Bar rect: drawn in the S-meter row (75% left portion)
     const int barX = 6;
     const int barW = (width() - 12) * 3 / 4;  // 75% of widget width
-    const int barY = m_dbmLabel->geometry().center().y() - 3;
+    const int barY = m_dbmLabel->y() + (m_dbmLabel->height() - 6) / 2;
     const int barH = 6;
 
     // Background
@@ -2072,11 +2080,18 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     // S0–S9 occupies left 60%, S9–S9+60 occupies right 40%
     const int s9X = barX + barW * 60 / 100;  // S9 boundary pixel
 
-    // Signal fill — blue up to S9, red beyond
+    // Signal fill — color gradient matching SmartSDR visual convention
     const int fillW = static_cast<int>(m_signalMeterFraction * barW);
 
     if (fillW > 0) {
-        p.fillRect(barX, barY, fillW, barH, QColor(0x00, 0xc0, 0x40));
+        QLinearGradient grad(barX, 0, barX + barW, 0);
+        grad.setColorAt(0.00, QColor(0x00, 0x90, 0x30));  // dark green  — S0
+        grad.setColorAt(0.30, QColor(0x00, 0xc0, 0x40));  // green       — ~S5
+        grad.setColorAt(0.50, QColor(0xd4, 0xc0, 0x00));  // yellow      — ~S7
+        grad.setColorAt(0.70, QColor(0xdd, 0x14, 0x00));  // red         — S9+10
+        grad.setColorAt(0.85, QColor(0xff, 0x00, 0x00));  // bright red  — S9+30
+        grad.setColorAt(1.00, QColor(0xff, 0x00, 0x00));  // bright red  — S9+60
+        p.fillRect(barX, barY, fillW, barH, grad);
     }
 
     // ── Scale bar with tick marks below the S-meter ────────────────────────

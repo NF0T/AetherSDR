@@ -9,6 +9,8 @@
 #include <QDateTime>
 #include <QTimer>
 
+class QVariantAnimation;
+
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
 #include <rhi/qrhi.h>
@@ -196,11 +198,13 @@ public:
     void setFftFillColor(const QColor& c);
     void setFftHeatMap(bool on);
     void setShowGrid(bool on);
+    void setFreqGridSpacing(int khz);
     void setFftLineWidth(float w);
     float fftFillAlpha() const         { return m_fftFillAlpha; }
     QColor fftFillColor() const        { return m_fftFillColor; }
     bool fftHeatMap() const            { return m_fftHeatMap; }
     bool showGrid() const              { return m_showGrid; }
+    int  freqGridSpacing() const       { return m_freqGridSpacingKhz; }
     float fftLineWidth() const         { return m_fftLineWidth; }
     int   fftAverage() const           { return m_fftAverage; }
     int   fftFps() const               { return m_fftFps; }
@@ -361,6 +365,7 @@ public:
     void showAddSpotDialog(double freqMhz);
 
 private:
+    double effectiveGridStepMhz(int widgetWidth) const;
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
     void drawSliceMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
@@ -375,6 +380,18 @@ private:
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
+    int waterfallStripWidth() const;
+    QRect waterfallLiveButtonRect(const QRect& wfRect) const;
+    QRect waterfallTimeScaleRect(const QRect& wfRect) const;
+    void ensureWaterfallHistory();
+    void rebuildWaterfallViewport();
+    void setWaterfallLive(bool live);
+    void appendHistoryRow(const QRgb* rowData, qint64 timestampMs);
+    void appendVisibleRow(const QRgb* rowData);
+    int waterfallHistoryCapacityRows() const;
+    int maxWaterfallHistoryOffsetRows() const;
+    int historyRowIndexForAge(int ageRows) const;
+    QString pausedTimeLabelForAge(int ageRows) const;
 
     // Helper: find overlay index for a sliceId, or -1.
     int overlayIndex(int sliceId) const;
@@ -396,6 +413,11 @@ private:
 
     double m_centerMhz{14.225};
     double m_bandwidthMhz{0.200};
+    // Pan-follow smooth animation (#989): animates m_centerMhz toward the target
+    // for small nudges so the VFO widget glides instead of snapping.
+    QVariantAnimation* m_panCenterAnim{nullptr};
+    double             m_panCenterTarget{14.225};
+    double             m_panCenterStart{14.225}; // m_centerMhz at animation start (stale-echo guard)
 
     // Multi-slice overlays (replaces single m_vfoFreqMhz / m_filterLowHz / etc.)
     QVector<SliceOverlay> m_sliceOverlays;
@@ -431,6 +453,7 @@ private:
     QColor m_fftFillColor{0x00, 0xe5, 0xff};  // client-side fill color (default cyan)
     bool m_fftHeatMap{true};        // true = intensity heat map, false = solid color
     bool m_showGrid{true};          // false = hide grid lines
+    int  m_freqGridSpacingKhz{0};   // 0=Auto, or 1/2/5/10/25/50/100 kHz (#1390)
     float m_fftLineWidth{2.0f};     // spectrum trace width in pixels
 
     // ── Waterfall display controls (radio-side via "display panafall set") ─
@@ -448,6 +471,16 @@ private:
     // Scrolling waterfall image (Format_RGB32)
     QImage m_waterfall;
     int    m_wfWriteRow{0};  // ring buffer: next row to write (newest at top)
+    QImage m_waterfallHistory;
+    QVector<qint64> m_wfHistoryTimestamps;
+    int    m_wfHistoryWriteRow{0};
+    int    m_wfHistoryRowCount{0};
+    int    m_wfHistoryOffsetRows{0};
+    bool   m_wfLive{true};
+    bool   m_draggingTimeScale{false};
+    int    m_timeScaleDragStartY{0};
+    int    m_timeScaleDragStartOffsetRows{0};
+    static constexpr qint64 kWaterfallHistoryMs = 20LL * 60LL * 1000LL;
 
     // True once we receive native waterfall tile data (PCC 0x8004).
     // When set, updateSpectrum() skips pushing FFT rows to the waterfall

@@ -2,10 +2,13 @@
 
 #include <QDialog>
 #include <QCloseEvent>
+#include <QEvent>
+#include <QShowEvent>
 #include <QTableWidget>
 #include <QMap>
 
 class QComboBox;
+class QLineEdit;
 
 namespace AetherSDR {
 
@@ -19,11 +22,15 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
+    void activateMemoryRow(int row);
     void populateTable();
     void submitCellEdit(int row, int col);
     void onAdd();
+    void onExport();
     void onSelect();
     void onRemove();
     bool isSortableColumn(int column) const;
@@ -31,6 +38,7 @@ private:
 
     RadioModel* m_model;
     QTableWidget* m_table;
+    QLineEdit* m_searchEdit;
     QComboBox* m_filterCombo;
     int m_sortColumn{2};
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};

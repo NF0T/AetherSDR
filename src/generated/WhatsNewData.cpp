@@ -6,6 +6,27 @@ namespace AetherSDR {
 
 const std::vector<ReleaseEntry>& whatsNewEntries() {
     static const std::vector<ReleaseEntry> entries = {
+        {QStringLiteral("0.8.15"), QStringLiteral("2026-04-15"), QStringLiteral("Waterfall Scrollback, Pan-Follow Animation, TCI-via-DAX, Community Contributions"), {
+            {ChangeCategory::Feature, QStringLiteral("Waterfall history scrollback (#1432, community: rfoust)"), QStringLiteral("20-minute ring buffer with scrub controls on the right-side time strip Pull up on the time strip to scroll back in time; LIVE button to return Paused viewport ages forward as new rows arrive; repro...")},
+            {ChangeCategory::Feature, QStringLiteral("HF Propagation Dashboard"), QStringLiteral("Click K/A/SFI on the spectrum overlay to open a rich dashboard 3-day Kp forecast, band conditions, VHF, X-ray, solar wind, SDO solar images, lunar phase")},
+            {ChangeCategory::Feature, QStringLiteral("Memory dialog search and CSV export (#1436, #1438, community: jensenpat)"), QStringLiteral("Search field filters memories by name as you type Arrow key navigation with Enter to apply; double-click for inline edit CSV export in SmartSDR-compatible 22-column format")},
+            {ChangeCategory::Feature, QStringLiteral("5-8 pan layouts for FLEX-6700"), QStringLiteral("New layouts: 3h2, 2x3, 4h3, 2x4 for up to 8 panadapters")},
+            {ChangeCategory::Feature, QStringLiteral("Active Slice Follows TX toggle"), QStringLiteral("Switch active/displayed slice when TX moves externally (e.g. WSJT-X) Mutually exclusive with TX Follows Active Slice; both can be off")},
+            {ChangeCategory::Feature, QStringLiteral("TCI audio via DAX"), QStringLiteral("TCI audio feeds from DAX instead of main RX path Muting PC audio no longer kills TCI client audio DAX RX streams created/torn down automatically on audio_start/stop")},
+            {ChangeCategory::Feature, QStringLiteral("Configurable frequency grid spacing"), QStringLiteral("Manual grid spacing option in spectrum overlay menu")},
+            {ChangeCategory::Feature, QStringLiteral("System sleep inhibition"), QStringLiteral("Prevent system sleep while connected to radio (macOS/Windows/Linux)")},
+            {ChangeCategory::Feature, QStringLiteral("Activate slice on passband click"), QStringLiteral("Left-click a slice passband to make it active")},
+            {ChangeCategory::Feature, QStringLiteral("S-meter color gradient"), QStringLiteral("SmartSDR-style green→yellow→red gradient on VFO and slice flag S-meter bars")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix panadapter/VFO scroll jitter, blank spectrum, and floor level revert (#989, community: chibondking)"), QStringLiteral("Smooth 200ms pan-follow animation with QVariantAnimation Stale echo-back guard prevents pre-animation center from reversing animation Per-pan levelChanged signal prevents stale echo-backs from reve...")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix duplicate wirePanadapter connections (#989, community: chibondking)"), QStringLiteral("Bulk disconnect(this) guard replaces scattered per-signal disconnects")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix MQTT \"Socket is not connected\" on macOS"), QStringLiteral("Handle MOSQ_ERR_CONN_PENDING for non-blocking connect Handle ENOTCONN on Unix/macOS in vendored libmosquitto")},
+            {ChangeCategory::BugFix, QStringLiteral("Audio liveness watchdog"), QStringLiteral("Restart RX stream after 15 seconds of no audio data (fixes silent audio loss after hours of idle)")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix SIGSEGV on band change with 2 panadapters"), QStringLiteral("Null-guard spectrumForSlice() during pan creation/destruction")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix manual grid spacing"), QStringLiteral("Grid lines respect user's manual choice; only labels thin at narrow spacing")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix Windows audio silence"), QStringLiteral("Remove IdleState restart logic that caused audio restart loops on Windows")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix K-index regex capturing UTC time"), QStringLiteral("Anchor on \"was\" keyword to avoid capturing UTC time as K value")},
+            {ChangeCategory::BugFix, QStringLiteral("Fix DAX TX stream conflict with SmartSDR DAX on Windows"), QStringLiteral("DAX RX stream lifecycle managed by TCI server; streams cleaned up on disconnect")},
+        }},
         {QStringLiteral("0.8.12.2"), QStringLiteral("2026-04-14"), QStringLiteral("Enhancements"), {
             {ChangeCategory::BugFix, QStringLiteral("Fix two-slice band-change crash"), QStringLiteral("Null-guard all spectrumForSlice() dereferences during pan creation/destruction")},
             {ChangeCategory::BugFix, QStringLiteral("Fix CW key/paddle not triggering TX"), QStringLiteral("Track CW key/paddle state in interlock handler so break-in keying isn't killed")},

@@ -3,6 +3,8 @@
 
 #include <QObject>
 #include <QList>
+#include <QMap>
+#include <QSet>
 #include <memory>
 
 class QWebSocketServer;
@@ -84,10 +86,15 @@ private:
         int          iqChannel{0};           // TCI TRX → DAX IQ channel (0-based)
     };
 
+    void ensureDaxForTci();
+    void releaseDaxForTci();
+
     RadioModel*       m_model;
     AudioEngine*      m_audio{nullptr};
     QWebSocketServer* m_server{nullptr};
     QList<ClientState> m_clients;
+    QSet<int>         m_tciDaxSlices;   // slice IDs where we auto-assigned DAX (#1331)
+    QMap<int, quint32> m_tciDaxStreamIds; // DAX channel → stream ID created by TCI
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
     QWebSocket*       m_txChronoClient{nullptr};
