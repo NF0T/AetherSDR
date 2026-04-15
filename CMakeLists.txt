@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(AetherSDR VERSION 0.8.10 LANGUAGES C CXX)
+project(AetherSDR VERSION 0.8.12.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -356,12 +356,15 @@ endif()
 
 # MQTT client support — bundled libmosquitto (#699)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
+option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 if(ENABLE_MQTT)
+    if(MQTT_TLS)
+        find_package(OpenSSL)
+    endif()
     set(MOSQUITTO_DIR ${CMAKE_SOURCE_DIR}/third_party/mosquitto)
     file(GLOB MOSQUITTO_SOURCES ${MOSQUITTO_DIR}/src/*.c)
     # Remove broker-only and optional files we don't need
     list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "socks_mosq\\.c$")
-    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "tls_mosq\\.c$")
     list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "http_client\\.c$")
     list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "picohttpparser\\.c$")
     list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "extended_auth\\.c$")
@@ -370,8 +373,14 @@ if(ENABLE_MQTT)
     list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "base64_common\\.c$")
     list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "json_help\\.c$")
     list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "srv_mosq\\.c$")
-    list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "file_common\\.c$")
-    message(STATUS "MQTT client support enabled (bundled libmosquitto)")
+    if(OpenSSL_FOUND)
+        message(STATUS "MQTT client support enabled (bundled libmosquitto, TLS via OpenSSL ${OPENSSL_VERSION})")
+    else()
+        # tls_mosq.c and file_common.c (cert file access) require OpenSSL — exclude when not available
+        list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "tls_mosq\\.c$")
+        list(FILTER MOSQUITTO_SOURCES EXCLUDE REGEX "file_common\\.c$")
+        message(STATUS "MQTT client support enabled (bundled libmosquitto, TLS disabled — OpenSSL not found)")
+    endif()
 endif()
 
 # Sources
@@ -402,6 +411,7 @@ set(CORE_SOURCES
     src/core/PgxlConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/DvkWavTransfer.cpp
+    src/core/QsoRecorder.cpp
     src/core/FirmwareStager.cpp
     src/core/RNNoiseFilter.cpp
     src/core/SpecbleachFilter.cpp
@@ -457,6 +467,7 @@ set(GUI_SOURCES
     src/gui/VfoWidget.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
+    src/gui/PropDashboardDialog.cpp
     src/gui/MemoryDialog.cpp
     src/gui/SpotSettingsDialog.cpp
     src/gui/AetherDspDialog.cpp
@@ -891,7 +902,24 @@ if(ENABLE_MQTT)
         ${MOSQUITTO_DIR}/include
         ${MOSQUITTO_DIR}/src)
     target_sources(AetherSDR PRIVATE ${MOSQUITTO_SOURCES})
-    set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
+    if(OpenSSL_FOUND)
+        set(MQTT_TLS_FLAG " -DWITH_TLS")
+        target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT_TLS)
+        target_link_libraries(AetherSDR PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    else()
+        set(MQTT_TLS_FLAG "")
+    endif()
+    if(WIN32)
+        set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
+            COMPILE_FLAGS "-w -DLIBMOSQUITTO_STATIC -DLIBMOSQCOMMON_STATIC${MQTT_TLS_FLAG}")
+        target_compile_definitions(AetherSDR PRIVATE LIBMOSQUITTO_STATIC LIBMOSQCOMMON_STATIC)
+    else()
+        set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
+            COMPILE_FLAGS "-w -DWITH_THREADING${MQTT_TLS_FLAG}")
+    endif()
+    if(NOT WIN32)
+        target_link_libraries(AetherSDR PRIVATE pthread)
+    endif()
 endif()
 
 if(AETHER_GPU_SPECTRUM)

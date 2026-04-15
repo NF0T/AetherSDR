@@ -10,6 +10,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QGuiApplication>
+#include <QClipboard>
 
 namespace AetherSDR {
 
@@ -63,12 +65,15 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     });
     barLayout->addWidget(m_popOutBtn);
 
-    // Maximize button (□) — placeholder for future use
+    // Maximize button (□)
     m_maxBtn = new QPushButton("\u25a1");  // □
     m_maxBtn->setFixedSize(16, 14);
     m_maxBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; }");
     m_maxBtn->setToolTip("Maximize panadapter");
     m_maxBtn->hide();  // hidden in single-pan mode
+    connect(m_maxBtn, &QPushButton::clicked, this, [this]() {
+        emit maximizeRequested(m_panId);
+    });
     barLayout->addWidget(m_maxBtn);
 
     // Close button (×)
@@ -218,14 +223,49 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     cwBar->addStretch();
 
-    auto* clearBtn = new QPushButton("CLR");
-    clearBtn->setStyleSheet(
+    const QString cwBtnStyle =
         "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #203040;"
         " border-radius: 2px; font-size: 9px; font-weight: bold;"
         " padding: 1px 6px; }"
-        "QPushButton:hover { color: #c8d8e8; background: #2a3a4a; }");
+        "QPushButton:hover { color: #c8d8e8; background: #2a3a4a; }";
+
+    auto* copyAllBtn = new QPushButton("CPY ALL");
+    copyAllBtn->setToolTip("Copy all decoded text to clipboard");
+    copyAllBtn->setStyleSheet(cwBtnStyle);
+    connect(copyAllBtn, &QPushButton::clicked, this, [this] {
+        QGuiApplication::clipboard()->setText(m_cwText->toPlainText());
+    });
+    cwBar->addWidget(copyAllBtn);
+
+    auto* copyVisBtn = new QPushButton("CPY VIS");
+    copyVisBtn->setToolTip("Copy visible text to clipboard");
+    copyVisBtn->setStyleSheet(cwBtnStyle);
+    connect(copyVisBtn, &QPushButton::clicked, this, [this] {
+        QRect visibleRect = m_cwText->viewport()->rect();
+        QTextCursor topCursor = m_cwText->cursorForPosition(visibleRect.topLeft());
+        QTextCursor bottomCursor = m_cwText->cursorForPosition(visibleRect.bottomRight());
+        topCursor.setPosition(bottomCursor.position(), QTextCursor::KeepAnchor);
+        QGuiApplication::clipboard()->setText(topCursor.selectedText().replace(QChar(0x2029), '\n'));
+    });
+    cwBar->addWidget(copyVisBtn);
+
+    auto* clearBtn = new QPushButton("CLR");
+    clearBtn->setStyleSheet(cwBtnStyle);
     connect(clearBtn, &QPushButton::clicked, this, &PanadapterApplet::clearCwText);
     cwBar->addWidget(clearBtn);
+
+    auto* closeBtn = new QPushButton("\u2715");
+    closeBtn->setToolTip("Close CW decoder");
+    closeBtn->setStyleSheet(
+        "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #203040;"
+        " border-radius: 2px; font-size: 9px; font-weight: bold;"
+        " padding: 1px 6px; }"
+        "QPushButton:hover { color: #ff6060; background: #2a3a4a; }");
+    connect(closeBtn, &QPushButton::clicked, this, [this]() {
+        m_cwPanel->hide();
+        emit cwPanelCloseRequested();
+    });
+    cwBar->addWidget(closeBtn);
 
     cwLayout->addLayout(cwBar);
 
@@ -270,14 +310,19 @@ void PanadapterApplet::setFloatingState(bool floating)
 
 void PanadapterApplet::setSliceId(int id)
 {
-    const char letters[] = "ABCD";
-    const char letter = (id >= 0 && id < 4) ? letters[id] : '?';
+    const char letters[] = "ABCDEFGH";
+    const char letter = (id >= 0 && id < 8) ? letters[id] : '?';
     m_titleLabel->setText(QString("Slice %1").arg(letter));
 }
 
 void PanadapterApplet::clearSliceTitle()
 {
     m_titleLabel->clear();
+}
+
+QString PanadapterApplet::sliceTitle() const
+{
+    return m_titleLabel->text();
 }
 
 void PanadapterApplet::setCwPanelVisible(bool visible)

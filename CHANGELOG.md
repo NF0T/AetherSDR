@@ -3,6 +3,242 @@
 All notable changes to AetherSDR are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [v0.8.12.2] — 2026-04-14
+
+### Bug Fixes, Meter Smoothing, Maestro Disconnect Fix
+
+### Bug Fixes
+
+**Fix two-slice band-change crash (#1372)**
+- Null-guard all spectrumForSlice() dereferences during pan creation/destruction
+
+**Fix CW key/paddle not triggering TX (#1379)**
+- Track CW key/paddle state in interlock handler so break-in keying isn't killed
+
+**Fix popout panadapter frozen after reparent (#1381)**
+- GPU render pipeline self-heals: re-initializes lazily on next render frame
+
+**Fix WSJT-X DT drift on DAX RX audio after TX cycles (#537)**
+- PipeWireAudioBridge: silence fill during TX keeps pipe clock advancing
+- VirtualAudioBridge: wall-clock-accurate silence fill (eliminates QTimer jitter)
+
+**Fix CW auto-tune buttons not shown for SSDR+ users (#1356)**
+- Set license flag before VFO widget builds filter buttons
+
+**Fix FlexControl knob press not returning to frequency mode (#1354)**
+- Knob press while in Volume/Power wheel mode returns to Frequency
+
+**Fix audio stopping after idle/screensaver with USB devices (#1361)**
+- Zombie sink watchdog, IdleState handler, device list monitor (Windows only)
+- PipeWire-safe: WASAPI-specific recovery gated behind Q_OS_WIN
+
+**Send graceful client disconnect before closing TCP (#1359)**
+- Prevents Maestro lockup on reconnect with same GUIClientID
+
+**Fix panadapter bandwidth limits (#1385)**
+- Per-model pcap-verified values; 8400 correctly grouped as single-SCU
+
+**Fix waterfall tooltip descriptions (#1365)**
+- Black level and rate tooltips corrected
+
+**Fix AppImage crash on Arch/Fedora (#1362)**
+- Removed bundled OpenSSL from AppImage (ABI conflicts with host PipeWire)
+
+### Enhancements
+
+**Asymmetric attack/release smoothing on all HGauge meters**
+- 30ms attack, 180ms release on all 13 gauge instances (Level, Compression,
+  ALC, Fwd Pwr, SWR, Temp, etc.)
+
+**Smooth slice flag S-meter bar** (community: @rfoust)
+- Same attack/release timing applied to VFO slice flag meter
+
+### CI/CD
+
+**Fix macOS Intel CI hang**
+- Skip post-run checkout cleanup on ephemeral runners
+
+---
+
+## [v0.8.12.1] — 2026-04-14
+
+### Hotfix: Bundle OpenSSL for Windows and AppImage
+
+**Fix startup crash on Windows (#1341, #1362)**
+- Bundle `libssl-3-x64.dll` and `libcrypto-3-x64.dll` in Windows installer and portable ZIP
+- Bundle `libssl.so.3` and `libcrypto.so.3` in AppImage
+- MQTT TLS support added in v0.8.12 linked OpenSSL dynamically but packaging did not include the runtime DLLs
+
+---
+
+## [v0.8.12] — 2026-04-14
+
+### Major PR Review, Community Contributions, CW & TCI Improvements
+
+### New Features
+
+**QSO audio recorder (#1297)**
+- Client-side WAV recording with auto-record on TX and idle timeout
+- Radio Side / Client Side mode selector in Radio Setup → Audio
+- Playback of last recording through speaker with live RX muted during playback
+
+**TCI IQ stream support (#1182)**
+- Stream DAX IQ data to TCI clients for panadapter/waterfall display
+- Enables TCI Remote Android app (by ON7OFF) to show live spectrum
+
+**Profile-based memory channel filtering (#1251)**
+- Filter memories by global profile in the Memory Channels dialog
+- New memories auto-tagged with active profile name
+
+**Configuring AetherSDR Controls help guide**
+- Comprehensive 659-line offline guide covering keyboard shortcuts, FlexControl,
+  MIDI, USB HID devices, Stream Deck, and serial PTT/CW (community: jensenpat)
+
+### Enhancements
+
+**Spectrum & waterfall**
+- Anchor frequency-bar drag zoom to cursor position (community: rfoust)
+- Sync waterfall history on pan/zoom — existing rows shift to match (community: rfoust)
+- Add WIDE indicator badge to spectrum display (community: jensenpat)
+- Guard noise floor auto-adjust during TX to prevent waterfall disappearing (#1302)
+- Smooth S-meter needle with asymmetric attack/release timing (community: rfoust)
+
+**CW decoder & keying**
+- CW Zero Beat button — client-side zero-beat for non-SmartSDR+ users (#1228)
+- Close button on CW decoder panel (session-only, not persistent) (#1287)
+- CPY ALL / CPY VIS buttons for copying decoded text (#1299)
+- Nordic character support: Æ, Ø, Å (#1280)
+
+**FlexControl**
+- Knob button (X4S) as configurable action (#1295)
+- Assignable wheel modes: Frequency, Volume, TX Power (#1282)
+
+**Multi-slice & multi-pan**
+- 8-slice support for Flex 6700 with 4 new slice colors (#1281)
+- Slice tab toggle (A/B/C/D) in RxApplet header — inline for ≤4 slices (#1278)
+- Fix popout panadapters on macOS/Windows — GPU rebind on reparent (#1240)
+- Guard all null spectrum() dereferences in multi-pan mode (#1199)
+
+**Network & audio**
+- Richer network status tooltip with per-stream stats (community: rfoust)
+- Non-modal Network Diagnostics dialog with audio playback section (community: rfoust)
+- Restart RX audio sink when backend stops unexpectedly (#1303)
+- Switch K-index source from hamqsl.com to NOAA SWPC WWV bulletin (#1255)
+
+### Bug Fixes
+
+**Fix XWayland GLX crash when opening child dialogs (#1233)**
+- Auto-detect Wayland sessions and set QT_QPA_PLATFORM=wayland
+- Add AETHER_NO_GPU=1 runtime fallback for software rendering
+- PII redaction regex objects survive abnormal teardown
+
+**Fix TCI audio corruption (#1239)**
+- Header length now reports per-channel sample count per TCI v2.0 spec
+- Detect mono vs stereo TX audio from WSJT-X
+- Handle string format names in audio_stream_sample_type negotiation
+
+**Fix antenna dropdown not populating in overlay menu (#1260)**
+- Moved antenna list wiring to per-pan in wirePanadapter() with initial sync
+
+**Fix band button reselection (#1284)**
+- Removed same-band guard that blocked re-selecting GEN/transverter bands
+
+**Fix frequency offset calibration Start button (#1237)**
+- Added missing `radio calibrate` command
+
+**Filter RX-only antenna ports from TX selector (#1238)**
+- Skip ports starting with "RX" in TX antenna dropdown
+
+**Guard QImage::scaled() null waterfall (#1250)**
+- Prevents permanent waterfall loss during rapid resize on compositing WMs
+
+**Fix audio input device combo (#1334)**
+- Shows active device instead of system default in Radio Setup
+
+### Contributors
+
+- **rfoust** — zoom anchor, waterfall reprojection, S-meter smoothing, network diagnostics, pan-follow-VFO (in progress)
+- **jensenpat** — WIDE indicator, controls help guide
+- **chibondking** — pan-follow-VFO (in progress)
+- **wa2n-code** — K-index NOAA source investigation
+- **rskunath** — XWayland crash report with detailed logs
+- **WX7Y** — TCI audio persistence and testing
+- **LB2EG** — FlexControl X4S protocol documentation
+
+---
+
+## [v0.8.11] — 2026-04-12
+
+### MQTT Station Integration, Triage Fixes, macOS DAX Fix
+
+### New Features
+
+**MQTT station device integration (#699)**
+- Subscribe to MQTT topics and display device status in the applet panel
+- User-defined publish buttons for rotator, antenna, and device control
+- Panadapter overlay: prefix topics with * to show values on the spectrum
+- Bundled libmosquitto — no system dependency needed
+- Requested by VA3MW for Node-RED antenna/rotator integration
+
+### Bug Fixes
+
+**Antenna Genius race condition (#1213)**
+- Always send saved antenna preference on band change; don't skip when AG
+  coincidentally reports the correct antenna first (community: scott-mss)
+
+**Heat map QPainter fallback (#1220, #1180)**
+- Added heat map gradient to the QPainter spectrum path for systems where
+  GPU rendering is unavailable (Windows Intel iGPU)
+
+**DAX channel persistence (#1221)**
+- Per-slice DAX channel saved/restored across restarts via AppSettings
+- DAX IQ channel tracked on PanadapterModel from radio status; overlay synced
+
+**macOS DAX audio corrupted (#1242)**
+- VirtualAudioBridge and PCC_IF_NARROW DAX path updated to float32
+- Fixes VARA HF / WSJT-X audio corruption on macOS (community: pepefrog1234)
+
+**VFO filter label mismatch (#1225)**
+- VFO header now shows filter width (hi − lo), not filter edge value
+
+**TX power meter jitter (#980)**
+- Asymmetric smoothing: fast attack, slow decay for stable TX meter
+
+**Oscillator live-update (#967)**
+- Radio Setup oscillator status updates live when external 10 MHz reference
+  is plugged/unplugged (community fix: NF0T)
+
+**K-index rounding (#1232)**
+- Parse K/A-index as double for decimal XML values from hamqsl.com
+
+**IQ Enable button state (#1221)**
+- Reset DAX IQ buttons on reconnect (streams are per-session)
+
+**File dialog z-order (#1011)**
+- Background image chooser uses spectrum widget as parent
+
+**Status bar cleanup (#1231)**
+- Removed redundant "RADIO:" prefix label
+
+**Cursor button removed**
+- Removed from Display panel (redundant with Tune Guides feature)
+
+**NR2 + Opus documented (#1222)**
+- Help docs updated: NR2 incompatible with Opus, use RN2/NR4/DFNR instead
+
+**macOS NSLocalNetworkUsageDescription (#1242)**
+- Required for UDP broadcast radio discovery on modern macOS
+
+### Contributors
+
+- **pepefrog1234** — macOS DAX float32 fix + NSLocalNetworkUsageDescription
+- **scott-mss** — Antenna Genius bug report with detailed reproduction
+- **NF0T** — Oscillator live-update fix
+- **jensenpat** — VPN source-path binding (v0.8.10), AGC off level, CMake fix
+- **wa2n-code** — K-index rounding report, NR2+Opus investigation
+
+---
+
 ## [v0.8.10] — 2026-04-11
 
 ### Pop-Out Panadapters, VPN Source-Path Binding, Float32 Fixes

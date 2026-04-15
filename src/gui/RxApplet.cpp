@@ -16,6 +16,8 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QMenu>
+#include <QToolButton>
+#include <QButtonGroup>
 #include <QInputDialog>
 #include "core/AppSettings.h"
 #include <QAction>
@@ -238,9 +240,23 @@ void RxApplet::buildUI()
     root->setSpacing(2);
     outer->addWidget(inner);
 
+    // ── Slice tab toggle row (populated later by setMaxSlices) ──────────
+    {
+        m_sliceTabRow = new QWidget;
+        m_sliceTabRow->setVisible(false);  // hidden until setMaxSlices called
+        auto* tabLayout = new QHBoxLayout(m_sliceTabRow);
+        tabLayout->setContentsMargins(0, 0, 0, 0);
+        tabLayout->setSpacing(2);
+        m_sliceGroup = new QButtonGroup(this);
+        m_sliceGroup->setExclusive(true);
+        tabLayout->addStretch();
+        root->addWidget(m_sliceTabRow);
+    }
+
     // ── Header: slice badge | lock | RX ant | TX ant | filter width | QSK ──
     {
         auto* row = new QHBoxLayout;
+        m_headerRow = row;
         row->setSpacing(3);
 
         // Slice letter badge (A/B/C/D)
@@ -299,6 +315,8 @@ void RxApplet::buildUI()
             QMenu menu(this);
             const QString cur = m_slice ? m_slice->txAntenna() : "";
             for (const QString& ant : m_antList) {
+                if (ant.startsWith("RX", Qt::CaseInsensitive))
+                    continue;  // skip RX-only antenna ports
                 QAction* act = menu.addAction(ant);
                 act->setCheckable(true);
                 act->setChecked(ant == cur);
@@ -974,6 +992,94 @@ void RxApplet::setAfGain(int pct)
 }
 
 // ─── Slice wiring ─────────────────────────────────────────────────────────────
+
+void RxApplet::setMaxSlices(int maxSlices)
+{
+    // Only create buttons once
+    if (!m_sliceBtns.isEmpty()) return;
+
+    if (maxSlices <= 1) {
+        m_sliceTabRow->setVisible(false);
+        return;
+    }
+
+    // For ≤4 slices: inline on the header row (replace the static badge).
+    // For >4 slices (6700): use the separate row above the header.
+    const bool useInline = (maxSlices <= 4);
+    QHBoxLayout* targetLayout = nullptr;
+    int insertIdx = 0;
+
+    if (useInline) {
+        m_sliceBadge->setVisible(false);
+        targetLayout = m_headerRow;
+        // Insert at position 0 (where the badge was)
+        insertIdx = 0;
+    } else {
+        auto* layout = qobject_cast<QHBoxLayout*>(m_sliceTabRow->layout());
+        targetLayout = layout;
+        insertIdx = layout->count() - 1;  // before trailing stretch
+    }
+
+    for (int i = 0; i < maxSlices; ++i) {
+        auto* btn = new QToolButton;
+        btn->setText(QString(QChar('A' + i)));
+        btn->setCheckable(true);
+        btn->setEnabled(false);  // disabled until a slice occupies this slot
+        btn->setFixedSize(22, 20);
+
+        const char* color = (i < kSliceColorCount) ? kSliceColors[i].hexActive : "#888888";
+        btn->setStyleSheet(
+            QString("QToolButton { background: #2a2a2a; color: %1; border: 1px solid %1; "
+                    "border-radius: 3px; font-weight: bold; font-size: 10px; padding: 0; }"
+                    "QToolButton:checked { background: %1; color: #000000; }"
+                    "QToolButton:disabled { background: #1a1a1a; color: #444444; "
+                    "border-color: #333333; }").arg(color));
+
+        m_sliceGroup->addButton(btn, i);
+        targetLayout->insertWidget(insertIdx + i, btn);
+        m_sliceBtns.append(btn);
+    }
+
+    // Wire button clicks to emit sliceActivationRequested
+    connect(m_sliceGroup, QOverload<int>::of(&QButtonGroup::idClicked),
+            this, [this](int /*buttonId*/) {
+        auto* btn = qobject_cast<QToolButton*>(m_sliceGroup->checkedButton());
+        if (btn) {
+            bool ok = false;
+            int sliceId = btn->property("sliceId").toInt(&ok);
+            if (ok) emit sliceActivationRequested(sliceId);
+        }
+    });
+
+    if (!useInline) {
+        m_sliceTabRow->setVisible(true);
+    }
+}
+
+void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSliceId)
+{
+    if (m_sliceBtns.isEmpty()) return;
+
+    // Build a map: slot index → slice ID for open slices
+    // sliceId 0 = slot A, sliceId 1 = slot B, etc.
+    QMap<int, int> slotToId;
+    for (auto* s : slices)
+        slotToId[s->sliceId()] = s->sliceId();
+
+    QSignalBlocker blocker(m_sliceGroup);
+    for (int i = 0; i < m_sliceBtns.size(); ++i) {
+        auto* btn = m_sliceBtns[i];
+        if (slotToId.contains(i)) {
+            btn->setEnabled(true);
+            btn->setProperty("sliceId", slotToId[i]);
+            btn->setChecked(i == activeSliceId);
+        } else {
+            btn->setEnabled(false);
+            btn->setChecked(false);
+            btn->setProperty("sliceId", QVariant());
+        }
+    }
+}
 
 void RxApplet::setSlice(SliceModel* slice)
 {

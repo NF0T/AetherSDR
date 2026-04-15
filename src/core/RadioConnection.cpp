@@ -148,6 +148,28 @@ void RadioConnection::disconnectFromRadio()
     m_handle = 0;
 }
 
+void RadioConnection::gracefulDisconnect(quint32 handle, const QString& rxStreamId)
+{
+    if (!m_socket || m_socket->state() == QAbstractSocket::UnconnectedState) {
+        disconnectFromRadio();
+        return;
+    }
+
+    // Send stream remove + client disconnect before closing TCP so the radio
+    // tears down our session cleanly. Without this the Maestro can lock up
+    // when reconnecting with the same GUIClientID. (#1359)
+    if (!rxStreamId.isEmpty()) {
+        QString cmd = QString("C0|stream remove 0x%1\n").arg(rxStreamId);
+        m_socket->write(cmd.toUtf8());
+    }
+    QString cmd = QString("C0|client disconnect handle=0x%1\n").arg(handle, 0, 16);
+    m_socket->write(cmd.toUtf8());
+    m_socket->flush();
+    m_socket->waitForBytesWritten(500);
+
+    disconnectFromRadio();
+}
+
 void RadioConnection::writeCommand(quint32 seq, const QString& command)
 {
     if (!isConnected() || !m_socket) return;

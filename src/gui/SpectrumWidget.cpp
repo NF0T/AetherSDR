@@ -24,6 +24,7 @@
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QApplication>
+#include <QGuiApplication>
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QUrl>
@@ -126,6 +127,16 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // context because the parent window's surface type is RasterSurface, not MetalSurface.
     // A native window gives QRhiWidget its own Metal-capable surface to render into.
     setAttribute(Qt::WA_NativeWindow);
+#  else
+    // Warn if running under XWayland — GLX context switching between the main
+    // window and child dialogs (e.g. Radio Setup) can trigger BadAccess (#1233).
+    // main.cpp normally forces native Wayland, but log it if we ended up here.
+    if (QGuiApplication::platformName() == QLatin1String("xcb")
+        && qEnvironmentVariable("XDG_SESSION_TYPE") == QLatin1String("wayland")) {
+        qWarning() << "SpectrumWidget: running under XWayland with OpenGL — "
+                      "GLX context issues may occur. Set QT_QPA_PLATFORM=wayland "
+                      "or AETHER_NO_GPU=1 to work around (#1233)";
+    }
 #  endif
 #else
     setAttribute(Qt::WA_OpaquePaintEvent);
@@ -187,6 +198,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     auto emitZoom = [this](double factor) {
         const double newBw = m_bandwidthMhz * factor;
         if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return; }  // at limit
+        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, m_centerMhz, newBw);
         m_bandwidthMhz = newBw;
         markOverlayDirty();
         emit bandwidthChangeRequested(newBw);
@@ -475,10 +487,79 @@ void SpectrumWidget::clearDisplay()
     markOverlayDirty();
 }
 
+void SpectrumWidget::resetGpuResources()
+{
+#ifdef AETHER_GPU_SPECTRUM
+    // On macOS/Windows, the GPU surface doesn't survive reparenting — tear
+    // down old pipelines so initialize() rebuilds them for the new window.
+    // On Linux (OpenGL), a simple update() is sufficient (#1240).
+#ifndef Q_OS_LINUX
+    releaseResources();
+#endif
+#endif
+    update();
+}
+
+void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidthMhz,
+                                        double newCenterMhz, double newBandwidthMhz)
+{
+    if (m_waterfall.isNull()) {
+        return;
+    }
+    if (oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
+        return;
+    }
+
+    const int imageWidth = m_waterfall.width();
+    const int imageHeight = m_waterfall.height();
+    if (imageWidth <= 0 || imageHeight <= 0) {
+        return;
+    }
+
+    const double oldStartMhz = oldCenterMhz - oldBandwidthMhz / 2.0;
+    const double oldEndMhz = oldCenterMhz + oldBandwidthMhz / 2.0;
+    const double newStartMhz = newCenterMhz - newBandwidthMhz / 2.0;
+    const double newEndMhz = newCenterMhz + newBandwidthMhz / 2.0;
+    const double overlapStartMhz = std::max(oldStartMhz, newStartMhz);
+    const double overlapEndMhz = std::min(oldEndMhz, newEndMhz);
+
+    QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
+    reprojected.fill(Qt::black);
+
+    if (overlapEndMhz > overlapStartMhz) {
+        const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+        const double srcRight = (overlapEndMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+        const double dstLeft = (overlapStartMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+        const double dstRight = (overlapEndMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+
+        if (srcRight > srcLeft && dstRight > dstLeft) {
+            QPainter painter(&reprojected);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+            painter.drawImage(QRectF(dstLeft, 0.0, dstRight - dstLeft, imageHeight),
+                              m_waterfall,
+                              QRectF(srcLeft, 0.0, srcRight - srcLeft, imageHeight));
+        }
+    }
+
+    m_waterfall = std::move(reprojected);
+    m_prevTileScanline.clear();
+#ifdef AETHER_GPU_SPECTRUM
+    m_wfTexFullUpload = true;
+#endif
+}
+
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
+
+    const double oldCenterMhz = m_centerMhz;
+    const double oldBandwidthMhz = m_bandwidthMhz;
+
+    if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
+        reprojectWaterfall(oldCenterMhz, oldBandwidthMhz, centerMhz, bandwidthMhz);
+    }
+
     qDebug() << "SpectrumWidget::setFrequencyRange center="
              << QString::number(centerMhz, 'f', 6)
              << "bw=" << QString::number(bandwidthMhz, 'f', 6)
@@ -510,7 +591,7 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 // ─── Slice color table (shared via SliceColors.h) ────────────────────────────
 
 static QColor sliceColor(int sliceId, bool active) {
-    const auto& c = kSliceColors[sliceId & 3];
+    const auto& c = kSliceColors[sliceId % kSliceColorCount];
     if (active) return QColor(c.r, c.g, c.b);
     return QColor(c.dr, c.dg, c.db);
 }
@@ -632,7 +713,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
 
     // Noise floor auto-adjust: every 10 frames, measure noise floor and
     // adjust min_dbm so it sits at the user's chosen position.
-    if (m_noiseFloorEnable && !m_smoothed.isEmpty()) {
+    if (m_noiseFloorEnable && !m_transmitting && !m_smoothed.isEmpty()) {
         if (++m_noiseFloorFrameCount >= 10) {
             m_noiseFloorFrameCount = 0;
 
@@ -901,6 +982,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     if (ev->button() == Qt::LeftButton)
         m_clickPressPos = ev->position().toPoint();
 
+    // Click on prop forecast overlay → open dashboard
+    if (ev->button() == Qt::LeftButton && !m_propClickRect.isNull()) {
+        const QPoint pos(static_cast<int>(ev->position().x()), y);
+        if (m_propClickRect.contains(pos)) {
+            emit propForecastClicked();
+            ev->accept();
+            return;
+        }
+    }
+
     // Click on a spot label → tune to that frequency
     if (m_showSpots && ev->button() == Qt::LeftButton) {
         const QPoint pos(static_cast<int>(ev->position().x()), y);
@@ -939,6 +1030,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         m_draggingBandwidth = true;
         m_bwDragStartX = static_cast<int>(ev->position().x());
         m_bwDragStartBw = m_bandwidthMhz;
+        const double mouseXFrac = ev->position().x() / width() - 0.5;
+        m_bwDragAnchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
         setCursor(Qt::SizeHorCursor);
         ev->accept();
         return;
@@ -1014,7 +1107,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             if (!m_offScreenRects[oi].isNull() &&
                 m_offScreenRects[oi].contains(QPoint(mx, y))) {
                 const auto& so = m_sliceOverlays[oi];
-                const QChar letter = QChar('A' + (so.sliceId & 3));
+                const QChar letter = QChar('A' + (so.sliceId % kSliceColorCount));
                 QMenu menu(this);
                 menu.addAction(QString("Close Slice %1").arg(letter), this,
                     [this, id = so.sliceId]{ emit sliceCloseRequested(id); });
@@ -1164,12 +1257,17 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
     }
 
-    // Check for click near an inactive slice marker or its badge — switch active
+    // Check for click on an inactive slice overlay — switch active so the next
+    // interaction targets the clicked slice's passband/marker.
     if (y < specH) {
         const int mx = static_cast<int>(ev->position().x());
         for (const auto& so : m_sliceOverlays) {
             if (so.isActive) continue;
-            int sliceX = mhzToX(so.freqMhz);
+            const int sliceX = mhzToX(so.freqMhz);
+            const int loX = mhzToX(so.freqMhz + so.filterLowHz / 1.0e6);
+            const int hiX = mhzToX(so.freqMhz + so.filterHighHz / 1.0e6);
+            const int left = std::min(loX, hiX);
+            const int right = std::max(loX, hiX);
             // Slice badge area in top 25px
             if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25) {
                 emit sliceClicked(so.sliceId);
@@ -1179,6 +1277,17 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             // Center line anywhere vertically
             if (std::abs(mx - sliceX) <= 8) {
                 emit sliceClicked(so.sliceId);
+                ev->accept();
+                return;
+            }
+            // Filter passband body anywhere in the FFT area: activate and
+            // immediately enter VFO drag so the first click-drag retunes.
+            if (mx >= left && mx <= right) {
+                emit sliceClicked(so.sliceId);
+                m_draggingVfo = true;
+                m_vfoDragOffsetHz = static_cast<int>(
+                    std::round((xToMhz(mx) - so.freqMhz) * 1.0e6));
+                setCursor(Qt::SizeHorCursor);
                 ev->accept();
                 return;
             }
@@ -1263,8 +1372,11 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         if (wfHeight > 0 && width() > 0) {
             QImage newWf(width(), wfHeight, QImage::Format_RGB32);
             newWf.fill(Qt::black);
-            if (!m_waterfall.isNull())
-                newWf = m_waterfall.scaled(width(), wfHeight, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+            if (!m_waterfall.isNull()) {
+                QImage scaled = m_waterfall.scaled(width(), wfHeight, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+                if (!scaled.isNull())
+                    newWf = std::move(scaled);
+            }
             m_waterfall = std::move(newWf);
             m_wfWriteRow = 0;
         }
@@ -1289,14 +1401,14 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int dx = static_cast<int>(ev->position().x()) - m_bwDragStartX;
         // 4x multiplier: dragging 1/4 of widget width doubles/halves bandwidth
         const double scale = std::pow(2.0, static_cast<double>(-dx) / (width() / 4.0));
-        const double newBw = std::clamp(m_bwDragStartBw * scale, 0.004, 14.0);
-        // Keep the current pan center on zoom — don't snap to VFO. (#1093)
-        double zoomCenter = m_centerMhz;
+        const double newBw = std::clamp(m_bwDragStartBw * scale, m_minBwMhz, m_maxBwMhz);
+        const double mouseXFrac = static_cast<double>(m_bwDragStartX) / width() - 0.5;
+        const double zoomCenter = m_bwDragAnchorMhz - mouseXFrac * newBw;
+        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw);
         m_bandwidthMhz = newBw;
         m_centerMhz = zoomCenter;
         markOverlayDirty();
         emit bandwidthChangeRequested(newBw);
-        emit centerChangeRequested(zoomCenter);
         ev->accept();
         return;
     }
@@ -1333,6 +1445,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // Dragging right moves the view right → center shifts left
         const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
         const double newCenter = m_panDragStartCenter + deltaMhz;
+        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
         m_centerMhz = newCenter;
         markOverlayDirty();
         emit centerChangeRequested(newCenter);
@@ -1437,6 +1550,12 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         }
                     }
                 }
+                // Prop forecast overlay click target
+                if (!foundCursor && !m_propClickRect.isNull()
+                    && m_propClickRect.contains(QPoint(mx, y))) {
+                    setCursor(Qt::PointingHandCursor);
+                    foundCursor = true;
+                }
                 if (!foundCursor) setCursor(Qt::CrossCursor);
             }
         }
@@ -1510,6 +1629,9 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     if (m_draggingBandwidth) {
         m_draggingBandwidth = false;
         setCursor(Qt::CrossCursor);
+        // Emit final center after drag completes — not during drag to avoid
+        // flooding the radio with commands on every mouse move (#1313).
+        emit centerChangeRequested(m_centerMhz);
         ev->accept();
         return;
     }
@@ -1723,6 +1845,7 @@ bool SpectrumWidget::event(QEvent* ev)
             const double mouseXFrac = ge->position().x() / width() - 0.5;
             const double anchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
             const double newCenter = anchorMhz - mouseXFrac * newBw;
+            reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
             m_bandwidthMhz = newBw;
             m_centerMhz = newCenter;
             markOverlayDirty();
@@ -1817,9 +1940,12 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
     if (wfHeight > 0 && width() > 0) {
         QImage newWf(width(), wfHeight, QImage::Format_RGB32);
         newWf.fill(Qt::black);
-        if (!m_waterfall.isNull())
-            newWf = m_waterfall.scaled(width(), wfHeight, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-        m_waterfall = newWf;
+        if (!m_waterfall.isNull()) {
+            QImage scaled = m_waterfall.scaled(width(), wfHeight, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+            if (!scaled.isNull())
+                newWf = std::move(scaled);
+        }
+        m_waterfall = std::move(newWf);
         m_wfWriteRow = 0;
     }
 
@@ -2230,12 +2356,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         if (m_centerMhz != m_lastDetectCenter || m_bandwidthMhz != m_lastDetectBw ||
             m_refLevel != m_lastDetectRef || m_dynamicRange != m_lastDetectDyn ||
             m_spectrumFrac != m_lastDetectFrac ||
-            m_wnbActive != m_lastDetectWnb || m_rfGainValue != m_lastDetectRfGain) {
+            m_wnbActive != m_lastDetectWnb || m_rfGainValue != m_lastDetectRfGain ||
+            m_wideActive != m_lastDetectWide) {
             markOverlayDirty();
             m_lastDetectCenter = m_centerMhz; m_lastDetectBw = m_bandwidthMhz;
             m_lastDetectRef = m_refLevel; m_lastDetectDyn = m_dynamicRange;
             m_lastDetectFrac = m_spectrumFrac;
             m_lastDetectWnb = m_wnbActive; m_lastDetectRfGain = m_rfGainValue;
+            m_lastDetectWide = m_wideActive;
         }
     }
 
@@ -2371,17 +2499,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     && m_propKIndex >= 0
                     && m_propAIndex >= 0
                     && m_propSfi > 0;
-                if (m_wnbActive || m_rfGainValue != 0 || showProp) {
+                if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
                     QFont indFont(p.font().family(), 14, QFont::Bold);
                     p.setFont(indFont);
                     p.setPen(QColor(0xc8, 0xd8, 0xe8, 180));
                     const QFontMetrics fm(indFont);
                     int y = specRect.top() + fm.ascent() + 4;
-                    // Build combined label (left to right: prop, WNB, RF gain), right-align
+                    // Build combined label (left to right: prop, WNB, RF gain, WIDE), right-align
                     QString label;
                     if (showProp) {
                         label += QString("K%1  A%2  SFI %3")
-                            .arg(m_propKIndex)
+                            .arg(m_propKIndex, 0, 'f', 2)
                             .arg(m_propAIndex)
                             .arg(m_propSfi);
                     }
@@ -2394,8 +2522,41 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                         label += QStringLiteral("%1%2 dB")
                             .arg(m_rfGainValue > 0 ? "+" : "").arg(m_rfGainValue);
                     }
+                    if (m_wideActive) {
+                        if (!label.isEmpty()) { label += QStringLiteral("   "); }
+                        label += QStringLiteral("WIDE");
+                    }
                     int x = specRect.right() - DBM_STRIP_W - 8 - fm.horizontalAdvance(label);
                     p.drawText(x, y, label);
+
+                    // Store click rect for the prop portion only
+                    if (showProp) {
+                        QString propText = QString("K%1  A%2  SFI %3")
+                            .arg(m_propKIndex, 0, 'f', 2)
+                            .arg(m_propAIndex)
+                            .arg(m_propSfi);
+                        int propW = fm.horizontalAdvance(propText);
+                        m_propClickRect = QRect(x, y - fm.ascent(), propW, fm.height());
+                    } else {
+                        m_propClickRect = QRect();
+                    }
+                }
+
+                // MQTT device status overlay (#699)
+                if (!m_mqttDisplayValues.isEmpty()) {
+                    QFont mqttFont(p.font().family(), 12, QFont::Bold);
+                    p.setFont(mqttFont);
+                    p.setPen(QColor(0x80, 0xd0, 0xff, 200));
+                    const QFontMetrics fm2(mqttFont);
+                    QString mqttLabel;
+                    for (auto it = m_mqttDisplayValues.constBegin();
+                         it != m_mqttDisplayValues.constEnd(); ++it) {
+                        if (!mqttLabel.isEmpty()) { mqttLabel += QStringLiteral("   "); }
+                        mqttLabel += it.key() + QStringLiteral(": ") + it.value();
+                    }
+                    int mx = specRect.right() - DBM_STRIP_W - 8 - fm2.horizontalAdvance(mqttLabel);
+                    int my = specRect.top() + fm2.ascent() + 22;
+                    p.drawText(mx, my, mqttLabel);
                 }
             }
 
@@ -2749,7 +2910,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
 void SpectrumWidget::render(QRhiCommandBuffer* cb)
 {
-    if (!m_rhiInitialized) return;
+    if (!m_rhiInitialized) {
+        initialize(cb);
+        if (!m_rhiInitialized) return;
+    }
     renderGpuFrame(cb);
 }
 
@@ -2954,7 +3118,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             && m_propKIndex >= 0
             && m_propAIndex >= 0
             && m_propSfi > 0;
-        if (m_wnbActive || m_rfGainValue != 0 || showProp) {
+        if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
             QFont indFont = p.font();
             indFont.setPointSize(18);
             indFont.setBold(true);
@@ -2967,7 +3131,15 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
             int x = rightEdge;
 
-            // RF Gain (rightmost)
+            // WIDE (rightmost)
+            if (m_wideActive) {
+                int ww = fm.horizontalAdvance("WIDE");
+                x -= ww;
+                p.drawText(x, topY, "WIDE");
+                x -= 10;
+            }
+
+            // RF Gain (to the left of WIDE)
             if (m_rfGainValue != 0) {
                 QString gainStr = (m_rfGainValue > 0)
                     ? QString("+%1dB").arg(m_rfGainValue)
@@ -2989,12 +3161,15 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             // Prop forecast (leftmost: "K3  A12  SFI 110")
             if (showProp) {
                 QString propStr = QString("K%1  A%2  SFI %3")
-                    .arg(m_propKIndex)
+                    .arg(m_propKIndex, 0, 'f', 2)
                     .arg(m_propAIndex)
                     .arg(m_propSfi);
                 int pw = fm.horizontalAdvance(propStr);
                 x -= pw;
                 p.drawText(x, topY, propStr);
+                m_propClickRect = QRect(x, topY - fm.ascent(), pw, fm.height());
+            } else {
+                m_propClickRect = QRect();
             }
         }
     }
@@ -3875,7 +4050,7 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
 
         const bool isRight = (so.freqMhz > endMhz);
         const QColor col = sliceColor(so.sliceId, so.isActive);
-        const QChar letter = QChar('A' + (so.sliceId & 3));
+        const QChar letter = QChar('A' + (so.sliceId % kSliceColorCount));
 
         long long hz = static_cast<long long>(std::round(so.freqMhz * 1e6));
         int mhzPart = static_cast<int>(hz / 1000000);

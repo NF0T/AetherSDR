@@ -7,6 +7,8 @@
 #include <QVector>
 #include <QStringList>
 #include <QSet>
+#include <QTimer>
+#include <QElapsedTimer>
 
 class QPushButton;
 class ScrollableLabel;
@@ -96,6 +98,7 @@ Q_SIGNALS:
     void swapRequested();
     void autotuneRequested(bool intermittent);  // CW auto-tune: false=stop, true=loop
     void autotuneOnceRequested();               // CW auto-tune one-shot
+    void zeroBeatRequested();                   // client-side CW zero-beat
     void addSpotRequested(double freqMhz);
     void sliceActivationRequested(int sliceId);
 
@@ -107,6 +110,10 @@ protected:
     void mouseReleaseEvent(QMouseEvent* ev) override;
 
 private:
+    void updateSignalMeterTarget();
+    void animateSignalMeter();
+    static float signalDbmToMeterFraction(float dbm);
+
     void buildUI();
     void buildTabContent();
     void updateTxBadgeStyle(bool isTx);
@@ -127,6 +134,10 @@ private:
     bool           m_updatingFromModel{false};
     bool           m_lastOnLeft{true};
     float          m_signalDbm{-130.0f};
+    QTimer         m_signalMeterAnimation;
+    QElapsedTimer  m_signalMeterElapsed;
+    float          m_signalMeterFraction{0.0f};
+    float          m_targetSignalMeterFraction{0.0f};
     bool           m_collapsed{false};
     bool           m_collapseToggled{false};  // guard: absorb release after toggle
     QPointer<QLabel> m_collapsedFreqLabel;
@@ -144,6 +155,11 @@ private:
     QPointer<QPushButton> m_recordBtn;
     QPointer<QPushButton> m_playBtn;
     QTimer* m_recordPulse{nullptr};
+
+    static constexpr int kSignalMeterAnimationIntervalMs = 8;
+    static constexpr float kSignalMeterAttackTimeSeconds = 0.045f;
+    static constexpr float kSignalMeterReleaseTimeSeconds = 0.180f;
+    static constexpr float kSignalMeterSnapEpsilon = 0.001f;
 
     // Frequency / meter
     QLabel* m_freqLabel{nullptr};
@@ -179,6 +195,7 @@ private:
     bool         m_savedSquelchOn{false};
 public:
     void setDiversityAllowed(bool allowed);
+    void setSmartSdrPlus(bool has);
 private:
     QSlider* m_sqlSlider{nullptr};
     QComboBox* m_agcCmb{nullptr};
@@ -235,6 +252,8 @@ private:
     // CW autotune buttons (only visible in CW mode)
     QPushButton* m_autotuneOnceBtn{nullptr};
     QPushButton* m_autotuneLoopBtn{nullptr};
+    QPushButton* m_zeroBeatBtn{nullptr};
+    bool         m_hasSmartSdrPlus{false};
     // RIT/XIT tab
     QPushButton* m_ritBtn{nullptr};
     QPushButton* m_xitBtn{nullptr};

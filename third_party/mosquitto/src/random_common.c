@@ -31,6 +31,8 @@ Contributors:
 #  include <openssl/rand.h>
 #elif defined(HAVE_GETRANDOM)  /* From CMakeLists.txt */
 # include <sys/random.h>
+#elif defined(__APPLE__)
+#  include <stdlib.h>
 #elif defined(__linux__) && defined(__GLIBC__) /* For legacy Makefiles */
 #  if __GLIBC_PREREQ(2, 25)
 #    include <sys/random.h>
@@ -65,8 +67,20 @@ int mosquitto_getrandom(void *bytes, int count)
 	}
 
 	CryptReleaseContext(provider, 0);
-#else /* For legacy Makefiles */
-#  error "No suitable random function found."
+#elif defined(__APPLE__)
+	arc4random_buf(bytes, (size_t)count);
+	rc = MOSQ_ERR_SUCCESS;
+#else
+	/* Fallback: read from /dev/urandom */
+	{
+		FILE *f = fopen("/dev/urandom", "rb");
+		if(f){
+			if(fread(bytes, 1, (size_t)count, f) == (size_t)count){
+				rc = MOSQ_ERR_SUCCESS;
+			}
+			fclose(f);
+		}
+	}
 #endif
 	return rc;
 }

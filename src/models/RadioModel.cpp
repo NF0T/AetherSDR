@@ -331,6 +331,14 @@ void RadioModel::disconnectFromRadio()
         m_wanConn->disconnect(this);  // remove signal connections to prevent duplicates on reconnect (#224)
         m_wanConn->disconnectFromRadio();
         m_wanConn = nullptr;
+    } else if (m_connection->isConnected()) {
+        // Graceful disconnect: send stream remove + client disconnect and
+        // wait for TCP flush before closing. Prevents Maestro lockup. (#1359)
+        quint32 handle = clientHandle();
+        QString streamId = m_rxAudioStreamId;
+        QMetaObject::invokeMethod(m_connection, [this, handle, streamId]() {
+            m_connection->gracefulDisconnect(handle, streamId);
+        });
     } else {
         QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
     }
@@ -340,7 +348,14 @@ void RadioModel::forceDisconnect()
 {
     // Close TCP without setting m_intentionalDisconnect — allows auto-reconnect
     // when the radio reappears in discovery or via the repeating reconnect timer.
-    QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
+    if (m_connection->isConnected()) {
+        quint32 handle = clientHandle();
+        QMetaObject::invokeMethod(m_connection, [this, handle]() {
+            m_connection->gracefulDisconnect(handle, QString());
+        });
+    } else {
+        QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
+    }
 }
 
 void RadioModel::setTransmit(bool tx)
@@ -372,12 +387,14 @@ QString RadioModel::audioCompressionParam() const
 
 void RadioModel::sendCwKey(bool down)
 {
+    m_cwKeyActive = down;
     QString cmd = QString("cw key %1").arg(down ? 1 : 0);
     sendNetCwCommand(cmd);
 }
 
 void RadioModel::sendCwPaddle(bool dit, bool dah)
 {
+    m_cwKeyActive = dit || dah;
     QString cmd = QString("cw key %1 %2").arg(dit ? 1 : 0).arg(dah ? 1 : 0);
     sendNetCwCommand(cmd);
 }
@@ -1158,6 +1175,7 @@ void RadioModel::onDisconnected()
         restoreTuneInhibit();
 
     m_txRequested = false;
+    m_cwKeyActive = false;
     if (m_txAudioGate) {
         m_txAudioGate = false;
         emit txAudioGateChanged(false);
@@ -1241,6 +1259,7 @@ void RadioModel::startNetworkMonitor()
     m_stateCountdown = 0;
     m_lastErrorCount = 0;
     m_lastPingRtt = 0;
+    m_maxPingRtt = 0;
     m_pingMissCount = 0;
 
     // RTT is read from kernel TCP_INFO (smoothed RTT from TCP ACK timing),
@@ -2114,7 +2133,7 @@ void RadioModel::onStatusReceived(const QString& object,
             const bool radioTx = (state == "TRANSMITTING");
             emit radioTransmittingChanged(radioTx);
 
-            if (!m_txOwnedByUs || (!m_txRequested && !m_transmitModel.isTuning())) {
+            if (!m_txOwnedByUs || (!m_txRequested && !m_cwKeyActive && !m_transmitModel.isTuning())) {
                 // Another client owns TX, or local unkey requested:
                 // force local TX/audio gate off through all interlock states.
                 m_transmitModel.setTransmitting(false);
@@ -2201,8 +2220,10 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
     bool changed = false;
     if (kvs.contains("model"))    { m_model = kvs["model"]; changed = true; }
     if (kvs.contains("slices")) {
-        int n = kvs["slices"].toInt();
-        if (n > m_maxSlices) m_maxSlices = n;  // track highest seen
+        // slices=N reports available (unused) slots; total capacity = open + available
+        int available = kvs["slices"].toInt();
+        int total = m_slices.size() + available;
+        if (total > m_maxSlices) m_maxSlices = total;
         changed = true;
     }
     if (kvs.contains("callsign")) { m_callsign = kvs["callsign"]; changed = true; }

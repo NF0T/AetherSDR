@@ -27,7 +27,9 @@ extern "C" {
 #endif
 
 #ifdef WIN32
-#  ifdef libmosquitto_common_EXPORTS
+#  ifdef LIBMOSQCOMMON_STATIC
+#    define libmosqcommon_EXPORT
+#  elif defined(libmosquitto_common_EXPORTS)
 #    define libmosqcommon_EXPORT __declspec(dllexport)
 #  else
 #    define libmosqcommon_EXPORT  __declspec(dllimport)

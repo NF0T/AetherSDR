@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QPainter>
 #include <QDir>
 #include <QStandardPaths>
@@ -571,6 +572,7 @@ void PhoneCwApplet::buildCwPanel()
 
         vbox->addLayout(row);
     }
+
 }
 
 // ── Mode switching ───────────────────────────────────────────────────────────
@@ -729,5 +731,7 @@ void PhoneCwApplet::updateAlc(float alc)
 {
     m_alcGauge->setValue(alc);
 }
+
+
 
 } // namespace AetherSDR

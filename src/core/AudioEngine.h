@@ -14,6 +14,8 @@
 #include <QByteArray>
 #include <QElapsedTimer>
 
+class QMediaDevices;
+
 #include <functional>
 #include <memory>
 #include <vector>
@@ -156,6 +158,10 @@ public:
     void setInputDevice(const QAudioDevice& dev);
     QAudioDevice outputDevice() const { return m_outputDevice; }
     QAudioDevice inputDevice()  const { return m_inputDevice; }
+    qsizetype rxBufferBytes() const { return m_rxBufferBytes.load(); }
+    qsizetype rxBufferPeakBytes() const { return m_rxBufferPeakBytes.load(); }
+    quint64 rxBufferUnderrunCount() const { return m_rxBufferUnderrunCount.load(); }
+    int rxBufferSampleRate() const { return m_rxBufferSampleRate.load(); }
 
 public slots:
     // Receives stripped PCM from PanadapterStream::audioDataReady().
@@ -186,6 +192,7 @@ private:
     void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId);
     QByteArray resampleStereo(const QByteArray& pcm);
     void processNr2(const QByteArray& stereoPcm);
+    void updateRxBufferStats();
 
     // RX
     QAudioSink*   m_audioSink{nullptr};
@@ -275,9 +282,24 @@ private:
     std::vector<float> m_nr2Processed;
     QByteArray m_nr2Output;
 
+    // Audio device change detection — restarts RX when USB devices
+    // power-cycle or WASAPI sessions reset after idle (#1361)
+    QMediaDevices* m_mediaDevices{nullptr};
+    bool           m_rxStreamStarted{false};  // guard: ignore device changes before first start
+
+    // Zombie sink watchdog: tracks consecutive RX timer ticks where we have
+    // data to write but bytesFree() == 0, indicating a stale WASAPI handle.
+    // After ~2 seconds (200 ticks × 10ms), force a restart. (#1361)
+    int m_rxZombieTickCount{0};
+    static constexpr int kZombieTickThreshold = 200;  // 200 × 10ms = 2s
+
     // RX audio buffer handling
     QTimer*       m_rxTimer{nullptr};
     QByteArray    m_rxBuffer;
+    std::atomic<qsizetype> m_rxBufferBytes{0};
+    std::atomic<qsizetype> m_rxBufferPeakBytes{0};
+    std::atomic<quint64>   m_rxBufferUnderrunCount{0};
+    std::atomic<int>       m_rxBufferSampleRate{DEFAULT_SAMPLE_RATE};
 
     // VITA-49 TX constants
     static constexpr int    TX_SAMPLES_PER_PACKET = 128;  // audio frames per packet

@@ -86,6 +86,8 @@ This menu gives you both offline guidance and troubleshooting tools.
 
 - `Getting Started...`
 - `AetherSDR Help...`
+- `Understanding Noise Cancellation...`
+- `Configuring AetherSDR Controls...`
 - `Configuring Data Modes...`
 - `Contributing to AetherSDR...`
 - `Support...`
@@ -246,6 +248,79 @@ The meter applet provides additional visibility into operating state when the de
 ### `AG`
 
 The Antenna Genius applet appears when that station accessory is present. Use it to confirm band and port routing at a glance.
+
+### `MQTT`
+
+The MQTT applet connects AetherSDR to your station automation system via MQTT,
+the lightweight messaging protocol used by Node-RED, Home Assistant, and many
+ham shack automation tools.
+
+#### Quick Start
+
+1. Click the **MQTT** button in the applet toggle row to open the applet.
+2. Enter your MQTT broker's **Host** and **Port** (default: `localhost:1883`).
+3. Enter comma-separated **Topics** to subscribe to.
+   Prefix a topic with `*` to display its value on the panadapter overlay.
+   Example: `*rotator/pos, *ant/selected, station/log`
+4. Click **On** to connect.
+
+#### Publish Buttons
+
+You can create custom buttons that publish MQTT messages when clicked:
+
+1. Click **Edit** in the Publish section.
+2. Click the **+** button to add a new button.
+3. Enter a **Label** (what the button shows), **Topic** (where to publish),
+   and **Payload** (the message body).
+4. Click **Done** to exit edit mode.
+5. Click any button to send its message to the broker.
+
+Right-click a button in edit mode to remove it. Buttons are saved across restarts.
+
+#### Panadapter Overlay
+
+Topics prefixed with `*` display their last received value in the top-right
+corner of the spectrum, below the propagation and WNB indicators. This lets
+you see beam heading, selected antenna, or other station status at a glance
+without leaving the panadapter view.
+
+#### Use Case: Rotator Control via Node-RED
+
+Many operators use Node-RED to control rotators via serial, USB, or IP.
+A typical setup:
+
+- Node-RED publishes `rotator/pos` with the current heading (e.g., `240`)
+- Node-RED subscribes to `rotator/cmd` for control commands
+- In AetherSDR, subscribe to `*rotator/pos` (displays heading on panadapter)
+- Create publish buttons: **CW** (topic `rotator/cmd`, payload `CW`),
+  **CCW** (payload `CCW`), **Stop** (payload `STOP`)
+
+Now you can see your beam heading on the spectrum and send rotator commands
+without switching windows.
+
+#### Use Case: Antenna Switching
+
+If you use an MQTT-connected antenna switch (via Node-RED, ESP32, etc.):
+
+- Subscribe to `*ant/selected` to see the active antenna on the panadapter
+- Create buttons for each antenna: **Hexbeam** (topic `ant/select`, payload `1`),
+  **Vertical** (payload `2`), **Wire** (payload `3`)
+
+#### Use Case: SteppIR Controller
+
+For SteppIR antennas controlled via MQTT:
+
+- Subscribe to `*steppir/band` and `*steppir/direction`
+- Create buttons: **Normal** (topic `steppir/cmd`, payload `normal`),
+  **180°** (payload `reverse`), **Bi-Dir** (payload `bidir`)
+
+#### Notes
+
+- MQTT uses QoS 0 (fire-and-forget) for both subscribe and publish.
+- The broker connection auto-reconnects with exponential backoff (5s–60s).
+- Username and password are optional; leave blank for unauthenticated brokers.
+- Enable the `TLS` checkbox to encrypt the connection. The port will switch automatically to 8883. Leave `CA cert` blank to use the system certificate bundle, or enter a path to a custom CA file for self-signed broker certificates.
+- Up to 12 publish buttons can be configured (4 rows × 3 columns).
 
 ## Status Bar
 

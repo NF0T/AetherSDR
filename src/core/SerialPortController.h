@@ -102,6 +102,7 @@ private:
     bool        m_lastKeyDown{false};
     bool        m_lastDitActive{false};
     bool        m_lastDahActive{false};
+    bool        m_pollLogged{false};
     QElapsedTimer m_debounceTimer;
     static constexpr int POLL_INTERVAL_MS = 10;
     static constexpr int DEBOUNCE_MS = 20;

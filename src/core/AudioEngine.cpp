@@ -24,6 +24,12 @@
 
 namespace AetherSDR {
 
+void AudioEngine::updateRxBufferStats()
+{
+    m_rxBufferBytes.store(m_rxBuffer.size());
+    m_rxBufferPeakBytes.store(std::max(m_rxBufferPeakBytes.load(), m_rxBuffer.size()));
+}
+
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
 {
@@ -42,6 +48,25 @@ AudioEngine::AudioEngine(QObject* parent)
             if (dev.id() == savedInId) { m_inputDevice = dev; break; }
         }
     }
+
+    // Monitor audio output device list for changes — when a USB audio device
+    // (like Connect6) power-cycles or WASAPI sessions reset after idle/screensaver,
+    // restart the RX stream to re-acquire a fresh handle. (#1361)
+    // Windows/macOS only: PipeWire on Linux crashes in pw_stream_connect when
+    // audioOutputsChanged fires during device enumeration. The zombie sink
+    // watchdog and stateChanged handlers cover Linux recovery instead.
+#ifdef Q_OS_WIN
+    m_mediaDevices = new QMediaDevices(this);
+    connect(m_mediaDevices, &QMediaDevices::audioOutputsChanged, this, [this]() {
+        if (!m_audioSink) return;
+        qCWarning(lcAudio) << "AudioEngine: audio output device list changed, restarting RX (#1361)";
+        QMetaObject::invokeMethod(this, [this]() {
+            if (!m_audioSink) return;
+            stopRxStream();
+            startRxStream();
+        }, Qt::QueuedConnection);
+    });
+#endif
 
     // Opus TX pacing timer — sends one queued packet every 10ms for even
     // delivery timing. Without this, QAudioSource delivers bursts of samples
@@ -76,13 +101,39 @@ AudioEngine::AudioEngine(QObject* parent)
             m_rxBuffer.remove(0, m_rxBuffer.size() - maxBufBytes);
         }
 
-        qsizetype len = m_audioSink->bytesFree();
+        const qsizetype freeBytes = m_audioSink->bytesFree();
+        if (freeBytes > 0 && m_rxBuffer.isEmpty()) {
+            m_rxBufferUnderrunCount.fetch_add(1);
+        }
+
+        // Zombie sink watchdog: if we have data waiting but the sink reports
+        // zero bytes free for ~2 seconds, the WASAPI handle is likely stale
+        // (e.g. after screensaver/idle on Windows with USB audio). (#1361)
+        if (freeBytes == 0 && !m_rxBuffer.isEmpty()) {
+            if (++m_rxZombieTickCount >= kZombieTickThreshold) {
+                m_rxZombieTickCount = 0;
+                qCWarning(lcAudio) << "AudioEngine: sink appears zombie (bytesFree stuck at 0 for"
+                                   << kZombieTickThreshold * 10 << "ms), restarting RX (#1361)";
+                QMetaObject::invokeMethod(this, [this]() {
+                    if (!m_audioSink) return;
+                    stopRxStream();
+                    startRxStream();
+                }, Qt::QueuedConnection);
+                return;
+            }
+        } else {
+            m_rxZombieTickCount = 0;
+        }
+
+        qsizetype len = freeBytes;
         len = std::min(len, m_rxBuffer.size());
         if (len > 0)
         {
             len = m_audioDevice->write(m_rxBuffer.left(len));
             m_rxBuffer.remove(0, len);
         }
+
+        m_rxBufferBytes.store(m_rxBuffer.size());
     });
     m_rxTimer->start();
 }
@@ -107,6 +158,13 @@ QAudioFormat AudioEngine::makeFormat() const
 bool AudioEngine::startRxStream()
 {
     if (m_audioSink) return true;   // already running
+
+    m_rxBuffer.clear();
+    m_rxBufferBytes.store(0);
+    m_rxBufferPeakBytes.store(0);
+    m_rxBufferUnderrunCount.store(0);
+    m_rxBufferSampleRate.store(DEFAULT_SAMPLE_RATE);
+    m_rxZombieTickCount = 0;
 
     QAudioFormat fmt = makeFormat();
     const QAudioDevice dev = m_outputDevice.isNull()
@@ -136,8 +194,26 @@ bool AudioEngine::startRxStream()
             return false;
         }
     }
+    // Guard against WASAPI silently stopping the sink after idle/sleep.
+    // Detect the silent stop and restart cleanly, mirroring the TX-side
+    // fix for CoreAudio (#1149). (#1303)
+    // Note: IdleState restart logic removed — it caused a restart loop on
+    // Windows that prevented audio playback (#1405). The zombie sink
+    // watchdog already handles stale WASAPI sessions after idle/sleep.
+    connect(m_audioSink, &QAudioSink::stateChanged, this,
+            [this](QAudio::State state) {
+        if (state != QAudio::StoppedState) return;
+        if (!m_audioSink) return;   // intentional stop (stopRxStream nulls this)
+        QMetaObject::invokeMethod(this, [this]() {
+            if (!m_audioSink) return;
+            qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped unexpectedly, restarting RX (#1303)";
+            stopRxStream();
+            startRxStream();
+        }, Qt::QueuedConnection);
+    });
     qCWarning(lcAudio) << "AudioEngine: RX stream started at" << fmt.sampleRate() << "Hz"
                        << "device:" << dev.description();
+    m_rxStreamStarted = true;
     emit rxStarted();
     return true;
 #else
@@ -166,13 +242,36 @@ bool AudioEngine::startRxStream()
         return false;
     }
 
+    // Guard against the audio backend silently stopping the sink after idle/sleep.
+    // Detect the silent stop and restart cleanly, mirroring the TX-side
+    // fix for CoreAudio (#1149). (#1303)
+    // Note: IdleState restart logic removed — it caused a restart loop on
+    // Windows that prevented audio playback (#1405). The zombie sink
+    // watchdog already handles stale WASAPI sessions after idle/sleep.
+    connect(m_audioSink, &QAudioSink::stateChanged, this,
+            [this](QAudio::State state) {
+        if (state != QAudio::StoppedState) return;
+        if (!m_audioSink) return;   // intentional stop (stopRxStream nulls this)
+        QMetaObject::invokeMethod(this, [this]() {
+            if (!m_audioSink) return;
+            qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped unexpectedly, restarting RX (#1303)";
+            stopRxStream();
+            startRxStream();
+        }, Qt::QueuedConnection);
+    });
     qCDebug(lcAudio) << "AudioEngine: RX stream started";
+    m_rxBufferSampleRate.store(fmt.sampleRate());
+    m_rxStreamStarted = true;
     emit rxStarted();
     return true;
 }
 
 void AudioEngine::stopRxStream()
 {
+    m_rxBuffer.clear();
+    m_rxBufferBytes.store(0);
+    m_rxBufferSampleRate.store(DEFAULT_SAMPLE_RATE);
+
     if (m_audioSink) {
         // Guard: same stale-device-handle crash can occur on the RX side (#1059).
         if (m_audioSink->state() != QAudio::StoppedState)
@@ -219,7 +318,8 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
         if (m_resampleTo48k)
             m_rxBuffer.append(resampleStereo(data));
         else
-            m_rxBuffer.append(data); 
+            m_rxBuffer.append(data);
+        updateRxBufferStats();
     };
 
     // Bypass client-side DSP during TX (#367). NR2/RN2/BNR adapt their
@@ -579,7 +679,8 @@ void AudioEngine::processBnr(const QByteArray& stereoPcm)
             if (m_resampleTo48k)
                 m_rxBuffer.append(resampleStereo(chunk));
             else
-                m_rxBuffer.append(chunk); 
+                m_rxBuffer.append(chunk);
+            updateRxBufferStats();
         }
         emit levelChanged(computeRMS(chunk));
     }
@@ -1400,6 +1501,7 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
         m_rxBuffer.append(resampleStereo(pcm));
     else
         m_rxBuffer.append(pcm);
+    updateRxBufferStats();
 }
 
 } // namespace AetherSDR

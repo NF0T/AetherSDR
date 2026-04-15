@@ -28,7 +28,9 @@ Contributors:
 extern "C" {
 #endif
 
-#include <cjson/cJSON.h>
+/* cJSON dependency removed — AetherSDR doesn't use property-to-JSON conversion */
+struct cJSON;
+typedef struct cJSON cJSON;
 
 libmosqcommon_EXPORT cJSON *mosquitto_properties_to_json(const mosquitto_property *properties);
 

@@ -25,9 +25,16 @@ MqttClient::MqttClient(QObject* parent)
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this] {
         if (!m_connected && !m_host.isEmpty()) {
             qCDebug(lcMqtt) << "MqttClient: reconnecting to" << m_host << m_port;
-            connectToBroker(m_host, m_port, m_username, m_password);
+            connectToBroker(m_host, m_port, m_username, m_password, m_useTls, m_caFile);
         }
     });
+
+#ifdef HAVE_MQTT
+    // Windows fallback: poll mosquitto_loop() since pthreads not available
+    connect(&m_pollTimer, &QTimer::timeout, this, [this] {
+        if (m_mosq) { mosquitto_loop(m_mosq, 0, 1); }
+    });
+#endif
 }
 
 MqttClient::~MqttClient()
@@ -43,13 +50,17 @@ MqttClient::~MqttClient()
 
 void MqttClient::connectToBroker(const QString& host, quint16 port,
                                   const QString& username,
-                                  const QString& password)
+                                  const QString& password,
+                                  bool useTls,
+                                  const QString& caFile)
 {
 #ifdef HAVE_MQTT
     m_host = host;
     m_port = port;
     m_username = username;
     m_password = password;
+    m_useTls   = useTls;
+    m_caFile   = caFile;
     m_reconnectTimer.stop();
 
     if (m_mosq) {
@@ -75,7 +86,23 @@ void MqttClient::connectToBroker(const QString& host, quint16 port,
             password.isEmpty() ? nullptr : password.toUtf8().constData());
     }
 
-    qCDebug(lcMqtt) << "MqttClient: connecting to" << host << ":" << port;
+#ifdef HAVE_MQTT_TLS
+    if (useTls) {
+        // caFile: path to CA certificate bundle, or nullptr to use the system default.
+        const char* ca = caFile.isEmpty() ? nullptr : caFile.toUtf8().constData();
+        int tlsRc = mosquitto_tls_set(m_mosq, ca, nullptr, nullptr, nullptr, nullptr);
+        if (tlsRc != MOSQ_ERR_SUCCESS) {
+            qCWarning(lcMqtt) << "MqttClient: TLS setup failed:" << mosquitto_strerror(tlsRc);
+            emit connectionError(QString("TLS setup failed: %1").arg(mosquitto_strerror(tlsRc)));
+            return;
+        }
+        qCDebug(lcMqtt) << "MqttClient: TLS enabled"
+                        << (caFile.isEmpty() ? "(system CA bundle)" : caFile);
+    }
+#endif
+
+    qCDebug(lcMqtt) << "MqttClient: connecting to" << host << ":" << port
+                    << (useTls ? "[TLS]" : "");
 
     int rc = mosquitto_connect_async(m_mosq,
         host.toUtf8().constData(), port, 60);
@@ -88,8 +115,13 @@ void MqttClient::connectToBroker(const QString& host, quint16 port,
         return;
     }
 
-    mosquitto_loop_start(m_mosq);
+#ifdef Q_OS_WIN
+    // Windows: no pthreads, poll via QTimer instead of mosquitto_loop_start()
+    m_pollTimer.start(50);
 #else
+    mosquitto_loop_start(m_mosq);
+#endif
+#else  // !HAVE_MQTT
     Q_UNUSED(host); Q_UNUSED(port);
     Q_UNUSED(username); Q_UNUSED(password);
     qCWarning(lcMqtt) << "MqttClient: MQTT support not compiled (install libmosquitto-dev)";
@@ -99,11 +131,14 @@ void MqttClient::connectToBroker(const QString& host, quint16 port,
 void MqttClient::disconnect()
 {
     m_reconnectTimer.stop();
+    m_pollTimer.stop();
     m_reconnectAttempts = 0;
 #ifdef HAVE_MQTT
     if (m_mosq) {
         mosquitto_disconnect(m_mosq);
+#ifndef Q_OS_WIN
         mosquitto_loop_stop(m_mosq, false);
+#endif
     }
 #endif
     m_connected = false;

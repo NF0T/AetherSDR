@@ -188,6 +188,13 @@ VfoWidget::VfoWidget(QWidget* parent)
     setAttribute(Qt::WA_TranslucentBackground);
     setAutoFillBackground(false);
     setStyleSheet(kBgStyle);
+
+    m_signalMeterFraction = signalDbmToMeterFraction(m_signalDbm);
+    m_targetSignalMeterFraction = m_signalMeterFraction;
+    m_signalMeterAnimation.setTimerType(Qt::PreciseTimer);
+    m_signalMeterAnimation.setInterval(kSignalMeterAnimationIntervalMs);
+    connect(&m_signalMeterAnimation, &QTimer::timeout, this, &VfoWidget::animateSignalMeter);
+
     buildUI();
 }
 
@@ -311,6 +318,8 @@ void VfoWidget::buildUI()
         if (!m_slice) return;
         QMenu menu(this);
         for (const QString& ant : m_antList) {
+            if (ant.startsWith("RX", Qt::CaseInsensitive))
+                continue;  // skip RX-only antenna ports
             auto* act = menu.addAction(ant);
             act->setCheckable(true);
             act->setChecked(ant == m_slice->txAntenna());
@@ -1873,6 +1882,13 @@ void VfoWidget::setDiversityAllowed(bool allowed)
     }
 }
 
+void VfoWidget::setSmartSdrPlus(bool has)
+{
+    if (m_hasSmartSdrPlus == has) return;
+    m_hasSmartSdrPlus = has;
+    if (m_slice) rebuildFilterButtons();
+}
+
 void VfoWidget::setEscLevel(float dbm)
 {
     m_escLevelDbm = dbm;
@@ -2054,23 +2070,10 @@ void VfoWidget::paintEvent(QPaintEvent* event)
 
     // S-meter scale: S0=-127, S9=-73 (6 dB per S-unit), S9+60=-13
     // S0–S9 occupies left 60%, S9–S9+60 occupies right 40%
-    constexpr float S0_DBM  = -127.0f;
-    constexpr float S9_DBM  = -73.0f;
-    constexpr float S9P60   = -13.0f;
     const int s9X = barX + barW * 60 / 100;  // S9 boundary pixel
 
     // Signal fill — blue up to S9, red beyond
-    float frac;
-    if (m_signalDbm <= S0_DBM) {
-        frac = 0.0f;
-    } else if (m_signalDbm <= S9_DBM) {
-        frac = (m_signalDbm - S0_DBM) / (S9_DBM - S0_DBM) * 0.6f;
-    } else if (m_signalDbm <= S9P60) {
-        frac = 0.6f + (m_signalDbm - S9_DBM) / (S9P60 - S9_DBM) * 0.4f;
-    } else {
-        frac = 1.0f;
-    }
-    int fillW = static_cast<int>(frac * barW);
+    const int fillW = static_cast<int>(m_signalMeterFraction * barW);
 
     if (fillW > 0) {
         p.fillRect(barX, barY, fillW, barH, QColor(0x00, 0xc0, 0x40));
@@ -2148,7 +2151,67 @@ void VfoWidget::setSignalLevel(float dbm)
 {
     m_signalDbm = dbm;
     m_dbmLabel->setText(QString("%1 dBm").arg(static_cast<int>(dbm)));
-    update();  // repaint S-meter bar
+    updateSignalMeterTarget();
+}
+
+float VfoWidget::signalDbmToMeterFraction(float dbm)
+{
+    constexpr float kS0Dbm = -127.0f;
+    constexpr float kS9Dbm = -73.0f;
+    constexpr float kS9Plus60Dbm = -13.0f;
+
+    if (dbm <= kS0Dbm) {
+        return 0.0f;
+    }
+    if (dbm <= kS9Dbm) {
+        return (dbm - kS0Dbm) / (kS9Dbm - kS0Dbm) * 0.6f;
+    }
+    if (dbm <= kS9Plus60Dbm) {
+        return 0.6f + (dbm - kS9Dbm) / (kS9Plus60Dbm - kS9Dbm) * 0.4f;
+    }
+    return 1.0f;
+}
+
+void VfoWidget::updateSignalMeterTarget()
+{
+    m_targetSignalMeterFraction = signalDbmToMeterFraction(m_signalDbm);
+
+    if (qAbs(m_targetSignalMeterFraction - m_signalMeterFraction) <= kSignalMeterSnapEpsilon) {
+        m_signalMeterFraction = m_targetSignalMeterFraction;
+        if (m_signalMeterAnimation.isActive()) {
+            m_signalMeterAnimation.stop();
+        }
+        update();
+        return;
+    }
+
+    if (!m_signalMeterAnimation.isActive()) {
+        m_signalMeterElapsed.restart();
+        m_signalMeterAnimation.start();
+    }
+}
+
+void VfoWidget::animateSignalMeter()
+{
+    const qint64 elapsedMs = m_signalMeterElapsed.restart();
+    if (elapsedMs <= 0) {
+        return;
+    }
+
+    const float delta = m_targetSignalMeterFraction - m_signalMeterFraction;
+    const float elapsedSeconds = static_cast<float>(elapsedMs) / 1000.0f;
+    const float timeConstant = (delta >= 0.0f) ? kSignalMeterAttackTimeSeconds
+                                               : kSignalMeterReleaseTimeSeconds;
+    const float alpha = 1.0f - std::exp(-elapsedSeconds / timeConstant);
+
+    if (qAbs(delta) <= kSignalMeterSnapEpsilon) {
+        m_signalMeterFraction = m_targetSignalMeterFraction;
+        m_signalMeterAnimation.stop();
+    } else {
+        m_signalMeterFraction += delta * alpha;
+    }
+
+    update();
 }
 
 // ── Slice connection ──────────────────────────────────────────────────────────
@@ -2926,6 +2989,7 @@ void VfoWidget::rebuildFilterButtons()
     // Remove autotune buttons if they exist (they'll be re-added for CW)
     if (m_autotuneOnceBtn) { delete m_autotuneOnceBtn; m_autotuneOnceBtn = nullptr; }
     if (m_autotuneLoopBtn) { delete m_autotuneLoopBtn; m_autotuneLoopBtn = nullptr; }
+    if (m_zeroBeatBtn) { delete m_zeroBeatBtn; m_zeroBeatBtn = nullptr; }
 
     for (int i = 0; i < m_filterWidths.size(); ++i) {
         const int w = m_filterWidths[i];
@@ -2988,22 +3052,32 @@ void VfoWidget::rebuildFilterButtons()
             "QPushButton:pressed { background: #00607a; }"
             "QPushButton:checked { background: #00607a; color: #e0f0ff; border-color: #00b4d8; }";
 
-        m_autotuneOnceBtn = new QPushButton("Once");
-        m_autotuneOnceBtn->setFixedHeight(26);
-        m_autotuneOnceBtn->setStyleSheet(btnStyle);
-        connect(m_autotuneOnceBtn, &QPushButton::clicked, this, [this]() {
-            emit autotuneOnceRequested();
-        });
-        hbox->addWidget(m_autotuneOnceBtn, 1);
+        if (m_hasSmartSdrPlus) {
+            m_autotuneOnceBtn = new QPushButton("Once");
+            m_autotuneOnceBtn->setFixedHeight(26);
+            m_autotuneOnceBtn->setStyleSheet(btnStyle);
+            connect(m_autotuneOnceBtn, &QPushButton::clicked, this, [this]() {
+                emit autotuneOnceRequested();
+            });
+            hbox->addWidget(m_autotuneOnceBtn, 1);
 
-        m_autotuneLoopBtn = new QPushButton("Loop");
-        m_autotuneLoopBtn->setCheckable(true);
-        m_autotuneLoopBtn->setFixedHeight(26);
-        m_autotuneLoopBtn->setStyleSheet(btnStyle);
-        connect(m_autotuneLoopBtn, &QPushButton::toggled, this, [this](bool on) {
-            emit autotuneRequested(on);
-        });
-        hbox->addWidget(m_autotuneLoopBtn, 1);
+            m_autotuneLoopBtn = new QPushButton("Loop");
+            m_autotuneLoopBtn->setCheckable(true);
+            m_autotuneLoopBtn->setFixedHeight(26);
+            m_autotuneLoopBtn->setStyleSheet(btnStyle);
+            connect(m_autotuneLoopBtn, &QPushButton::toggled, this, [this](bool on) {
+                emit autotuneRequested(on);
+            });
+            hbox->addWidget(m_autotuneLoopBtn, 1);
+        } else {
+            m_zeroBeatBtn = new QPushButton("Zero Beat");
+            m_zeroBeatBtn->setFixedHeight(26);
+            m_zeroBeatBtn->setStyleSheet(btnStyle);
+            connect(m_zeroBeatBtn, &QPushButton::clicked, this, [this]() {
+                emit zeroBeatRequested();
+            });
+            hbox->addWidget(m_zeroBeatBtn, 1);
+        }
 
         m_filterGrid->addWidget(container, row, 0, 1, 4);
     }

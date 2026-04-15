@@ -183,6 +183,7 @@ void VirtualAudioBridge::setTransmitting(bool tx)
             connect(m_silenceTimer, &QTimer::timeout,
                     this, &VirtualAudioBridge::feedSilenceToAllChannels);
         }
+        m_silenceElapsed.start();
         m_silenceTimer->start();
     }
     // NOTE: we do NOT stop the silence timer on TX→RX here.
@@ -194,13 +195,24 @@ void VirtualAudioBridge::setTransmitting(bool tx)
 void VirtualAudioBridge::feedSilenceToAllChannels()
 {
     if (!m_open) return;
-    // 20ms of silence @ 24 kHz stereo = 480 frames = 960 float samples
-    static constexpr int SILENCE_SAMPLES = 960;
+
+    // Compute the exact number of stereo samples needed based on elapsed
+    // wall-clock time since the last tick.  This eliminates cumulative drift
+    // caused by QTimer jitter (the old code wrote a fixed 960 samples per
+    // 20 ms tick, but late ticks produced fewer samples than real-time).
+    const qint64 elapsedNs = m_silenceElapsed.nsecsElapsed();
+    m_silenceElapsed.start();
+
+    // stereo samples = elapsed_s * sampleRate * 2 channels
+    const int silenceSamples = static_cast<int>(
+        elapsedNs * 24000LL * 2 / 1000000000LL);
+    if (silenceSamples <= 0) return;
+
     for (int i = 0; i < NUM_CHANNELS; ++i) {
         auto* block = m_blocks[i];
         if (!block || !block->active) continue;
         uint32_t wp = block->writePos.load(std::memory_order_relaxed);
-        for (int s = 0; s < SILENCE_SAMPLES; ++s) {
+        for (int s = 0; s < silenceSamples; ++s) {
             block->ringBuffer[wp % DaxShmBlock::RING_SIZE] = 0.0f;
             ++wp;
         }
@@ -234,18 +246,19 @@ void VirtualAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
         }
     }
 
-    // Input: int16 stereo PCM @ 24 kHz from the radio (native DAX rate).
+    // Input: float32 stereo PCM @ 24 kHz from the radio (native DAX rate).
+    //        After the float32 migration (502b934, b0c49d7), both PCC_IF_NARROW
+    //        and PCC_IF_NARROW_REDUCED emit float32 stereo from PanadapterStream.
     // Output: float32 stereo @ 24 kHz into the ring buffer — direct 1:1 copy.
     // HAL plugin also runs at 24 kHz, so no resampling needed.
-    const auto* samples = reinterpret_cast<const int16_t*>(pcm.constData());
-    const int numSamples = pcm.size() / 2;  // total int16 count (L,R,L,R,...)
+    const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+    const int numSamples = pcm.size() / static_cast<int>(sizeof(float));  // total float count (L,R,L,R,...)
 
     const float chGain = m_channelGain[channel - 1];
-    const float scale = chGain / 32768.0f;
     uint32_t wp = block->writePos.load(std::memory_order_relaxed);
 
     for (int i = 0; i < numSamples; ++i) {
-        block->ringBuffer[wp % DaxShmBlock::RING_SIZE] = samples[i] * scale;
+        block->ringBuffer[wp % DaxShmBlock::RING_SIZE] = samples[i] * chGain;
         ++wp;
     }
 
@@ -256,7 +269,7 @@ void VirtualAudioBridge::feedDaxAudio(int channel, const QByteArray& pcm)
     if (++meterCount[channel - 1] % 10 == 0) {
         float sum = 0;
         for (int i = 0; i < numSamples; i += 2)
-            sum += (samples[i] / 32768.0f) * (samples[i] / 32768.0f);
+            sum += samples[i] * samples[i];
         float rms = std::sqrt(sum / std::max(1, numSamples / 2));
         emit daxRxLevel(channel, rms);
     }

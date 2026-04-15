@@ -13,6 +13,7 @@
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
+#include "core/QsoRecorder.h"
 #include "core/DxClusterClient.h"
 #ifdef HAVE_MQTT
 #include "core/MqttClient.h"
@@ -70,6 +71,9 @@ class PipeWireAudioBridge;
 using DaxBridge = PipeWireAudioBridge;
 #endif
 class VfoWidget;
+
+// Wheel mode for FlexControl: determines what the encoder knob adjusts
+enum class FlexWheelMode { Frequency, Volume, Power };
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -131,6 +135,8 @@ private:
     void createPansSequentially(const QString& layoutId, int total,
                                 std::shared_ptr<QStringList> panIds, int created);
     void updatePaTempLabel();
+    void showNetworkDiagnosticsDialog();
+    void showPropDashboard();
     void setPaTempDisplayUnit(bool useFahrenheit);
     void syncMemorySpot(int memoryIndex);
     void removeMemorySpot(int memoryIndex);
@@ -147,9 +153,10 @@ private:
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};
     QThread*          m_audioThread{nullptr};
+    QsoRecorder*      m_qsoRecorder{nullptr};
     BandSettings      m_bandSettings;
-    // 4-channel CAT: each channel (A-D) binds to a slice index (0-3)
-    static constexpr int kCatChannels = 4;
+    // 8-channel CAT: each channel (A-H) binds to a slice index (0-7)
+    static constexpr int kCatChannels = 8;
     RigctlServer*     m_rigctlServers[kCatChannels]{};
     RigctlPty*        m_rigctlPtys[kCatChannels]{};
 #ifdef HAVE_WEBSOCKETS
@@ -192,6 +199,7 @@ private:
     FlexControlManager*   m_flexControl{nullptr};
     QTimer               m_flexCoalesceTimer;
     double               m_flexTargetMhz{-1.0};
+    FlexWheelMode        m_flexWheelMode{FlexWheelMode::Frequency};
 #endif
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
@@ -223,6 +231,8 @@ private:
     // Modeless dialogs
     QPointer<QDialog> m_spotHubDialog;
     QPointer<QDialog> m_radioSetupDialog;
+    QPointer<QDialog> m_networkDiagnosticsDialog;
+    QPointer<QDialog> m_propDashboardDialog;
     QPointer<QDialog> m_memoryDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<QDialog> m_dspDialog;

@@ -31,5 +31,6 @@ RUN apt-get update && apt-get install -y \
     automake \
     libtool \
     libssl-dev \
+    libmosquitto-dev \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*

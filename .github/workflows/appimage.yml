@@ -73,6 +73,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
+            -DMQTT_TLS=OFF \
             $CMAKE_EXTRA
 
       - name: Build Opus (RADE dependency)

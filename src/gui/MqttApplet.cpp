@@ -5,11 +5,18 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
+#include <QCheckBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTextEdit>
 #include <QTextBlock>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QMenu>
 
 namespace AetherSDR {
 
@@ -24,10 +31,19 @@ static const QString kBtnOff =
 static const QString kBtnOn =
     "QPushButton { background: #00b4d8; color: #0f0f1a; font-weight: bold; "
     "border: 1px solid #008ba8; padding: 2px 8px; border-radius: 3px; font-size: 10px; }";
+static const QString kPubBtn =
+    "QPushButton { background: #1a2a3a; color: #c8d8e8; "
+    "border: 1px solid #306080; padding: 4px 6px; border-radius: 3px; font-size: 10px; }"
+    "QPushButton:hover { background: #203850; }"
+    "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }";
+static const QString kPubBtnEdit =
+    "QPushButton { background: #2a1a1a; color: #d8a080; "
+    "border: 1px dashed #805030; padding: 4px 6px; border-radius: 3px; font-size: 10px; }";
 
 MqttApplet::MqttApplet(QWidget* parent)
     : QWidget(parent)
 {
+    loadButtons();
     buildUI();
 }
 
@@ -71,8 +87,45 @@ void MqttApplet::buildUI()
     m_topicsEdit = new QLineEdit(s.value("MqttTopics", "").toString());
     m_topicsEdit->setStyleSheet(kEditStyle);
     m_topicsEdit->setPlaceholderText("topic1, topic2, ...");
-    m_topicsEdit->setToolTip("Comma-separated MQTT topics to subscribe to");
+    m_topicsEdit->setToolTip("Comma-separated MQTT topics to subscribe to.\n"
+                             "Prefix with * to display on panadapter overlay.\n"
+                             "Example: *rotator/pos, *ant/selected, station/log");
     grid->addWidget(m_topicsEdit, 4, 1);
+
+    // TLS row
+    auto* tlsLbl = new QLabel("TLS:");
+    tlsLbl->setStyleSheet(kLabelStyle);
+    grid->addWidget(tlsLbl, 5, 0);
+    m_tlsCheck = new QCheckBox;
+    m_tlsCheck->setChecked(s.value("MqttTls", "False").toString() == "True");
+    m_tlsCheck->setStyleSheet("QCheckBox { color: #8090a0; font-size: 10px; }");
+    m_tlsCheck->setToolTip("Enable TLS encryption (requires broker on port 8883)");
+    grid->addWidget(m_tlsCheck, 5, 1);
+
+    // CA certificate row (shown only when TLS is checked)
+    auto* caLbl = new QLabel("CA cert:");
+    caLbl->setStyleSheet(kLabelStyle);
+    grid->addWidget(caLbl, 6, 0);
+    m_caFileEdit = new QLineEdit(s.value("MqttCaFile", "").toString());
+    m_caFileEdit->setStyleSheet(kEditStyle);
+    m_caFileEdit->setPlaceholderText("optional, blank = system CA bundle");
+    m_caFileEdit->setToolTip("Path to CA certificate file.\nLeave blank to use the system CA bundle.");
+    grid->addWidget(m_caFileEdit, 6, 1);
+
+    // Show/hide CA row based on TLS checkbox state
+    auto updateCaVisibility = [caLbl, this](bool checked) {
+        caLbl->setVisible(checked);
+        m_caFileEdit->setVisible(checked);
+        // Auto-switch port between 1883 and 8883
+        QString port = m_portEdit->text().trimmed();
+        if (checked && port == "1883") {
+            m_portEdit->setText("8883");
+        } else if (!checked && port == "8883") {
+            m_portEdit->setText("1883");
+        }
+    };
+    updateCaVisibility(m_tlsCheck->isChecked());
+    connect(m_tlsCheck, &QCheckBox::toggled, this, updateCaVisibility);
 
     vbox->addLayout(grid);
 
@@ -89,10 +142,42 @@ void MqttApplet::buildUI()
     ctrlRow->addWidget(m_statusLabel, 1);
     vbox->addLayout(ctrlRow);
 
+    // Publish buttons section
+    {
+        auto* pubHeader = new QHBoxLayout;
+        auto* pubLbl = new QLabel("Publish");
+        pubLbl->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; font-weight: bold; }");
+        pubHeader->addWidget(pubLbl);
+        pubHeader->addStretch();
+
+        m_editBtn = new QPushButton("Edit");
+        m_editBtn->setFixedHeight(16);
+        m_editBtn->setStyleSheet(
+            "QPushButton { background: transparent; color: #607080; "
+            "border: none; font-size: 9px; padding: 0 4px; }"
+            "QPushButton:hover { color: #c8d8e8; }");
+        pubHeader->addWidget(m_editBtn);
+        vbox->addLayout(pubHeader);
+
+        auto* btnContainer = new QWidget;
+        m_buttonGrid = new QGridLayout(btnContainer);
+        m_buttonGrid->setContentsMargins(0, 0, 0, 0);
+        m_buttonGrid->setSpacing(2);
+        vbox->addWidget(btnContainer);
+
+        rebuildButtons();
+
+        connect(m_editBtn, &QPushButton::clicked, this, [this] {
+            m_editMode = !m_editMode;
+            m_editBtn->setText(m_editMode ? "Done" : "Edit");
+            rebuildButtons();
+        });
+    }
+
     // Message log
     m_messageLog = new QTextEdit;
     m_messageLog->setReadOnly(true);
-    m_messageLog->setMaximumHeight(120);
+    m_messageLog->setMaximumHeight(80);
     m_messageLog->setStyleSheet(
         "QTextEdit { background: #0a0a14; color: #c8d8e8; border: 1px solid #203040; "
         "font-size: 10px; font-family: monospace; }");
@@ -106,18 +191,27 @@ void MqttApplet::buildUI()
             m_enableBtn->setText("Off");
             m_enableBtn->setStyleSheet(kBtnOff);
         } else {
-            // Save settings
             auto& ss = AppSettings::instance();
-            ss.setValue("MqttHost", m_hostEdit->text().trimmed());
-            ss.setValue("MqttPort", m_portEdit->text().trimmed());
-            ss.setValue("MqttUser", m_userEdit->text().trimmed());
-            ss.setValue("MqttPass", m_passEdit->text().trimmed());
+            ss.setValue("MqttHost",   m_hostEdit->text().trimmed());
+            ss.setValue("MqttPort",   m_portEdit->text().trimmed());
+            ss.setValue("MqttUser",   m_userEdit->text().trimmed());
+            ss.setValue("MqttPass",   m_passEdit->text().trimmed());
             ss.setValue("MqttTopics", m_topicsEdit->text().trimmed());
+            ss.setValue("MqttTls",    m_tlsCheck->isChecked() ? "True" : "False");
+            ss.setValue("MqttCaFile", m_caFileEdit->text().trimmed());
             ss.save();
 
-            QStringList topics;
-            for (const QString& t : m_topicsEdit->text().split(',', Qt::SkipEmptyParts)) {
-                topics.append(t.trimmed());
+            // Parse topics — * prefix means display on panadapter
+            m_topicDefs.clear();
+            QStringList topicNames;
+            for (const QString& raw : m_topicsEdit->text().split(',', Qt::SkipEmptyParts)) {
+                QString t = raw.trimmed();
+                bool display = t.startsWith('*');
+                if (display) { t = t.mid(1).trimmed(); }
+                if (!t.isEmpty()) {
+                    m_topicDefs.append({t, display});
+                    topicNames.append(t);
+                }
             }
 
             emit connectRequested(
@@ -125,7 +219,9 @@ void MqttApplet::buildUI()
                 m_portEdit->text().trimmed().toUShort(),
                 m_userEdit->text().trimmed(),
                 m_passEdit->text().trimmed(),
-                topics);
+                topicNames,
+                m_tlsCheck->isChecked(),
+                m_caFileEdit->text().trimmed());
 
             m_enableBtn->setText("On");
             m_enableBtn->setStyleSheet(kBtnOn);
@@ -145,6 +241,7 @@ void MqttApplet::setMqttClient(MqttClient* client)
         updateStatus("Disconnected", false);
         m_enableBtn->setText("Off");
         m_enableBtn->setStyleSheet(kBtnOff);
+        emit displayCleared();
     });
     connect(client, &MqttClient::connectionError, this, [this](const QString& err) {
         updateStatus(err, false);
@@ -162,20 +259,173 @@ void MqttApplet::updateStatus(const QString& text, bool ok)
 
 void MqttApplet::onMessageReceived(const QString& topic, const QByteArray& payload)
 {
-    // Extract short topic name (last segment after /)
     QString shortTopic = topic.section('/', -1);
     if (shortTopic.isEmpty()) { shortTopic = topic; }
+    QString value = QString::fromUtf8(payload).left(80);
 
-    QString line = QString("%1: %2").arg(shortTopic, QString::fromUtf8(payload).left(80));
+    QString line = QString("%1: %2").arg(shortTopic, value);
     m_messageLog->append(line);
 
-    // Keep log trimmed to last 50 lines
     QTextDocument* doc = m_messageLog->document();
     while (doc->blockCount() > 50) {
         QTextCursor cursor(doc->begin());
         cursor.select(QTextCursor::BlockUnderCursor);
         cursor.removeSelectedText();
-        cursor.deleteChar();  // remove newline
+        cursor.deleteChar();
+    }
+
+    // Update panadapter overlay for display-enabled topics
+    for (const auto& td : m_topicDefs) {
+        if (td.displayOnPan && td.topic == topic) {
+            emit displayValueChanged(shortTopic, value);
+            break;
+        }
+    }
+}
+
+// ── Publish Buttons ──────────────────────────────────────────────────────────
+
+void MqttApplet::rebuildButtons()
+{
+    // Clear existing
+    for (auto* btn : m_buttons) { delete btn; }
+    m_buttons.clear();
+
+    // Remove the "+" button if it exists
+    QLayoutItem* item;
+    while ((item = m_buttonGrid->takeAt(0)) != nullptr) {
+        delete item->widget();
+        delete item;
+    }
+
+    // Add buttons from defs
+    for (int i = 0; i < m_buttonDefs.size(); ++i) {
+        auto* btn = new QPushButton(m_buttonDefs[i].label);
+        btn->setStyleSheet(m_editMode ? kPubBtnEdit : kPubBtn);
+        btn->setToolTip(m_editMode
+            ? QString("Click to edit\nTopic: %1\nPayload: %2")
+                .arg(m_buttonDefs[i].topic, m_buttonDefs[i].payload)
+            : QString("%1 → %2")
+                .arg(m_buttonDefs[i].topic, m_buttonDefs[i].payload));
+
+        if (m_editMode) {
+            btn->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(btn, &QPushButton::clicked, this, [this, i] { editButton(i); });
+            connect(btn, &QPushButton::customContextMenuRequested, this, [this, i](const QPoint& pos) {
+                QMenu menu;
+                menu.addAction("Remove", this, [this, i] { removeButton(i); });
+                menu.exec(m_buttons[i]->mapToGlobal(pos));
+            });
+        } else {
+            connect(btn, &QPushButton::clicked, this, [this, i] {
+                if (m_client && m_client->isConnected()) {
+                    m_client->publish(m_buttonDefs[i].topic,
+                                      m_buttonDefs[i].payload.toUtf8());
+                }
+            });
+        }
+
+        m_buttons.append(btn);
+        m_buttonGrid->addWidget(btn, i / 3, i % 3);
+    }
+
+    // Add "+" button in edit mode
+    if (m_editMode && m_buttonDefs.size() < 12) {
+        auto* addBtn = new QPushButton("+");
+        addBtn->setStyleSheet(
+            "QPushButton { background: #1a2a1a; color: #60a060; "
+            "border: 1px dashed #305030; padding: 4px 6px; border-radius: 3px; font-size: 14px; }");
+        connect(addBtn, &QPushButton::clicked, this, &MqttApplet::addButton);
+        int idx = m_buttonDefs.size();
+        m_buttonGrid->addWidget(addBtn, idx / 3, idx % 3);
+    }
+}
+
+void MqttApplet::editButton(int index)
+{
+    if (index < 0 || index >= m_buttonDefs.size()) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle("Edit MQTT Button");
+    dlg.setFixedWidth(280);
+    auto* vb = new QVBoxLayout(&dlg);
+
+    auto* labelEdit = new QLineEdit(m_buttonDefs[index].label);
+    auto* topicEdit = new QLineEdit(m_buttonDefs[index].topic);
+    auto* payloadEdit = new QLineEdit(m_buttonDefs[index].payload);
+
+    auto addField = [&](const QString& name, QLineEdit* edit) {
+        auto* row = new QHBoxLayout;
+        auto* lbl = new QLabel(name);
+        lbl->setFixedWidth(55);
+        row->addWidget(lbl);
+        row->addWidget(edit);
+        vb->addLayout(row);
+    };
+
+    addField("Label:", labelEdit);
+    addField("Topic:", topicEdit);
+    addField("Payload:", payloadEdit);
+
+    auto* btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    vb->addWidget(btns);
+
+    if (dlg.exec() == QDialog::Accepted) {
+        m_buttonDefs[index].label = labelEdit->text().trimmed();
+        m_buttonDefs[index].topic = topicEdit->text().trimmed();
+        m_buttonDefs[index].payload = payloadEdit->text().trimmed();
+        saveButtons();
+        rebuildButtons();
+    }
+}
+
+void MqttApplet::addButton()
+{
+    if (m_buttonDefs.size() >= 12) return;
+    m_buttonDefs.append({"New", "topic", "payload"});
+    saveButtons();
+    editButton(m_buttonDefs.size() - 1);
+}
+
+void MqttApplet::removeButton(int index)
+{
+    if (index < 0 || index >= m_buttonDefs.size()) return;
+    m_buttonDefs.remove(index);
+    saveButtons();
+    rebuildButtons();
+}
+
+void MqttApplet::saveButtons()
+{
+    QJsonArray arr;
+    for (const auto& def : m_buttonDefs) {
+        QJsonObject obj;
+        obj["label"] = def.label;
+        obj["topic"] = def.topic;
+        obj["payload"] = def.payload;
+        arr.append(obj);
+    }
+    auto& s = AppSettings::instance();
+    s.setValue("MqttButtons", QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+    s.save();
+}
+
+void MqttApplet::loadButtons()
+{
+    auto& s = AppSettings::instance();
+    QString json = s.value("MqttButtons", "").toString();
+    if (json.isEmpty()) return;
+
+    QJsonArray arr = QJsonDocument::fromJson(json.toUtf8()).array();
+    for (const auto& val : arr) {
+        QJsonObject obj = val.toObject();
+        m_buttonDefs.append({
+            obj["label"].toString(),
+            obj["topic"].toString(),
+            obj["payload"].toString()
+        });
     }
 }
 

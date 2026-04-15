@@ -72,6 +72,7 @@ public:
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
     void clearDisplay();  // blank spectrum and waterfall on disconnect
+    void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
 
     // Feed a new FFT frame. bins are scaled dBm values.
     void updateSpectrum(const QVector<float>& binsDbm);
@@ -103,6 +104,8 @@ public:
     float spectrumFrac()  const { return m_spectrumFrac; }
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
+    double centerMhz()    const { return m_centerMhz; }
+    double bandwidthMhz() const { return m_bandwidthMhz; }
 
     // Set the FFT/waterfall split ratio programmatically.
     void setSpectrumFrac(float f);
@@ -134,19 +137,32 @@ public:
     // WNB and RF gain state for on-screen indicators.
     bool wnbActive()   const { return m_wnbActive; }
     int  rfGainValue() const { return m_rfGainValue; }
+    bool wideActive()  const { return m_wideActive; }
     void setWnbActive(bool on) { m_wnbActive = on; markOverlayDirty(); }
     void setRfGain(int gain) { m_rfGainValue = gain; markOverlayDirty(); }
+    void setWideActive(bool on) {
+        if (m_wideActive != on) {
+            m_wideActive = on;
+            markOverlayDirty();
+        }
+    }
 
     // HF propagation forecast overlay (K-index, A-index, and Solar Flux Index).
     // Values of -1 mean not yet fetched; visible only when enabled.
     void setPropForecastVisible(bool on) { m_propForecastVisible = on; markOverlayDirty(); }
-    void setPropForecast(int kIndex, int aIndex, int sfi) {
+    void setPropForecast(double kIndex, int aIndex, int sfi) {
         m_propKIndex = kIndex;
         m_propAIndex = aIndex;
         m_propSfi = sfi;
         markOverlayDirty();
     }
     bool propForecastVisible() const { return m_propForecastVisible; }
+
+    // MQTT device status overlay (#699)
+    void setMqttDisplayValue(const QString& key, const QString& value) {
+        m_mqttDisplayValues[key] = value; markOverlayDirty();
+    }
+    void clearMqttDisplay() { m_mqttDisplayValues.clear(); markOverlayDirty(); }
 
     // NB Waterfall Blanker (#277) — client-side impulse suppression
     void setWfBlankerEnabled(bool on);
@@ -314,6 +330,7 @@ signals:
     void tnfDepthRequested(int id, int depthDb);
     void tnfPermanentRequested(int id, bool permanent);
     void sliceCloseRequested(int sliceId);
+    void propForecastClicked();  // click on K/A/SFI overlay text
     void sliceTuneRequested(int sliceId, double freqMhz);
     void popOutRequested(bool popOut);  // true=float, false=dock
     void sliceTxRequested(int sliceId);
@@ -452,6 +469,7 @@ private:
     bool m_draggingBandwidth{false};
     int  m_bwDragStartX{0};
     double m_bwDragStartBw{0.0};
+    double m_bwDragAnchorMhz{0.0};
     // Waterfall pan drag state
     bool m_draggingPan{false};
     int  m_panDragStartX{0};
@@ -477,12 +495,17 @@ private:
     // On-screen indicators (WNB, RF Gain)
     bool m_wnbActive{false};
     int  m_rfGainValue{0};
+    bool m_wideActive{false};
 
     // HF propagation forecast overlay
     bool m_propForecastVisible{false};
-    int  m_propKIndex{-1};
+    double m_propKIndex{-1.0};
+    QRect  m_propClickRect;  // bounding rect of rendered prop text for click detection
     int  m_propAIndex{-1};
     int  m_propSfi{-1};
+
+    // MQTT device status overlay
+    QMap<QString, QString> m_mqttDisplayValues;
 
     // Background image
     QImage  m_bgImage;
@@ -511,6 +534,7 @@ private:
     float  m_lastDetectFrac{0};
     bool   m_lastDetectWnb{false};
     int    m_lastDetectRfGain{0};
+    bool   m_lastDetectWide{false};
 
     // NB Waterfall Blanker (#277)
     bool  m_wfBlankerEnabled{false};
@@ -634,6 +658,9 @@ private:
 #endif
         update();
     }
+
+    void reprojectWaterfall(double oldCenterMhz, double oldBandwidthMhz,
+                            double newCenterMhz, double newBandwidthMhz);
 };
 
 } // namespace AetherSDR

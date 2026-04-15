@@ -4,6 +4,9 @@ Thanks for your interest in AetherSDR! We're building a native SmartSDR
 client for FlexRadio on Linux, macOS, and Windows. Community contributions
 are welcome.
 
+See [GOVERNANCE.md](GOVERNANCE.md) for project roles, decision-making, and
+the RFC process for significant changes.
+
 ---
 
 ## Quick Start
@@ -191,6 +194,8 @@ If `gpg` hangs, set `export GPG_TTY=$(tty)` in your shell profile.
 - **Changes that break the core RX path.** Test: discovery → connect →
   FFT display → audio output.
 - **Large reformatting PRs.** Fix style only in files you're modifying.
+- **UX, visual, or architecture changes without an approved RFC.** Open
+  a `[RFC]` issue first — see [GOVERNANCE.md](GOVERNANCE.md).
 
 ---
 

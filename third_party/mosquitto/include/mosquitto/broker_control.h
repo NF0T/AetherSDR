@@ -28,7 +28,9 @@ Contributors:
 extern "C" {
 #endif
 
-#include <cjson/cJSON.h>
+/* cJSON dependency removed — AetherSDR only uses the client library */
+struct cJSON;
+typedef struct cJSON cJSON;
 
 #include <mosquitto/broker.h>
 #include <mosquitto.h>
