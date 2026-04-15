@@ -2078,10 +2078,10 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     if (fillW > 0) {
         QLinearGradient grad(barX, 0, barX + barW, 0);
         grad.setColorAt(0.00, QColor(0x00, 0x90, 0x30));  // dark green  — S0
-        grad.setColorAt(0.40, QColor(0xd4, 0xc0, 0x00));  // yellow      — ~S6
-        grad.setColorAt(0.52, QColor(0xff, 0x58, 0x00));  // orange      — ~S7-8
-        grad.setColorAt(0.60, QColor(0xdd, 0x14, 0x00));  // red         — S9
-        grad.setColorAt(0.73, QColor(0xff, 0x00, 0x00));  // bright red  — S9+20
+        grad.setColorAt(0.30, QColor(0x00, 0xc0, 0x40));  // green       — ~S5
+        grad.setColorAt(0.50, QColor(0xd4, 0xc0, 0x00));  // yellow      — ~S7
+        grad.setColorAt(0.70, QColor(0xdd, 0x14, 0x00));  // red         — S9+10
+        grad.setColorAt(0.85, QColor(0xff, 0x00, 0x00));  // bright red  — S9+30
         grad.setColorAt(1.00, QColor(0xff, 0x00, 0x00));  // bright red  — S9+60
         p.fillRect(barX, barY, fillW, barH, grad);
     }
