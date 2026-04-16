@@ -4929,8 +4929,26 @@ void MainWindow::onSliceAdded(SliceModel* s)
         auto* sw = spectrumForSlice(s);
         if (!sw) return;
         auto* vfo = sw->addVfoWidget(s->sliceId());
+
+        // Restore SmartSDR+ flag before wireVfoWidget so filter buttons
+        // are built correctly (#1503)
+        {
+            const QString& sub = m_radioModel.licenseSubscription();
+            bool hasPlus = sub.contains("SmartSDR+");
+            vfo->setSmartSdrPlus(hasPlus);
+        }
+
         wireVfoWidget(vfo, s);
         pushSliceOverlay(s);
+
+        // Restore diversity button visibility on dual-SCU radios (#1503)
+        {
+            const QString& model = m_radioModel.model();
+            bool divAllowed = model.contains("6500") || model.contains("6600")
+                           || model.contains("6700") || model.contains("8600")
+                           || model.contains("AU-520");
+            vfo->setDiversityAllowed(divAllowed);
+        }
     });
 
     // Create a VfoWidget for this slice on the correct panadapter
