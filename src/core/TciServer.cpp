@@ -443,8 +443,17 @@ void TciServer::onTextMessage(const QString& msg)
             if (parts.size() >= 2) {
                 int trx = parts[0].trimmed().toInt();
                 bool txOn = (parts[1].trimmed() == "true");
+                // Parse optional third argument: audio source (micpc / dax).
+                // When source is "micpc", the client wants PTT via PC mic —
+                // do NOT activate DAX or start TX_CHRONO.  When source is
+                // "dax" or absent (backward compat with WSJT-X/JTDX),
+                // activate DAX TX as before.
+                QString source;
+                if (parts.size() >= 3)
+                    source = parts[2].trimmed().toLower().remove(';');
                 if (txOn) {
-                    startTxChrono(ws, trx);
+                    if (source != QStringLiteral("micpc"))
+                        startTxChrono(ws, trx);
                 } else {
                     stopTxChrono();
                 }
