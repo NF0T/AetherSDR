@@ -586,8 +586,7 @@ void SpectralNR::computeGainGamma()
         double v = ehr * gamma;
 
         double gain = gf1p5 * std::sqrt(v) / std::max(gamma, EpsFloor)
-                    * std::exp(-0.5 * v)
-                    * ((1.0 + v) * bessI0(0.5 * v) + v * bessI1(0.5 * v));
+                    * ((1.0 + v) * bessI0e(0.5 * v) + v * bessI1e(0.5 * v));
 
         // Speech presence probability weighting
         {
@@ -823,35 +822,40 @@ void SpectralNR::applyAeFilter()
 // "Handbook of Mathematical Functions" (1964), formulas 9.8.1 and 9.8.2.
 // A&S is a U.S. government work and in the public domain.
 
-double SpectralNR::bessI0(double x)
+double SpectralNR::bessI0e(double x)
 {
+    // Exponentially-scaled modified Bessel I0: returns exp(-|x|) * I0(x).
+    // Matches WDSP emnr.c bessI0e — avoids overflow for large arguments.
     double ax = std::abs(x);
     if (ax < 3.75) {
         double t = x / 3.75;
         t *= t;
-        return 1.0 + t * (3.5156229 + t * (3.0899424 + t * (1.2067492
-             + t * (0.2659732 + t * (0.0360768 + t * 0.0045813)))));
+        return std::exp(-ax) * (1.0 + t * (3.5156229 + t * (3.0899424
+             + t * (1.2067492 + t * (0.2659732 + t * (0.0360768
+             + t * 0.0045813))))));
     }
     double t = 3.75 / ax;
-    return (std::exp(ax) / std::sqrt(ax))
+    return (1.0 / std::sqrt(ax))
          * (0.39894228 + t * (0.01328592 + t * (0.00225319
           + t * (-0.00157565 + t * (0.00916281 + t * (-0.02057706
           + t * (0.02635537 + t * (-0.01647633 + t * 0.00392377))))))));
 }
 
-double SpectralNR::bessI1(double x)
+double SpectralNR::bessI1e(double x)
 {
+    // Exponentially-scaled modified Bessel I1: returns exp(-|x|) * I1(x).
+    // Matches WDSP emnr.c bessI1e — avoids overflow for large arguments.
     double ax = std::abs(x);
     if (ax < 3.75) {
         double t = x / 3.75;
         t *= t;
-        double val = ax * (0.5 + t * (0.87890594 + t * (0.51498869
-                   + t * (0.15084934 + t * (0.02658733 + t * (0.00301532
-                   + t * 0.00032411))))));
+        double val = std::exp(-ax) * ax * (0.5 + t * (0.87890594
+                   + t * (0.51498869 + t * (0.15084934 + t * (0.02658733
+                   + t * (0.00301532 + t * 0.00032411))))));
         return x < 0.0 ? -val : val;
     }
     double t = 3.75 / ax;
-    double val = (std::exp(ax) / std::sqrt(ax))
+    double val = (1.0 / std::sqrt(ax))
                * (0.39894228 + t * (-0.03988024 + t * (-0.00362018
                 + t * (0.00163801 + t * (-0.01031555 + t * (0.02282967
                 + t * (-0.02895312 + t * (0.01787654 - t * 0.00420059))))))));
