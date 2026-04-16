@@ -21,7 +21,6 @@
 #include <QItemSelectionModel>
 #include <QDebug>
 #include <QMessageBox>
-#include <QMouseEvent>
 #include <QPointer>
 #include <QShortcut>
 #include <QSaveFile>
@@ -178,9 +177,9 @@ QList<MemoryCsvRecord> currentExportRecords(const QMap<int, MemoryEntry>& memori
 QString selectionHintText()
 {
 #if defined(Q_OS_MACOS)
-    return "Tip: Double-click tunes. Command-click adds or removes rows from the selection.";
+    return "Tip: Double-click tunes. Shift-click selects a range. Command-click adds or removes rows.";
 #else
-    return "Tip: Double-click tunes. Shift-click or Ctrl-click selects multiple rows.";
+    return "Tip: Double-click tunes. Shift-click selects a range. Ctrl-click adds or removes rows.";
 #endif
 }
 
@@ -373,27 +372,6 @@ void MemoryDialog::keyPressEvent(QKeyEvent* event)
 
 bool MemoryDialog::eventFilter(QObject* watched, QEvent* event)
 {
-    if (m_table && watched == m_table->viewport() && event->type() == QEvent::MouseButtonPress) {
-#if !defined(Q_OS_MACOS)
-        auto* mouseEvent = static_cast<QMouseEvent*>(event);
-        if (mouseEvent->button() == Qt::LeftButton
-            && (mouseEvent->modifiers() & Qt::ShiftModifier)) {
-            const QModelIndex index = m_table->indexAt(mouseEvent->position().toPoint());
-            if (index.isValid()) {
-                auto* selectionModel = m_table->selectionModel();
-                const bool wasSelected = selectionModel->isRowSelected(index.row(), QModelIndex());
-                const QModelIndex firstColumn = m_table->model()->index(index.row(), 0);
-                selectionModel->select(firstColumn, (wasSelected
-                    ? QItemSelectionModel::Deselect
-                    : QItemSelectionModel::Select) | QItemSelectionModel::Rows);
-                m_table->setCurrentCell(index.row(), 0, QItemSelectionModel::NoUpdate);
-                updateSelectionActions();
-                return true;
-            }
-        }
-#endif
-    }
-
     if (event->type() == QEvent::KeyPress) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);
         const int key = keyEvent->key();
