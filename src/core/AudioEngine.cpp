@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
+#include "CwSidetoneGenerator.h"
 #include "LogManager.h"
 #include "OpusCodec.h"
 #include "SpectralNR.h"
@@ -461,11 +462,20 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
 
     auto writeAudio = [this](const QByteArray& data) {
         if (!m_audioDevice || !m_audioDevice->isOpen()) return;
-        const QByteArray& resampled = m_resampleTo48k ? resampleStereo(data) : data;
+        // Mix CW sidetone into the audio buffer if active (#1537).
+        // The generator produces float32 stereo at 24kHz matching our format.
+        QByteArray mixed;
+        if (m_cwSidetone) {
+            mixed = data;
+            auto* samples = reinterpret_cast<float*>(mixed.data());
+            int numFrames = mixed.size() / (2 * static_cast<int>(sizeof(float)));
+            m_cwSidetone->mixInto(samples, numFrames);
+        }
+        const QByteArray& base = m_cwSidetone ? mixed : data;
+        const QByteArray& resampled = m_resampleTo48k ? resampleStereo(base) : base;
         if (m_rxBoost.load()) {
             // Soft-knee boost — increases perceived loudness without hard clipping.
-            // Uses tanh compression: loud signals are gently limited while quiet
-            // signals get ~2x gain.  tanh(2*x) ≈ 2*x for small x, ≈ 1.0 for large x.
+            // tanh(2*x) ≈ 2*x for small x, ≈ 1.0 for large x.
             QByteArray boosted(resampled.size(), Qt::Uninitialized);
             const auto* src = reinterpret_cast<const float*>(resampled.constData());
             auto* dst = reinterpret_cast<float*>(boosted.data());
@@ -1717,6 +1727,32 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
     else
         m_rxBuffer.append(pcm);
     updateRxBufferStats();
+}
+
+// ─── CW sidetone (local PC tone generator) ──────────────────────────────────
+
+void AudioEngine::setCwSidetoneKeyed(bool on)
+{
+    if (!m_cwSidetone) {
+        m_cwSidetone = std::make_unique<CwSidetoneGenerator>();
+    }
+    m_cwSidetone->setKeyed(on);
+}
+
+void AudioEngine::setCwSidetonePitch(int hz)
+{
+    if (!m_cwSidetone) {
+        m_cwSidetone = std::make_unique<CwSidetoneGenerator>();
+    }
+    m_cwSidetone->setPitch(hz);
+}
+
+void AudioEngine::setCwSidetoneGain(int gain)
+{
+    if (!m_cwSidetone) {
+        m_cwSidetone = std::make_unique<CwSidetoneGenerator>();
+    }
+    m_cwSidetone->setGain(gain);
 }
 
 } // namespace AetherSDR
