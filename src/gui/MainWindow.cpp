@@ -1597,7 +1597,9 @@ MainWindow::MainWindow(QWidget* parent)
         if (!s || s->isLocked()) return;
         int stepHz = spectrum() ? spectrum()->stepSize() : 100;
         // Initialize target from slice on first step or after external QSY (#1098)
-        if (m_flexTargetMhz < 0.0 || std::abs(m_flexTargetMhz - s->frequency()) > 0.001)
+        if (m_flexTargetMhz < 0.0 ||
+            (!m_flexCoalesceTimer.isActive() &&
+             std::abs(m_flexTargetMhz - s->frequency()) > 0.001))
             m_flexTargetMhz = s->frequency();
         m_flexTargetMhz += steps * stepHz / 1e6;
         // Optimistic VFO display update — immediate visual feedback
@@ -4650,6 +4652,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
+        // Don't snap overlay back to stale radio-confirmed freq during active
+        // encoder tuning — the optimistic VFO position is already ahead (#1524)
+        bool activeTuning = m_flexCoalesceTimer.isActive() || m_hidCoalesceTimer.isActive();
+        if (activeTuning && s->sliceId() == m_activeSliceId)
+            return;
+
         m_updatingFromModel = true;
         if (auto* sw = spectrumForSlice(s))
             sw->setSliceOverlay(s->sliceId(), mhz,
