@@ -725,12 +725,9 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     }
 
     const qreal seconds = m_connectionAnimationClock.elapsed() / 1000.0;
-    const qreal towerHeight = qMin(available.height() * 0.32, 106.0);
+    const qreal towerHeight = qMin(available.height() * 0.27, 90.0);
     const qreal towerWidth = towerHeight * 0.34;
-    const SliceOverlay* anchorOverlay = activeOverlay();
-    const qreal anchorX = anchorOverlay
-        ? static_cast<qreal>(mhzToX(anchorOverlay->freqMhz))
-        : static_cast<qreal>(mhzToX(m_centerMhz));
+    const qreal anchorX = static_cast<qreal>(mhzToX(m_centerMhz));
     const qreal centerX = qBound(available.left() + towerWidth * 1.5,
                                  anchorX,
                                  available.right() - towerWidth * 1.5);
@@ -746,22 +743,23 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    QRadialGradient glow(QPointF(centerX, topY + towerHeight * 0.32),
-                         towerHeight * 1.18);
+    QRadialGradient glow(QPointF(centerX, topY + towerHeight * 0.42),
+                         towerHeight * 1.05);
     glow.setColorAt(0.0, withAlpha(kAetherBrandBlue, 48));
     glow.setColorAt(0.55, withAlpha(kAetherBrandGreen, 22));
     glow.setColorAt(1.0, QColor(0, 0, 0, 0));
     p.setPen(Qt::NoPen);
     p.setBrush(glow);
-    p.drawEllipse(QPointF(centerX, topY + towerHeight * 0.34),
-                  towerHeight * 1.05, towerHeight * 0.82);
+    p.drawEllipse(QPointF(centerX, topY + towerHeight * 0.44),
+                  towerHeight * 0.98, towerHeight * 0.72);
 
     static constexpr qreal kTau = 6.28318530717958647692;
     const qreal pulse = 0.55 + 0.45 * std::sin(seconds * kTau);
+    const qreal waveCenterY = topY + towerHeight * 0.38;
     for (int ring = 0; ring < 3; ++ring) {
         const qreal ringProgress = std::fmod(phase + ring * 0.24, 1.0);
-        const qreal radiusX = towerWidth * 0.85 + ringProgress * towerHeight * 0.92;
-        const qreal radiusY = radiusX * 0.74;
+        const qreal radiusX = towerWidth * 0.50 + ringProgress * towerHeight * 0.68;
+        const qreal radiusY = radiusX * 0.86;
         QColor waveColor = (ring % 2 == 0) ? kAetherBrandBlue : kAetherBrandGreen;
         const qreal fade = 1.0 - ringProgress;
         waveColor.setAlphaF(qBound(0.10, 0.16 + fade * 0.48 * pulse, 0.70));
@@ -770,9 +768,14 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         p.setPen(wavePen);
         p.setBrush(Qt::NoBrush);
-        const QRectF arcRect(centerX - radiusX, topY - radiusY + towerHeight * 0.12,
-                             radiusX * 2.0, radiusY * 2.0);
-        p.drawArc(arcRect, 28 * 16, 124 * 16);
+        const QRectF leftArcRect(centerX - towerWidth * 0.16 - radiusX * 2.0,
+                                 waveCenterY - radiusY,
+                                 radiusX * 2.0, radiusY * 2.0);
+        const QRectF rightArcRect(centerX + towerWidth * 0.16,
+                                  waveCenterY - radiusY,
+                                  radiusX * 2.0, radiusY * 2.0);
+        p.drawArc(leftArcRect, 100 * 16, 160 * 16);
+        p.drawArc(rightArcRect, -80 * 16, 160 * 16);
     }
 
     QLinearGradient towerGradient(QPointF(centerX, topY), QPointF(centerX, baseY));
