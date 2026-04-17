@@ -63,11 +63,13 @@
 #include <functional>
 #include <QApplication>
 #include <QProcess>
+#include <QScreen>
 #include <QTimer>
 #include <QDateTime>
 #include <QPropertyAnimation>
 #include <QIcon>
 #include <QKeyEvent>
+#include <QWindow>
 #include <QPixmap>
 #include <QWidgetAction>
 #include <QPainter>
@@ -343,6 +345,14 @@ MainWindow::MainWindow(QWidget* parent)
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioLost,
             m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(m_connPanel, &ConnectionPanel::retryDiscoveryRequested, this, [this] {
+        m_connPanel->setStatusText("Searching your local network…");
+        if (m_titleBar) m_titleBar->setDiscovering(true);
+        m_discovery.stopListening();
+        m_discovery.startListening();
+    });
+    connect(m_connPanel, &ConnectionPanel::networkDiagnosticsRequested,
+            this, &MainWindow::showNetworkDiagnosticsDialog);
 
     // ── Heartbeat indicator + disconnect detection via TCP ping ─────────
     m_heartbeatMissTimer = new QTimer(this);
@@ -363,6 +373,7 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](const RadioInfo& info){
         m_connPanel->setStatusText("Connecting…");
         m_userDisconnected = false;
+        setPanadapterConnectionAnimation(true, "Connecting to radio…");
         m_radioModel.connectToRadio(info);
         auto& s = AppSettings::instance();
         s.setValue("LastConnectedRadioSerial", info.serial);
@@ -384,12 +395,14 @@ MainWindow::MainWindow(QWidget* parent)
             && !m_radioModel.isConnected()) {
             qDebug() << "Auto-connecting to" << info.displayName();
             m_connPanel->setStatusText("Auto-connecting…");
+            setPanadapterConnectionAnimation(true, "Connecting to radio…");
             m_radioModel.connectToRadio(info);
         }
     });
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, [this]{
         m_userDisconnected = true;
+        setPanadapterConnectionAnimation(false);
         auto& s = AppSettings::instance();
         s.remove("LastConnectedRadioSerial");
         s.remove("LastRoutedRadioIp");
@@ -409,6 +422,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connPanel, &ConnectionPanel::wanConnectRequested,
             this, [this](const WanRadioInfo& info) {
         m_connPanel->setStatusText("Requesting SmartLink connection…");
+        setPanadapterConnectionAnimation(true, "Connecting to remote radio…");
         // Store WAN radio info for when connect_ready arrives
         m_pendingWanRadio = info;
 
@@ -435,6 +449,7 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](const QString& handle, const QString& serial) {
         if (serial != m_pendingWanRadio.serial) return;
         m_connPanel->setStatusText("TLS connecting to radio…");
+        setPanadapterConnectionAnimation(true, "Connecting to remote radio…");
         m_wanConnection.connectToRadio(
             m_pendingWanRadio.publicIp,
             static_cast<quint16>(m_pendingWanRadio.publicTlsPort),
@@ -459,9 +474,12 @@ MainWindow::MainWindow(QWidget* parent)
         qDebug() << "MainWindow: WAN connection lost";
         m_connPanel->setStatusText("SmartLink disconnected");
         m_connPanel->setConnected(false);
+        setPanadapterConnectionAnimation(false);
     });
     connect(&m_wanConnection, &WanConnection::errorOccurred, this, [this](const QString& err) {
         m_connPanel->setStatusText("SmartLink error: " + err);
+        if (!m_reconnectDlg)
+            setPanadapterConnectionAnimation(false);
     });
 
     // ── DX Cluster — forward parsed spots to radio ──────────────────────
@@ -896,25 +914,35 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](quint32 streamId, const QVector<float>& bins) {
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->panStreamId() == streamId) {
-                if (auto* sw = m_panStack->spectrum(pan->panId()))
+                if (auto* sw = m_panStack->spectrum(pan->panId())) {
                     sw->updateSpectrum(bins);
+                    finishPanadapterConnectionAnimation();
+                }
                 return;
             }
         }
         // Fallback: active spectrum (covers "default" pan before radio connects)
-        if (auto* sw = spectrum()) sw->updateSpectrum(bins);
+        if (auto* sw = spectrum()) {
+            sw->updateSpectrum(bins);
+            finishPanadapterConnectionAnimation();
+        }
     });
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
             this, [this](quint32 streamId, const QVector<float>& bins,
                          double low, double high, quint32 tc) {
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->wfStreamId() == streamId) {
-                if (auto* sw = m_panStack->spectrum(pan->panId()))
+                if (auto* sw = m_panStack->spectrum(pan->panId())) {
                     sw->updateWaterfallRow(bins, low, high, tc);
+                    finishPanadapterConnectionAnimation();
+                }
                 return;
             }
         }
-        if (auto* sw = spectrum()) sw->updateWaterfallRow(bins, low, high, tc);
+        if (auto* sw = spectrum()) {
+            sw->updateWaterfallRow(bins, low, high, tc);
+            finishPanadapterConnectionAnimation();
+        }
     });
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallAutoBlackLevel,
             this, [this](quint32 streamId, quint32 autoBlack) {
@@ -1011,6 +1039,10 @@ MainWindow::MainWindow(QWidget* parent)
         }
         setActivePanApplet(applet);
         wirePanadapter(applet);
+        if (m_panadapterConnectionAnimationVisible) {
+            applet->spectrumWidget()->setConnectionAnimationVisible(
+                true, m_panadapterConnectionAnimationLabel);
+        }
         connect(pan, &PanadapterModel::infoChanged,
                 applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
         // NOTE: levelChanged → setDbmRange is wired in wirePanadapter() above;
@@ -2036,6 +2068,13 @@ MainWindow::MainWindow(QWidget* parent)
     if (m_titleBar) m_titleBar->setDiscovering(true);
     m_discovery.startListening();
 
+    const QString startupLastSerial =
+        AppSettings::instance().value("LastConnectedRadioSerial").toString();
+    if (!startupLastSerial.isEmpty()) {
+        m_connPanel->setStatusText("Looking for your radio…");
+        setPanadapterConnectionAnimation(true, "Looking for your radio…");
+    }
+
     // Auto-connect to routed radios (probed, not broadcast-discovered)
     connect(m_connPanel, &ConnectionPanel::routedRadioFound,
             this, [this](const RadioInfo& info) {
@@ -2045,6 +2084,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (!lastSerial.isEmpty() && info.serial == lastSerial) {
             qDebug() << "Auto-connecting to routed radio" << info.address.toString();
             m_connPanel->setStatusText("Auto-connecting…");
+            setPanadapterConnectionAnimation(true, "Connecting to radio…");
             m_radioModel.connectToRadio(info);
         }
     });
@@ -2054,6 +2094,8 @@ MainWindow::MainWindow(QWidget* parent)
         auto& s = AppSettings::instance();
         const QString routedIp = s.value("LastRoutedRadioIp").toString();
         if (!routedIp.isEmpty() && !m_userDisconnected) {
+            m_connPanel->setStatusText("Looking for your radio…");
+            setPanadapterConnectionAnimation(true, "Looking for your radio…");
             QTimer::singleShot(500, this, [this, routedIp] {
                 m_connPanel->probeRadio(routedIp);
             });
@@ -2448,17 +2490,33 @@ void MainWindow::toggleConnectionDialog()
         m_connPanel->hide();
         return;
     }
-    // Position above the status bar, centered on station label
+
+    // Position above the status bar, centered on the station label, while staying on-screen.
     QPoint statusBarTop = statusBar()->mapToGlobal(QPoint(0, 0));
     QPoint labelCenter = m_stationNickLabel->mapToGlobal(
         QPoint(m_stationNickLabel->width() / 2, 0));
-    int dlgW = m_connPanel->width();
-    int dlgH = m_connPanel->height();
-    QPoint pos(labelCenter.x() - dlgW / 2,
-               statusBarTop.y() - dlgH - 4);
+    QScreen* screen = QApplication::screenAt(labelCenter);
+    if (!screen && windowHandle())
+        screen = windowHandle()->screen();
+    if (!screen)
+        screen = QApplication::primaryScreen();
+
+    const QSize dlgSize = m_connPanel->size();
+    QPoint pos(labelCenter.x() - dlgSize.width() / 2,
+               statusBarTop.y() - dlgSize.height() - 8);
+
+    if (screen) {
+        const QRect available = screen->availableGeometry();
+        const int maxX = available.left() + available.width() - dlgSize.width();
+        const int maxY = available.top() + available.height() - dlgSize.height();
+        pos.setX(qMax(available.left(), qMin(pos.x(), maxX)));
+        pos.setY(qMax(available.top(), qMin(pos.y(), maxY)));
+    }
+
     m_connPanel->move(pos);
     m_connPanel->show();
     m_connPanel->raise();
+    m_connPanel->activateWindow();
 }
 
 void MainWindow::showMemoryDialog()
@@ -2606,7 +2664,7 @@ void MainWindow::buildMenuBar()
         dlg->show();
     });
 
-    auto* chooseRadio = settingsMenu->addAction("Choose Radio / SmartLink Setup...");
+    auto* chooseRadio = settingsMenu->addAction("Connect to Radio...");
     chooseRadio->setMenuRole(QAction::NoRole);      // prevent macOS auto-reparenting (#883)
     connect(chooseRadio, &QAction::triggered, this, [this] {
         toggleConnectionDialog();
@@ -3598,8 +3656,9 @@ void MainWindow::buildUI()
     // Connection panel — modeless dialog with standard decorations (#560, #574)
     m_connPanel = new ConnectionPanel(this);
     m_connPanel->setWindowFlags(Qt::Dialog);
-    m_connPanel->setWindowTitle("Choose Radio / SmartLink Setup");
-    m_connPanel->setFixedSize(300, 420);
+    m_connPanel->setWindowTitle("Connect to Radio");
+    m_connPanel->setMinimumSize(640, 520);
+    m_connPanel->resize(760, 580);
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
@@ -4421,6 +4480,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         for (auto* applet : m_panStack->allApplets())
             applet->spectrumWidget()->clearDisplay();
 
+        setPanadapterConnectionAnimation(!m_userDisconnected, "Reconnecting to radio…");
+
         // Show reconnect dialog on unexpected disconnect (only one at a time)
         if (!m_userDisconnected && !m_reconnectDlg) {
             m_reconnectDlg = new QDialog(this);
@@ -4444,6 +4505,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             layout->addWidget(dismissBtn, 0, Qt::AlignCenter);
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
                 m_userDisconnected = true;
+                setPanadapterConnectionAnimation(false);
                 m_reconnectDlg->close();
                 m_reconnectDlg->deleteLater();
                 m_reconnectDlg = nullptr;
@@ -4463,6 +4525,36 @@ void MainWindow::onConnectionError(const QString& msg)
     m_connPanel->setStatusText("Error: " + msg);
     m_connStatusLabel->setText("Error");
     statusBar()->showMessage("Connection error: " + msg, 5000);
+    if (!m_reconnectDlg)
+        setPanadapterConnectionAnimation(false);
+}
+
+void MainWindow::setPanadapterConnectionAnimation(bool visible, const QString& label)
+{
+    const QString nextLabel = label.trimmed().isEmpty()
+        ? QStringLiteral("Connecting to radio…")
+        : label.trimmed();
+    m_panadapterConnectionAnimationVisible = visible;
+    m_waitingForFirstPanadapterFrame = visible;
+    m_panadapterConnectionAnimationLabel = visible ? nextLabel : QString();
+
+    if (!m_panStack)
+        return;
+
+    for (auto* applet : m_panStack->allApplets()) {
+        if (!applet)
+            continue;
+        if (auto* spectrumWidget = applet->spectrumWidget())
+            spectrumWidget->setConnectionAnimationVisible(visible, nextLabel);
+    }
+}
+
+void MainWindow::finishPanadapterConnectionAnimation()
+{
+    if (!m_waitingForFirstPanadapterFrame || !m_panadapterConnectionAnimationVisible)
+        return;
+
+    setPanadapterConnectionAnimation(false);
 }
 
 void MainWindow::syncMemorySpot(int memoryIndex)

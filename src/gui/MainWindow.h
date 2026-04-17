@@ -141,6 +141,8 @@ private:
     void showNetworkDiagnosticsDialog();
     void showPropDashboard();
     void setPaTempDisplayUnit(bool useFahrenheit);
+    void setPanadapterConnectionAnimation(bool visible, const QString& label = {});
+    void finishPanadapterConnectionAnimation();
     void syncMemorySpot(int memoryIndex);
     void removeMemorySpot(int memoryIndex);
     void clearMemorySpotFeed();
@@ -311,6 +313,9 @@ private:
     bool m_spacePttActive{false};          // true while Space is held for PTT
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     QAction* m_minimalModeAction{nullptr};
+    bool m_panadapterConnectionAnimationVisible{false};
+    bool m_waitingForFirstPanadapterFrame{false};
+    QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
 
 #ifdef HAVE_RADE
