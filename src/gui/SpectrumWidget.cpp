@@ -23,7 +23,10 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QDialogButtonBox>
+#include <QFrame>
 #include <QLabel>
+#include <QVBoxLayout>
+#include <QWidgetAction>
 #include <QApplication>
 #include <QGuiApplication>
 #include <QClipboard>
@@ -44,6 +47,18 @@ namespace AetherSDR {
 static const QColor kAetherBrandBlue(0x00, 0xb4, 0xd8);
 static const QColor kAetherBrandGreen(0x20, 0xc0, 0x60);
 static const QColor kConnectionTextColor(0xd8, 0xe6, 0xf0);
+
+static QString formatFlagFrequency(double freqMhz)
+{
+    const long long hz = static_cast<long long>(std::llround(freqMhz * 1.0e6));
+    const int mhzPart = static_cast<int>(hz / 1000000);
+    const int khzPart = static_cast<int>((hz / 1000) % 1000);
+    const int hzPart = static_cast<int>(hz % 1000);
+    return QString("%1.%2.%3")
+        .arg(mhzPart)
+        .arg(khzPart, 3, 10, QChar('0'))
+        .arg(hzPart, 3, 10, QChar('0'));
+}
 
 // ─── Waterfall color scheme gradient presets ─────────────────────────────────
 
@@ -152,6 +167,12 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // Floating overlay menu (child widget, stays on top)
     m_overlayMenu = new SpectrumOverlayMenu(this);
     m_overlayMenu->raise();
+
+    m_tnfHoverPopup = new QLabel(this);
+    m_tnfHoverPopup->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_tnfHoverPopup->setMargin(6);
+    m_tnfHoverPopup->hide();
+    m_tnfHoverPopup->raise();
 
     // Tune guide auto-hide timer (2-second inactivity timeout)
     m_tuneGuideTimer = new QTimer(this);
@@ -1470,6 +1491,52 @@ double SpectrumWidget::xToMhz(int x) const
     return startMhz + (static_cast<double>(x) / width()) * m_bandwidthMhz;
 }
 
+void SpectrumWidget::updateTrackedCursorState(const QPoint& localPos, bool insideWidget)
+{
+    const QPoint oldCursorPos = m_cursorPos;
+    const int oldHoveredTnfId = m_hoveredTnfId;
+    const bool oldTuneGuideVisible = m_tuneGuideVisible;
+
+    if (!insideWidget) {
+        m_cursorPos = {-1, -1};
+        m_hoveredTnfId = -1;
+        m_tuneGuideVisible = false;
+        m_tuneGuideTimer->stop();
+        QToolTip::hideText();
+    } else {
+        const int chromeH = FREQ_SCALE_H + DIVIDER_H;
+        const int contentH = height() - chromeH;
+        const int specH = static_cast<int>(contentH * m_spectrumFrac);
+        const bool inSpectrum = localPos.y() >= 0
+            && localPos.y() < specH
+            && localPos.x() >= 0
+            && localPos.x() < width();
+        const int preferredTnfId = (m_draggingTnfId >= 0) ? m_draggingTnfId : m_hoveredTnfId;
+
+        m_cursorPos = localPos;
+        m_hoveredTnfId = inSpectrum ? tnfAtPixel(localPos.x(), preferredTnfId) : -1;
+
+        if (m_showTuneGuides && m_hoveredTnfId < 0) {
+            m_tuneGuideVisible = true;
+            m_tuneGuideTimer->start();
+        } else {
+            m_tuneGuideVisible = false;
+            m_tuneGuideTimer->stop();
+        }
+
+        if (m_hoveredTnfId >= 0) {
+            QToolTip::hideText();
+        }
+    }
+
+    if (m_cursorPos != oldCursorPos
+        || m_hoveredTnfId != oldHoveredTnfId
+        || m_tuneGuideVisible != oldTuneGuideVisible) {
+        markOverlayDirty();
+    }
+    updateTnfHoverPopup();
+}
+
 // ─── Mouse ────────────────────────────────────────────────────────────────────
 
 // Snap a frequency (MHz) to the nearest multiple of m_stepHz.
@@ -1703,16 +1770,48 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
         // TNF context menu (when clicking on a TNF marker)
         else if (hitTnf >= 0) {
+            const TnfMarker* tnf = tnfMarkerById(hitTnf);
+            if (tnf) {
+                auto* infoAction = new QWidgetAction(&menu);
+                auto* infoWidget = new QWidget(&menu);
+                auto* infoLayout = new QVBoxLayout(infoWidget);
+                infoLayout->setContentsMargins(10, 6, 10, 6);
+                infoLayout->setSpacing(2);
+
+                auto* freqLabel = new QLabel(QString("%1 MHz").arg(formatFlagFrequency(tnf->freqMhz)), infoWidget);
+                auto* widthLabel = new QLabel(QString("Width: %1 Hz").arg(tnf->widthHz), infoWidget);
+                auto* separator = new QFrame(infoWidget);
+                separator->setFrameShape(QFrame::HLine);
+                separator->setFrameShadow(QFrame::Plain);
+                separator->setStyleSheet("color: rgba(90, 110, 130, 180);");
+
+                infoWidget->setStyleSheet(
+                    "background: rgba(40, 48, 58, 190);"
+                    "color: rgba(200, 216, 232, 170);");
+                infoLayout->addWidget(freqLabel);
+                infoLayout->addWidget(widthLabel);
+                infoLayout->addSpacing(4);
+                infoLayout->addWidget(separator);
+                infoAction->setDefaultWidget(infoWidget);
+                menu.addAction(infoAction);
+            }
             menu.addAction("Remove TNF", this, [this, hitTnf]{ emit tnfRemoveRequested(hitTnf); });
             auto* widthMenu = menu.addMenu("Width");
             for (int w : {50, 100, 200, 500}) {
-                widthMenu->addAction(QString("%1 Hz").arg(w), this,
+                QAction* action = widthMenu->addAction(QString("%1 Hz").arg(w), this,
                     [this, hitTnf, w]{ emit tnfWidthRequested(hitTnf, w); });
+                action->setCheckable(true);
+                action->setChecked(tnf && tnf->widthHz == w);
             }
             auto* depthMenu = menu.addMenu("Depth");
-            depthMenu->addAction("Normal", this, [this, hitTnf]{ emit tnfDepthRequested(hitTnf, 1); });
-            depthMenu->addAction("Deep", this, [this, hitTnf]{ emit tnfDepthRequested(hitTnf, 2); });
-            depthMenu->addAction("Very Deep", this, [this, hitTnf]{ emit tnfDepthRequested(hitTnf, 3); });
+            const int currentDepth = tnf ? tnf->depthDb : 1;
+            for (const auto& option : std::initializer_list<std::pair<const char*, int>>{
+                     {"Normal", 1}, {"Deep", 2}, {"Very Deep", 3}}) {
+                QAction* action = depthMenu->addAction(option.first, this,
+                    [this, hitTnf, depth = option.second]{ emit tnfDepthRequested(hitTnf, depth); });
+                action->setCheckable(true);
+                action->setChecked(currentDepth == option.second);
+            }
             menu.addSeparator();
             bool isPerm = false;
             for (const auto& t : m_tnfMarkers)
@@ -1737,39 +1836,42 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 [this, freqMhz]{ emit tnfCreateRequested(freqMhz); });
         }
 
-        // Close Slice option (only when multiple slices exist)
-        if (m_sliceOverlays.size() > 1) {
-            menu.addSeparator();
-            int closestSlice = -1;
-            int closestDist = INT_MAX;
-            for (const auto& so : m_sliceOverlays) {
-                int dist = std::abs(mx - mhzToX(so.freqMhz));
-                if (dist < closestDist) { closestDist = dist; closestSlice = so.sliceId; }
+        if (hitTnf < 0) {
+            // Close Slice option (only when multiple slices exist)
+            if (m_sliceOverlays.size() > 1) {
+                menu.addSeparator();
+                int closestSlice = -1;
+                int closestDist = INT_MAX;
+                for (const auto& so : m_sliceOverlays) {
+                    int dist = std::abs(mx - mhzToX(so.freqMhz));
+                    if (dist < closestDist) { closestDist = dist; closestSlice = so.sliceId; }
+                }
+                if (closestSlice >= 0) {
+                    const QChar letter = QChar('A' + (closestSlice & 3));
+                    menu.addAction(QString("Close Slice %1").arg(letter), this,
+                        [this, closestSlice]{ emit sliceCloseRequested(closestSlice); });
+                }
             }
-            if (closestSlice >= 0) {
-                const QChar letter = QChar('A' + (closestSlice & 3));
-                menu.addAction(QString("Close Slice %1").arg(letter), this,
-                    [this, closestSlice]{ emit sliceCloseRequested(closestSlice); });
-            }
-        }
 
-        menu.addSeparator();
-        QAction* tuneGuideAction = menu.addAction("Show Tune Guides");
-        tuneGuideAction->setCheckable(true);
-        tuneGuideAction->setChecked(m_showTuneGuides);
-        connect(tuneGuideAction, &QAction::toggled, this, &SpectrumWidget::setShowTuneGuides);
+            menu.addSeparator();
+            QAction* tuneGuideAction = menu.addAction("Show Tune Guides");
+            tuneGuideAction->setCheckable(true);
+            tuneGuideAction->setChecked(m_showTuneGuides);
+            connect(tuneGuideAction, &QAction::toggled, this, &SpectrumWidget::setShowTuneGuides);
+
+            menu.addSeparator();
+            bool floating = m_isFloating;
+            QAction* popOutAction = menu.addAction(floating ? "\u21a9 Dock" : "\u2197 Pop out");
+            connect(popOutAction, &QAction::triggered, this, [this, floating]() {
+                emit popOutRequested(!floating);
+            });
+        }
 
         QAction* extendedLineAction = menu.addAction("Extended Frequency Line");
         extendedLineAction->setCheckable(true);
         extendedLineAction->setChecked(m_extendedFrequencyLine);
         connect(extendedLineAction, &QAction::toggled, this, &SpectrumWidget::setExtendedFrequencyLine);
 
-        menu.addSeparator();
-        bool floating = m_isFloating;
-        QAction* popOutAction = menu.addAction(floating ? "\u21a9 Dock" : "\u2197 Pop out");
-        connect(popOutAction, &QAction::triggered, this, [this, floating]() {
-            emit popOutRequested(!floating);
-        });
 
         menu.exec(ev->globalPosition().toPoint());
         ev->accept();
@@ -1782,10 +1884,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const int hitTnf = tnfAtPixel(mx);
         if (hitTnf >= 0) {
             m_draggingTnfId = hitTnf;
+            m_tnfDragStartPos = ev->position().toPoint();
             for (const auto& t : m_tnfMarkers) {
-                if (t.id == hitTnf) { m_dragTnfOrigFreq = t.freqMhz; break; }
+                if (t.id == hitTnf) {
+                    m_dragTnfOrigWidthHz = t.widthHz;
+                    m_dragTnfLastFreq = t.freqMhz;
+                    m_dragTnfLastWidthHz = t.widthHz;
+                    break;
+                }
             }
-            setCursor(Qt::SizeHorCursor);
+            setCursor(Qt::SizeAllCursor);
             ev->accept();
             return;
         }
@@ -1883,14 +1991,36 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
     const int y = static_cast<int>(ev->position().y());
+    const int mx = static_cast<int>(ev->position().x());
 
     // TNF drag
     if (m_draggingTnfId >= 0) {
-        const int mx = static_cast<int>(ev->position().x());
         const double newFreq = xToMhz(mx);
+        const int dy = static_cast<int>(ev->position().y()) - m_tnfDragStartPos.y();
+        const double widthScale = std::pow(2.0, static_cast<double>(-dy) / 48.0);
+        const int newWidthHz = std::clamp(
+            static_cast<int>(std::lround(static_cast<double>(m_dragTnfOrigWidthHz) * widthScale)),
+            10, 12000);
         for (auto& t : m_tnfMarkers) {
-            if (t.id == m_draggingTnfId) { t.freqMhz = newFreq; break; }
+            if (t.id == m_draggingTnfId) {
+                t.freqMhz = newFreq;
+                t.widthHz = newWidthHz;
+                break;
+            }
         }
+        if (!qFuzzyCompare(newFreq + 1.0, m_dragTnfLastFreq + 1.0)) {
+            m_dragTnfLastFreq = newFreq;
+            emit tnfMoveRequested(m_draggingTnfId, newFreq);
+        }
+        if (newWidthHz != m_dragTnfLastWidthHz) {
+            m_dragTnfLastWidthHz = newWidthHz;
+            emit tnfWidthRequested(m_draggingTnfId, newWidthHz);
+        }
+        m_hoveredTnfId = m_draggingTnfId;
+        m_tuneGuideVisible = false;
+        m_tuneGuideTimer->stop();
+        m_cursorPos = ev->position().toPoint();
+        updateTnfHoverPopup();
         markOverlayDirty();
         ev->accept();
         return;
@@ -2037,8 +2167,9 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
             setCursor(Qt::CrossCursor);
         }
     } else if (y < specH) {
-        const int mx = static_cast<int>(ev->position().x());
         const QPoint pos(mx, y);
+        updateTrackedCursorState(pos, rect().contains(pos));
+        const bool hoveringTnf = m_hoveredTnfId >= 0;
 
         // Check off-screen slice indicator hover
         int oldHover = m_hoveringOffScreenIdx;
@@ -2064,11 +2195,19 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
             } else {
                 // Check if hovering over a filter edge or inactive slice marker
                 bool foundCursor = false;
+                if (hoveringTnf) {
+                    if (const TnfMarker* tnf = tnfMarkerById(m_hoveredTnfId)) {
+                        setCursor(Qt::SizeAllCursor);
+                        m_hoveredTnfId = tnf->id;
+                        foundCursor = true;
+                    }
+                }
                 if (const auto* ao = activeOverlay()) {
                     const int loX = mhzToX(ao->freqMhz + ao->filterLowHz / 1.0e6);
                     const int hiX = mhzToX(ao->freqMhz + ao->filterHighHz / 1.0e6);
                     constexpr int GRAB = 5;
-                    if (std::abs(mx - loX) <= GRAB || std::abs(mx - hiX) <= GRAB) {
+                    if (!foundCursor
+                        && (std::abs(mx - loX) <= GRAB || std::abs(mx - hiX) <= GRAB)) {
                         setCursor(Qt::SizeHorCursor);
                         foundCursor = true;
                     }
@@ -2113,8 +2252,6 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                             break;
                         }
                     }
-                    if (!spotHover)
-                        QToolTip::hideText();
                     if (!foundCursor) {
                         for (const auto& cluster : m_spotClusters) {
                             if (cluster.rect.contains(pos)) {
@@ -2131,24 +2268,22 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     setCursor(Qt::PointingHandCursor);
                     foundCursor = true;
                 }
-                if (!foundCursor) setCursor(Qt::CrossCursor);
+                if (!foundCursor) {
+                    setCursor(Qt::CrossCursor);
+                }
             }
         }
-    }
-
-    // Track cursor position for frequency label overlay and tune guides
-    if (m_showTuneGuides) {
-        m_tuneGuideVisible = true;
-        m_tuneGuideTimer->start();
-    }
-    if (m_showCursorFreq || m_showTuneGuides) {
-        m_cursorPos = ev->position().toPoint();
-        markOverlayDirty();
+    } else {
+        updateTrackedCursorState(ev->position().toPoint(), false);
     }
 
     // Band plan spot tooltip on hover
     const int specH2 = static_cast<int>((height() - FREQ_SCALE_H - DIVIDER_H) * m_spectrumFrac);
     const int bandBarTop = specH2 - 8;
+    if (m_hoveredTnfId >= 0) {
+        QToolTip::hideText();
+        return;
+    }
     if (y >= bandBarTop && y <= specH2) {
         const int mx2 = static_cast<int>(ev->position().x());
         const auto& spots = m_bandPlanMgr ? m_bandPlanMgr->spots() : QVector<BandPlanManager::Spot>{};
@@ -2170,17 +2305,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
 {
     if (m_draggingTnfId >= 0) {
-        const int id = m_draggingTnfId;
         m_draggingTnfId = -1;
         setCursor(Qt::CrossCursor);
-        // Only emit move if the TNF still exists in our markers
-        bool exists = false;
-        for (const auto& t : m_tnfMarkers)
-            if (t.id == id) { exists = true; break; }
-        if (exists) {
-            const int mx = static_cast<int>(ev->position().x());
-            emit tnfMoveRequested(id, xToMhz(mx));
-        }
         ev->accept();
         return;
     }
@@ -2376,10 +2502,7 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
 void SpectrumWidget::leaveEvent(QEvent* event)
 {
     QWidget::leaveEvent(event);
-    if (m_showCursorFreq || m_showTuneGuides) {
-        m_cursorPos = {-1, -1};
-        markOverlayDirty();
-    }
+    updateTrackedCursorState(QPoint(-1, -1), false);
 }
 
 void SpectrumWidget::setBackgroundImage(const QString& path)
@@ -2729,7 +2852,10 @@ void SpectrumWidget::initOverlayPipeline()
     const qreal dpr = devicePixelRatioF();
     const int pw = static_cast<int>(w * dpr);
     const int ph = static_cast<int>(h * dpr);
-    m_ovGpuTex = r->newTexture(QRhiTexture::RGBA8, QSize(pw, ph));
+    const QRhiTexture::Format overlayFormat = r->isTextureFormatSupported(QRhiTexture::BGRA8)
+        ? QRhiTexture::BGRA8
+        : QRhiTexture::RGBA8;
+    m_ovGpuTex = r->newTexture(overlayFormat, QSize(pw, ph));
     m_ovGpuTex->create();
 
     m_ovSampler = r->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
@@ -2778,9 +2904,9 @@ void SpectrumWidget::initOverlayPipeline()
 
     m_ovPipeline->create();
 
-    m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+    m_overlayStatic = QImage(pw, ph, QImage::Format_ARGB32_Premultiplied);
     m_overlayStatic.setDevicePixelRatio(dpr);
-    m_overlayDynamic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+    m_overlayDynamic = QImage(pw, ph, QImage::Format_ARGB32_Premultiplied);
     m_overlayDynamic.setDevicePixelRatio(dpr);
     m_overlayDynamic.fill(Qt::transparent);
 
@@ -2913,19 +3039,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     // not deliver mouseMoveEvents even with mouse tracking enabled (missing
     // enterEvent, stale widget state). Poll the actual cursor position to
     // detect when the mouse is inside the widget but events aren't flowing.
-    if (m_showTuneGuides) {
+    {
         QPoint localPos = mapFromGlobal(QCursor::pos());
         if (rect().contains(localPos)) {
-            if (localPos != m_cursorPos) {
-                m_cursorPos = localPos;
-                m_tuneGuideVisible = true;
-                m_tuneGuideTimer->start();
-                m_overlayStaticDirty = true;
-            }
-        } else if (m_cursorPos.x() >= 0) {
+            updateTrackedCursorState(localPos, true);
+        } else if (m_cursorPos.x() >= 0 || m_hoveredTnfId >= 0 || m_tuneGuideVisible) {
             // Mouse left the widget without a leaveEvent
-            m_cursorPos = {-1, -1};
-            m_overlayStaticDirty = true;
+            updateTrackedCursorState(QPoint(-1, -1), false);
         }
     }
 
@@ -3032,9 +3152,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const int pw = static_cast<int>(w * dpr);
         const int ph = static_cast<int>(h * dpr);
         if (m_overlayStatic.size() != QSize(pw, ph)) {
-            m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+            m_overlayStatic = QImage(pw, ph, QImage::Format_ARGB32_Premultiplied);
             m_overlayStatic.setDevicePixelRatio(dpr);
-            m_overlayDynamic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+            m_overlayDynamic = QImage(pw, ph, QImage::Format_ARGB32_Premultiplied);
             m_overlayDynamic.setDevicePixelRatio(dpr);
             m_overlayDynamic.fill(Qt::transparent);
             m_ovGpuTex->setPixelSize(QSize(pw, ph));
@@ -3078,7 +3198,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, FREQ_SCALE_H));
             drawTimeScale(p, wfRect);
-            drawTnfMarkers(p, specRect, wfRect);
+            drawTnfMarkers(p, specRect);
             if (m_showSpots)
                 drawSpotMarkers(p, specRect);
             drawSliceMarkers(p, specRect, wfRect);
@@ -3152,7 +3272,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
 
             // Cursor frequency label (#726)
-            if (m_showCursorFreq && m_cursorPos.x() >= 0
+            if (m_showCursorFreq && m_hoveredTnfId < 0
+                && m_cursorPos.x() >= 0
                 && m_cursorPos.y() >= 0) {
                 const double freqMhz = xToMhz(m_cursorPos.x());
                 const QString label = QString::number(freqMhz, 'f', 6);
@@ -3172,7 +3293,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
 
             // Tune guide overlay (vertical line + frequency label)
-            if (m_showTuneGuides && m_tuneGuideVisible
+            if (m_showTuneGuides && m_hoveredTnfId < 0 && m_tuneGuideVisible
                 && m_cursorPos.x() >= 0 && m_cursorPos.y() >= 0) {
                 const int cx = m_cursorPos.x();
                 p.setPen(QPen(QColor(0x60, 0x70, 0x80), 1));
@@ -3603,7 +3724,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawFreqScale(p, scaleRect);
         drawWaterfall(p, wfRect);
         drawTimeScale(p, wfRect);
-        drawTnfMarkers(p, specRect, wfRect);
+        drawTnfMarkers(p, specRect);
         if (m_showSpots) drawSpotMarkers(p, specRect);
         drawSliceMarkers(p, specRect, wfRect);
         drawOffScreenSlices(p, specRect);
@@ -3769,7 +3890,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     }
 
     // ── Cursor frequency label (#456) ──────────────────────────────────────
-    if (m_showCursorFreq && m_cursorPos.x() >= 0
+    if (m_showCursorFreq && m_hoveredTnfId < 0
+        && m_cursorPos.x() >= 0
         && m_cursorPos.y() >= 0) {
         const double freqMhz = xToMhz(m_cursorPos.x());
         const QString label = QString::number(freqMhz, 'f', 6);
@@ -3790,7 +3912,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     }
 
     // ── Tune guide overlay (vertical line + frequency label) ──────────────
-    if (m_showTuneGuides && m_tuneGuideVisible
+    if (m_showTuneGuides && m_hoveredTnfId < 0 && m_tuneGuideVisible
         && m_cursorPos.x() >= 0 && m_cursorPos.y() >= 0) {
         const int cx = m_cursorPos.x();
         p.setPen(QPen(QColor(0x60, 0x70, 0x80), 1));
@@ -4123,12 +4245,23 @@ void SpectrumWidget::setTnfGlobalEnabled(bool on)
     markOverlayDirty();
 }
 
-void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)
+void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect)
 {
     if (m_tnfMarkers.isEmpty()) return;
 
-    const int alpha = m_tnfGlobalEnabled ? 40 : 15;
-    const int lineAlpha = m_tnfGlobalEnabled ? 140 : 50;
+    const auto drawDepthHatch = [&](const QRect& rect, const QColor& color, int left, int right, int spacing) {
+        if (rect.isEmpty()) {
+            return;
+        }
+        p.save();
+        p.setClipRect(rect);
+        p.setPen(QPen(color, 1));
+        const int height = rect.height();
+        for (int x = left - height; x < right; x += spacing) {
+            p.drawLine(x, rect.bottom(), x + height, rect.top());
+        }
+        p.restore();
+    };
 
     for (const auto& tnf : m_tnfMarkers) {
         const int cx = mhzToX(tnf.freqMhz);
@@ -4140,20 +4273,18 @@ void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect, const QR
         if (right < 0 || left > width()) continue;
 
         // Permanent = green, temporary = yellow
-        const int r = tnf.permanent ? 0x30 : 0xff;
-        const int g = tnf.permanent ? 0xc0 : 0xc0;
-        const int b = tnf.permanent ? 0x30 : 0x00;
-
-        // Shaded fill across spectrum + waterfall
-        const QColor fillColor(r, g, b, alpha);
+        const QColor baseColor = tnfColor(tnf);
+        const QColor fillColor = tnfFillColor(tnf);
+        const QColor lineColor = tnfLineColor(tnf);
         p.fillRect(left, specRect.top(), right - left, specRect.height(), fillColor);
-        p.fillRect(left, wfRect.top(), right - left, wfRect.height(), fillColor);
+        const int hatchSpacing = (tnf.depthDb <= 1) ? 12 : (tnf.depthDb == 2 ? 8 : 5);
+        drawDepthHatch(QRect(left, specRect.top(), right - left, specRect.height()), lineColor, left, right, hatchSpacing);
 
         // Edge lines
-        const QPen edgePen(QColor(r, g, b, lineAlpha), 1, Qt::SolidLine);
+        const QPen edgePen(lineColor, 1, Qt::SolidLine);
         p.setPen(edgePen);
-        p.drawLine(left, specRect.top(), left, wfRect.bottom());
-        p.drawLine(right, specRect.top(), right, wfRect.bottom());
+        p.drawLine(left, specRect.top(), left, specRect.bottom());
+        p.drawLine(right, specRect.top(), right, specRect.bottom());
 
         // Center triangle (grab handle) at top of spectrum
         const int triH = 8 + tnf.depthDb * 2;  // bigger triangle for deeper notch
@@ -4162,19 +4293,136 @@ void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect, const QR
             << QPoint(cx + 5, specRect.top())
             << QPoint(cx, specRect.top() + triH);
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(r, g, b, m_tnfGlobalEnabled ? 200 : 80));
+        p.setBrush(QColor(baseColor.red(), baseColor.green(), baseColor.blue(), m_tnfGlobalEnabled ? 200 : 80));
         p.drawPolygon(tri);
     }
 }
 
-int SpectrumWidget::tnfAtPixel(int x) const
+const SpectrumWidget::TnfMarker* SpectrumWidget::tnfMarkerById(int id) const
 {
     for (const auto& tnf : m_tnfMarkers) {
-        int cx = mhzToX(tnf.freqMhz);
-        if (std::abs(x - cx) <= 8)
-            return tnf.id;
+        if (tnf.id == id) {
+            return &tnf;
+        }
     }
-    return -1;
+    return nullptr;
+}
+
+QColor SpectrumWidget::tnfColor(const TnfMarker& tnf) const
+{
+    return tnf.permanent ? QColor(0x30, 0xc0, 0x30) : QColor(0xff, 0xc0, 0x00);
+}
+
+QColor SpectrumWidget::tnfFillColor(const TnfMarker& tnf) const
+{
+    const QColor baseColor = tnfColor(tnf);
+    const int alpha = m_tnfGlobalEnabled ? 40 : 15;
+    return QColor(baseColor.red(), baseColor.green(), baseColor.blue(), alpha);
+}
+
+QColor SpectrumWidget::tnfLineColor(const TnfMarker& tnf) const
+{
+    const QColor baseColor = tnfColor(tnf);
+    const int alpha = m_tnfGlobalEnabled ? 160 : 70;
+    const QColor bgBase(0x0f, 0x0f, 0x1a);
+    const auto blend = [alpha](int bg, int fg) {
+        return (bg * (255 - alpha) + fg * alpha) / 255;
+    };
+    return QColor(blend(bgBase.red(), baseColor.red()),
+                  blend(bgBase.green(), baseColor.green()),
+                  blend(bgBase.blue(), baseColor.blue()));
+}
+
+void SpectrumWidget::updateTnfHoverPopup()
+{
+    const TnfMarker* tnf = tnfMarkerById(m_hoveredTnfId);
+    if (!tnf || m_cursorPos.x() < 0 || m_cursorPos.y() < 0) {
+        if (m_tnfHoverPopup) {
+            m_tnfHoverPopup->hide();
+        }
+        return;
+    }
+
+    const QString title = QStringLiteral("RF Tracking Notch");
+    const QString freq = QString("%1 MHz").arg(formatFlagFrequency(tnf->freqMhz));
+    const QString widthText = QString("%1 Hz Wide").arg(tnf->widthHz);
+    const QColor baseColor = tnfColor(*tnf);
+    QColor fillBase(0x0f, 0x0f, 0x1a, 220);
+    fillBase.setRed((fillBase.red() * 3 + baseColor.red()) / 4);
+    fillBase.setGreen((fillBase.green() * 3 + baseColor.green()) / 4);
+    fillBase.setBlue((fillBase.blue() * 3 + baseColor.blue()) / 4);
+    const QColor lineColor = baseColor.lighter(115);
+
+    const QString html = QString(
+        "<div style='font-size:9pt; font-weight:600;'>%1</div>"
+        "<div style='font-size:11pt;'>%2</div>"
+        "<div style='font-size:11pt;'>%3</div>")
+            .arg(title, freq, widthText);
+
+    m_tnfHoverPopup->setStyleSheet(QString(
+        "QLabel {"
+        " background-color: rgba(%1,%2,%3,%4);"
+        " color: rgb(%5,%6,%7);"
+        " border: 1px solid rgb(%5,%6,%7);"
+        " border-radius: 2px;"
+        " }")
+            .arg(fillBase.red())
+            .arg(fillBase.green())
+            .arg(fillBase.blue())
+            .arg(fillBase.alpha())
+            .arg(lineColor.red())
+            .arg(lineColor.green())
+            .arg(lineColor.blue()));
+    m_tnfHoverPopup->setText(html);
+    m_tnfHoverPopup->adjustSize();
+
+    const QSize boxSize = m_tnfHoverPopup->sizeHint();
+    int left = m_cursorPos.x() + 12;
+    if (left + boxSize.width() > width()) {
+        left = m_cursorPos.x() - boxSize.width() - 4;
+    }
+    int top = m_cursorPos.y() - boxSize.height() - 4;
+    if (top < 0) {
+        top = std::min(height() - boxSize.height(), m_cursorPos.y() + 16);
+    }
+    m_tnfHoverPopup->move(left, top);
+    m_tnfHoverPopup->show();
+    m_tnfHoverPopup->raise();
+}
+
+int SpectrumWidget::tnfAtPixel(int x, int preferredId) const
+{
+    const auto containsPixel = [this, x](const TnfMarker& tnf) {
+        const int cx = mhzToX(tnf.freqMhz);
+        const int halfW = std::max(2, mhzToX(tnf.freqMhz + tnf.widthHz / 2.0e6) - cx);
+        const int left = cx - halfW - 3;
+        const int right = cx + halfW + 3;
+        return x >= left && x <= right;
+    };
+
+    if (preferredId >= 0) {
+        if (const TnfMarker* preferredTnf = tnfMarkerById(preferredId)) {
+            if (containsPixel(*preferredTnf)) {
+                return preferredId;
+            }
+        }
+    }
+
+    int bestId = -1;
+    int bestDistance = INT_MAX;
+    for (int i = m_tnfMarkers.size() - 1; i >= 0; --i) {
+        const TnfMarker& tnf = m_tnfMarkers[i];
+        if (!containsPixel(tnf)) {
+            continue;
+        }
+
+        const int distance = std::abs(x - mhzToX(tnf.freqMhz));
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestId = tnf.id;
+        }
+    }
+    return bestId;
 }
 
 // ─── VFO marker (filter passband + tuned frequency line) ──────────────────────

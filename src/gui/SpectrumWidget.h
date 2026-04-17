@@ -9,6 +9,7 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QTimer>
+#include <QLabel>
 
 class QVariantAnimation;
 
@@ -377,10 +378,16 @@ private:
     void drawSliceMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawOffScreenSlices(QPainter& p, const QRect& specRect);
     void drawBandPlan(QPainter& p, const QRect& specRect);
-    void drawTnfMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    void drawTnfMarkers(QPainter& p, const QRect& specRect);
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void showSpotClusterPopup(const SpotCluster& cluster, const QPoint& globalPos);
-    int  tnfAtPixel(int x) const;
+    const TnfMarker* tnfMarkerById(int id) const;
+    QColor tnfColor(const TnfMarker& tnf) const;
+    QColor tnfFillColor(const TnfMarker& tnf) const;
+    QColor tnfLineColor(const TnfMarker& tnf) const;
+    int  tnfAtPixel(int x, int preferredId = -1) const;
+    void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
+    void updateTnfHoverPopup();
     void drawWaterfall(QPainter& p, const QRect& r);
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
@@ -638,7 +645,12 @@ private:
     QColor m_spotBgColor{Qt::black};
     int    m_spotBgOpacity{48};
     int  m_draggingTnfId{-1};
-    double m_dragTnfOrigFreq{0.0};
+    int  m_hoveredTnfId{-1};
+    int    m_dragTnfOrigWidthHz{100};
+    double m_dragTnfLastFreq{0.0};
+    int    m_dragTnfLastWidthHz{100};
+    QPoint m_tnfDragStartPos;
+    QLabel* m_tnfHoverPopup{nullptr};
 
     // Floating overlay menu (child widget, anchored top-left)
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
