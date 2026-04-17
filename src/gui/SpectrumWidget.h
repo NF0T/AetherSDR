@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QColor>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QTimer>
 
 class QVariantAnimation;
@@ -75,6 +76,7 @@ public:
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
+    void setConnectionAnimationVisible(bool on, const QString& label = {});
 
     // Feed a new FFT frame. bins are scaled dBm values.
     void updateSpectrum(const QVector<float>& binsDbm);
@@ -380,6 +382,7 @@ private:
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
+    void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
     int waterfallStripWidth() const;
     QRect waterfallLiveButtonRect(const QRect& wfRect) const;
     QRect waterfallTimeScaleRect(const QRect& wfRect) const;
@@ -556,6 +559,10 @@ private:
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};
     QTimer* m_tuneGuideTimer{nullptr};
+    bool    m_connectionAnimationVisible{false};
+    QString m_connectionAnimationLabel;
+    QTimer* m_connectionAnimationTimer{nullptr};
+    QElapsedTimer m_connectionAnimationClock;
 
     // State change detector cache (per-instance, NOT static — multiple
     // panadapters have different values and static vars cause an infinite

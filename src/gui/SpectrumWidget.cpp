@@ -41,6 +41,10 @@
 
 namespace AetherSDR {
 
+static const QColor kAetherBrandBlue(0x00, 0xb4, 0xd8);
+static const QColor kAetherBrandGreen(0x20, 0xc0, 0x60);
+static const QColor kConnectionTextColor(0xd8, 0xe6, 0xf0);
+
 // ─── Waterfall color scheme gradient presets ─────────────────────────────────
 
 static constexpr WfGradientStop kDefaultStops[] = {
@@ -156,6 +160,13 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     connect(m_tuneGuideTimer, &QTimer::timeout, this, [this]() {
         m_tuneGuideVisible = false;
         markOverlayDirty();
+    });
+
+    m_connectionAnimationTimer = new QTimer(this);
+    m_connectionAnimationTimer->setInterval(40);
+    connect(m_connectionAnimationTimer, &QTimer::timeout, this, [this]() {
+        if (m_connectionAnimationVisible)
+            markOverlayDirty();
     });
 
     // Load display settings (panIndex 0 by default — loadSettings() can be
@@ -673,6 +684,182 @@ void SpectrumWidget::clearDisplay()
     m_wfHistoryOffsetRows = 0;
     m_wfLive = true;
     markOverlayDirty();
+}
+
+void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label)
+{
+    const QString nextLabel = label.trimmed().isEmpty()
+        ? QStringLiteral("Connecting to radio…")
+        : label.trimmed();
+    const bool changed = (m_connectionAnimationVisible != on)
+        || (on && m_connectionAnimationLabel != nextLabel);
+
+    if (!changed) {
+        return;
+    }
+
+    m_connectionAnimationVisible = on;
+    if (on) {
+        m_connectionAnimationLabel = nextLabel;
+        m_connectionAnimationClock.restart();
+        m_connectionAnimationTimer->start();
+    } else {
+        m_connectionAnimationLabel.clear();
+        m_connectionAnimationTimer->stop();
+    }
+    markOverlayDirty();
+}
+
+void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRect)
+{
+    if (!m_connectionAnimationVisible || !m_connectionAnimationClock.isValid()) {
+        return;
+    }
+
+    const qreal insetX = qMin(40.0, contentRect.width() * 0.10);
+    const qreal insetTop = qMin(18.0, contentRect.height() * 0.08);
+    const qreal insetBottom = qMin(22.0, contentRect.height() * 0.10);
+    const QRectF available = QRectF(contentRect).adjusted(insetX, insetTop, -insetX, -insetBottom);
+    if (available.width() < 140.0 || available.height() < 96.0) {
+        return;
+    }
+
+    const qreal seconds = m_connectionAnimationClock.elapsed() / 1000.0;
+    const qreal towerHeight = qMin(available.height() * 0.32, 106.0);
+    const qreal towerWidth = towerHeight * 0.34;
+    const SliceOverlay* anchorOverlay = activeOverlay();
+    const qreal anchorX = anchorOverlay
+        ? static_cast<qreal>(mhzToX(anchorOverlay->freqMhz))
+        : static_cast<qreal>(mhzToX(m_centerMhz));
+    const qreal centerX = qBound(available.left() + towerWidth * 1.5,
+                                 anchorX,
+                                 available.right() - towerWidth * 1.5);
+    const qreal baseY = available.top() + available.height() * 0.66;
+    const qreal topY = baseY - towerHeight;
+    const qreal phase = std::fmod(seconds * 0.7, 1.0);
+
+    auto withAlpha = [](QColor color, int alpha) {
+        color.setAlpha(alpha);
+        return color;
+    };
+
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    QRadialGradient glow(QPointF(centerX, topY + towerHeight * 0.32),
+                         towerHeight * 1.18);
+    glow.setColorAt(0.0, withAlpha(kAetherBrandBlue, 48));
+    glow.setColorAt(0.55, withAlpha(kAetherBrandGreen, 22));
+    glow.setColorAt(1.0, QColor(0, 0, 0, 0));
+    p.setPen(Qt::NoPen);
+    p.setBrush(glow);
+    p.drawEllipse(QPointF(centerX, topY + towerHeight * 0.34),
+                  towerHeight * 1.05, towerHeight * 0.82);
+
+    static constexpr qreal kTau = 6.28318530717958647692;
+    const qreal pulse = 0.55 + 0.45 * std::sin(seconds * kTau);
+    for (int ring = 0; ring < 3; ++ring) {
+        const qreal ringProgress = std::fmod(phase + ring * 0.24, 1.0);
+        const qreal radiusX = towerWidth * 0.85 + ringProgress * towerHeight * 0.92;
+        const qreal radiusY = radiusX * 0.74;
+        QColor waveColor = (ring % 2 == 0) ? kAetherBrandBlue : kAetherBrandGreen;
+        const qreal fade = 1.0 - ringProgress;
+        waveColor.setAlphaF(qBound(0.10, 0.16 + fade * 0.48 * pulse, 0.70));
+        QPen wavePen(waveColor,
+                     qMax(1.8, towerWidth * (0.075 + fade * 0.05)),
+                     Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        p.setPen(wavePen);
+        p.setBrush(Qt::NoBrush);
+        const QRectF arcRect(centerX - radiusX, topY - radiusY + towerHeight * 0.12,
+                             radiusX * 2.0, radiusY * 2.0);
+        p.drawArc(arcRect, 28 * 16, 124 * 16);
+    }
+
+    QLinearGradient towerGradient(QPointF(centerX, topY), QPointF(centerX, baseY));
+    towerGradient.setColorAt(0.0, kAetherBrandBlue.lighter(115));
+    towerGradient.setColorAt(0.55, kAetherBrandBlue);
+    towerGradient.setColorAt(1.0, kAetherBrandGreen);
+
+    QPainterPath towerFill;
+    towerFill.moveTo(centerX - towerWidth * 0.48, baseY);
+    towerFill.lineTo(centerX, topY + towerHeight * 0.08);
+    towerFill.lineTo(centerX + towerWidth * 0.48, baseY);
+    towerFill.closeSubpath();
+    QLinearGradient fillGradient(QPointF(centerX, topY), QPointF(centerX, baseY));
+    fillGradient.setColorAt(0.0, withAlpha(kAetherBrandBlue, 28));
+    fillGradient.setColorAt(1.0, withAlpha(kAetherBrandGreen, 12));
+    p.fillPath(towerFill, fillGradient);
+
+    QPen towerPen(QBrush(towerGradient), qMax(2.2, towerWidth * 0.11),
+                  Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    p.setPen(towerPen);
+    p.drawLine(QPointF(centerX - towerWidth * 0.48, baseY),
+               QPointF(centerX, topY));
+    p.drawLine(QPointF(centerX + towerWidth * 0.48, baseY),
+               QPointF(centerX, topY));
+
+    const qreal mastBottomY = topY + towerHeight * 0.28;
+    p.drawLine(QPointF(centerX, topY - towerHeight * 0.10),
+               QPointF(centerX, mastBottomY));
+
+    for (qreal t : {0.25, 0.45, 0.66, 0.84}) {
+        const qreal y = topY + towerHeight * t;
+        const qreal halfWidth = towerWidth * 0.48 * t;
+        p.drawLine(QPointF(centerX - halfWidth, y), QPointF(centerX + halfWidth, y));
+        if (t < 0.8) {
+            const qreal nextT = qMin(t + 0.16, 0.98);
+            const qreal nextY = topY + towerHeight * nextT;
+            const qreal nextHalfWidth = towerWidth * 0.48 * nextT;
+            p.drawLine(QPointF(centerX - halfWidth, y),
+                       QPointF(centerX + nextHalfWidth, nextY));
+            p.drawLine(QPointF(centerX + halfWidth, y),
+                       QPointF(centerX - nextHalfWidth, nextY));
+        }
+    }
+
+    p.drawLine(QPointF(centerX - towerWidth * 0.72, baseY),
+               QPointF(centerX + towerWidth * 0.72, baseY));
+    p.setBrush(kAetherBrandBlue);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(QPointF(centerX, topY - towerHeight * 0.10),
+                  towerWidth * 0.10, towerWidth * 0.10);
+
+    QFont titleFont = p.font();
+    titleFont.setPointSizeF(qBound(10.5, available.height() * 0.078, 18.0));
+    titleFont.setBold(true);
+    p.setFont(titleFont);
+    QFontMetricsF titleFm(titleFont);
+
+    QString subtitle = QStringLiteral("Getting everything ready");
+    if (m_connectionAnimationLabel.contains(QStringLiteral("remote"), Qt::CaseInsensitive)
+        || m_connectionAnimationLabel.contains(QStringLiteral("smartlink"), Qt::CaseInsensitive)) {
+        subtitle = QStringLiteral("Establishing a secure radio link");
+    } else if (m_connectionAnimationLabel.contains(QStringLiteral("reconnect"), Qt::CaseInsensitive)) {
+        subtitle = QStringLiteral("Restoring your session");
+    }
+
+    QFont subtitleFont = titleFont;
+    subtitleFont.setPointSizeF(qMax(9.0, titleFont.pointSizeF() - 2.5));
+    subtitleFont.setBold(false);
+    QFontMetricsF subtitleFm(subtitleFont);
+
+    const qreal titleY = baseY + towerHeight * 0.18;
+    const QRectF titleRect(available.left(), titleY, available.width(), titleFm.height() + 6.0);
+    const QRectF subtitleRect(available.left(), titleRect.bottom() + 4.0,
+                              available.width(), subtitleFm.height() + 4.0);
+
+    QLinearGradient titleGradient(titleRect.topLeft(), titleRect.topRight());
+    titleGradient.setColorAt(0.0, kAetherBrandBlue.lighter(108));
+    titleGradient.setColorAt(1.0, kAetherBrandGreen.lighter(105));
+    p.setFont(titleFont);
+    p.setPen(QPen(QBrush(titleGradient), 1.0));
+    p.drawText(titleRect, Qt::AlignHCenter | Qt::AlignTop, m_connectionAnimationLabel);
+
+    p.setFont(subtitleFont);
+    p.setPen(withAlpha(kConnectionTextColor, 180));
+    p.drawText(subtitleRect, Qt::AlignHCenter | Qt::AlignTop, subtitle);
+
+    p.restore();
 }
 
 void SpectrumWidget::resetGpuResources()
@@ -2984,6 +3171,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 p.drawText(lx + 4, ly + fm.ascent() + 2, label);
             }
 
+            drawConnectionAnimation(p, specRect);
+
             m_overlayStaticDirty = false;
             m_overlayNeedsUpload = true;
         }
@@ -3387,6 +3576,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         if (m_showSpots) drawSpotMarkers(p, specRect);
         drawSliceMarkers(p, specRect, wfRect);
         drawOffScreenSlices(p, specRect);
+        drawConnectionAnimation(p, specRect);
     }
 
     // Reposition all VFO widgets — deconflict flags so they fly away from each other
