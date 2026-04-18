@@ -5993,23 +5993,26 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── WNB / RF Gain ────────────────────────────────────────────────────
     connect(menu, &SpectrumOverlayMenu::wnbToggled,
-            this, [this, sw](bool on) {
-        m_radioModel.setPanWnb(on);
+            this, [this, sw, applet](bool on) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 wnb=%2").arg(applet->panId()).arg(on ? 1 : 0));
         sw->setWnbActive(on);
         auto& s = AppSettings::instance();
         s.setValue(sw->settingsKey("DisplayWnbEnabled"), on ? "True" : "False");
         s.save();
     });
     connect(menu, &SpectrumOverlayMenu::wnbLevelChanged,
-            this, [this, sw](int level) {
-        m_radioModel.setPanWnbLevel(level);
+            this, [this, sw, applet](int level) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 wnb_level=%2").arg(applet->panId()).arg(level));
         auto& s = AppSettings::instance();
         s.setValue(sw->settingsKey("DisplayWnbLevel"), QString::number(level));
         s.save();
     });
     connect(menu, &SpectrumOverlayMenu::rfGainChanged,
-            this, [this, sw](int gain) {
-        m_radioModel.setPanRfGain(gain);
+            this, [this, sw, applet](int gain) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 rfgain=%2").arg(applet->panId()).arg(gain));
         sw->setRfGain(gain);
         auto& s = AppSettings::instance();
         s.setValue(sw->settingsKey("DisplayRfGain"), QString::number(gain));
