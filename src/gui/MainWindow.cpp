@@ -2359,7 +2359,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         m_cwxPanel->setVisible(show);
         m_cwxIndicator->setStyleSheet(show
             ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
-            : "QLabel { color: rgba(255,255,255,40); font-weight: bold; font-size: 24px; }");
+            : "QLabel { color: rgba(255,255,255,100); font-weight: bold; font-size: 24px; }");
         if (show) {
             auto sizes = m_splitter->sizes();
             if (sizes.size() >= 4) {
@@ -2385,7 +2385,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         m_dvkPanel->setVisible(show);
         m_dvkIndicator->setStyleSheet(show
             ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
-            : "QLabel { color: rgba(255,255,255,40); font-weight: bold; font-size: 24px; }");
+            : "QLabel { color: rgba(255,255,255,100); font-weight: bold; font-size: 24px; }");
         if (show) {
             auto sizes = m_splitter->sizes();
             if (sizes.size() >= 4) {
@@ -3921,7 +3921,7 @@ void MainWindow::buildUI()
     hbox->addSpacing(8);
 
     m_tnfIndicator = new QLabel("TNF");
-    m_tnfIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 24px; }");
+    m_tnfIndicator->setStyleSheet("QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }");
     m_tnfIndicator->setCursor(Qt::PointingHandCursor);
     m_tnfIndicator->installEventFilter(this);
     hbox->addWidget(m_tnfIndicator);
@@ -5506,7 +5506,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(tnf, &TnfModel::globalEnabledChanged,
             this, [this](bool on) {
         m_tnfIndicator->setStyleSheet(on
-            ? "QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 24px; }"
+            ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
             : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
     });
 
@@ -5514,7 +5514,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
         bool fdx = m_radioModel.fullDuplexEnabled();
         m_fdxIndicator->setStyleSheet(fdx
-            ? "QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 24px; }"
+            ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
             : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
     });
     connect(sw, &SpectrumWidget::tnfCreateRequested,   tnf, &TnfModel::createTnf);
@@ -6491,7 +6491,7 @@ SpectrumWidget* MainWindow::spectrumForSlice(SliceModel* s) const
 void MainWindow::updateKeyerAvailability(const QString& mode)
 {
     static const QString kActive   = "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }";
-    static const QString kAvail    = "QLabel { color: rgba(255,255,255,40); font-weight: bold; font-size: 24px; }";
+    static const QString kAvail    = "QLabel { color: rgba(255,255,255,100); font-weight: bold; font-size: 24px; }";
     static const QString kDisabled = "QLabel { color: #252530; font-weight: bold; font-size: 24px; }";
 
     bool isCw  = (mode == "CW" || mode == "CWL");
