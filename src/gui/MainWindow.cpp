@@ -1939,7 +1939,7 @@ MainWindow::MainWindow(QWidget* parent)
             }
             // Only produce sidetone when the active slice is in CW mode
             if (auto* slice = activeSlice()) {
-                bool isCw = (slice->mode() == "CW");
+                bool isCw = (slice->mode() == "CW" || slice->mode() == "CWL");
                 m_audio->setCwSidetoneKeyed(tx && isCw);
             } else {
                 m_audio->setCwSidetoneKeyed(false);
