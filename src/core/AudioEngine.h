@@ -204,7 +204,10 @@ public:
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
 
-    // Plays C-QUAM decoded audio (float32 stereo 48kHz) bypassing m_cquamMode block
+    // Plays C-QUAM decoded audio (float32 stereo 24kHz, matching
+    // DEFAULT_SAMPLE_RATE). Unlike feedDecodedSpeech, this is gated on
+    // m_cquamMode — it replaces the native mono AM feed rather than mixing
+    // alongside it (feedAudioData() drops native audio while m_cquamMode is set).
     void feedCquamAudio(const QByteArray& pcm);
 
     // Client-side NR2 (spectral noise reduction)

@@ -114,6 +114,45 @@ const DaxIqModel::IqStream& DaxIqModel::stream(int channel) const
     return m_streams[idx];
 }
 
+const char* DaxIqModel::daxIqConsumerName(DaxIqConsumer who)
+{
+    switch (who) {
+        case DaxIqConsumer::Wfm:   return "WFM";
+        case DaxIqConsumer::Cquam: return "C-QUAM";
+    }
+    return "?";
+}
+
+bool DaxIqModel::acquireChannel(int channel, DaxIqConsumer who)
+{
+    const int idx = channelIndex(channel);
+    if (idx < 0 || idx >= NUM_CHANNELS) return false;
+    if (m_channelOwner[idx] && *m_channelOwner[idx] != who) return false;
+    m_channelOwner[idx] = who;
+    return true;
+}
+
+void DaxIqModel::releaseChannel(int channel, DaxIqConsumer who)
+{
+    const int idx = channelIndex(channel);
+    if (idx < 0 || idx >= NUM_CHANNELS) return;
+    if (m_channelOwner[idx] && *m_channelOwner[idx] == who) m_channelOwner[idx].reset();
+}
+
+bool DaxIqModel::channelHeldBy(int channel, DaxIqConsumer who) const
+{
+    const int idx = channelIndex(channel);
+    if (idx < 0 || idx >= NUM_CHANNELS) return false;
+    return m_channelOwner[idx] && *m_channelOwner[idx] == who;
+}
+
+std::optional<DaxIqModel::DaxIqConsumer> DaxIqModel::channelOwner(int channel) const
+{
+    const int idx = channelIndex(channel);
+    if (idx < 0 || idx >= NUM_CHANNELS) return std::nullopt;
+    return m_channelOwner[idx];
+}
+
 void DaxIqModel::relayIqSamples(int channel, const QByteArray& iqBytes, int sampleRate)
 {
     // Convert to QVector<float> only when a software demodulator is actually

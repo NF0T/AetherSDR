@@ -1133,6 +1133,15 @@ void MainWindow::activateWFM(int sliceId)
     if (m_wfmSliceId == sliceId) return;
     deactivateWFM();
 
+    // Symmetric to activateCQUAM()'s guard: WFM's Windows DAX-capture path
+    // reassigns the same physical DAX IQ channel 1 outside DaxIqModel's
+    // acquire/release tracking, so check the other feature's slice id here too.
+    if (m_cquamSliceId >= 0) {
+        qCWarning(lcAudio) << "activateWFM: DAX IQ channel in use by C-QUAM (slice"
+                           << m_cquamSliceId << ") — refusing to start";
+        return;
+    }
+
     m_wfmCooldown = true;
     QTimer::singleShot(1000, this, [this]{ m_wfmCooldown = false; });
 
@@ -1280,10 +1289,19 @@ void MainWindow::activateCQUAM(int sliceId)
     if (m_cquamSliceId == sliceId) return;
     if (m_cquamSliceId >= 0) deactivateCQUAM();
 
+    // WFM's primary (Windows) capture path reassigns the radio's DAX IQ
+    // channel 1 directly and never goes through DaxIqModel's per-channel
+    // acquire/release tracking, so it can't be caught by CquamDemodulator's
+    // own acquireChannel() call below. Guard here too — cheap, and covers
+    // both of WFM's internal paths uniformly.
+    if (m_wfmSliceId >= 0) {
+        qCWarning(lcAudio) << "activateCQUAM: DAX IQ channel in use by WFM (slice"
+                           << m_wfmSliceId << ") — refusing to start";
+        return;
+    }
+
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
-
-    m_cquamSliceId = sliceId;
 
     // Pan tracking logic (same as WFM)
     auto centerPanAtSlice = [this, panId = s->panId(), slice = s]() {
@@ -1308,19 +1326,19 @@ void MainWindow::activateCQUAM(int sliceId)
     connect(s, &SliceModel::audioGainChanged,
             m_cquamDemod, [this](float g) { m_cquamDemod->setVolume(static_cast<int>(g)); });
 
-    s->setCquamEnabled(true);
-    m_cquamSliceId = sliceId;
-    emit cquamEnabledChanged(sliceId, true);
-
     m_cquamDemod->start(&m_radioModel.daxIqModel(), s->panId());
-    
+
     if (!m_cquamDemod->isActive()) {
         qCWarning(lcAudio) << "activateCQUAM: failed to start DAX IQ stream";
         delete m_cquamDemod;
         m_cquamDemod = nullptr;
-        m_cquamSliceId = -1;
-        return;
+        return;   // m_cquamSliceId is still -1 here — nothing was committed yet
     }
+
+    // Stream confirmed live — commit the enabled state and notify once.
+    s->setCquamEnabled(true);
+    m_cquamSliceId = sliceId;
+    emit cquamEnabledChanged(sliceId, true);
 
     m_audio->setCquamMode(true);
 
@@ -1337,7 +1355,6 @@ void MainWindow::activateCQUAM(int sliceId)
             m_cquamDemod->setFreqOffsetHz(0.0f);
         }
     });
-    emit cquamEnabledChanged(sliceId, true);
 }
 
 void MainWindow::deactivateCQUAM()

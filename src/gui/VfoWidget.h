@@ -275,7 +275,6 @@ public:
     // as an opaque, cacheable layer instead of being alpha-blended over the
     // whole window every frame (the dominant idle CPU cost — see #3283).
     void setOpaqueMode(bool on);
-    void setFrequencyHovered(bool hovered);
     void setCquamLocked(bool locked);
 
     // Which side of the slice marker the flag panel is currently rendered on.

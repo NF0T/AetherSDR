@@ -1848,6 +1848,22 @@ target_include_directories(wfm_dsp_test PRIVATE
 target_link_libraries(wfm_dsp_test PRIVATE Qt6::Core)
 add_test(NAME wfm_dsp_test COMMAND wfm_dsp_test)
 
+# Pins the C-QUAM (AM Stereo) DSP chain against a synthesized composite
+# signal (envelope carries L+R, pre-distorted quadrature phase carries L-R
+# per the Motorola C-QUAM standard) — verifies pilot lock, stereo separation,
+# and output level without needing an over-the-air signal or a radio.
+add_executable(cquam_dsp_test
+    tests/cquam_dsp_test.cpp
+    src/core/CquamDsp.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(cquam_dsp_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(cquam_dsp_test PRIVATE Qt6::Core)
+add_test(NAME cquam_dsp_test COMMAND cquam_dsp_test)
+
 # Hardware-gated functional test for the optional NVIDIA AFX GPU denoiser.
 # Built only when the feature is enabled; SKIPs at runtime without a pack/GPU.
 if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")

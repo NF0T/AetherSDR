@@ -6,6 +6,7 @@
 #include <QString>
 #include <QThread>
 #include <QVector>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -46,6 +47,26 @@ public:
     void removeStream(int channel);               // stream remove 0x<id>
     void setSampleRate(int channel, int rate);     // stream set 0x<id> daxiq_rate=N
 
+    // Exclusive ownership of a DAX IQ channel across independent consumers
+    // (WfmDemodulator, CquamDemodulator, future features). Named to match
+    // PanadapterStream's DaxConsumer/acquireDaxChannel/releaseDaxChannel
+    // (#3305/#4017) for DAX RX — but DAX IQ is a simpler case: one raw DDC
+    // feed that only one decoder can usefully consume at a time, so this is
+    // an exclusive claim rather than a refcount.
+    enum class DaxIqConsumer : quint8 {
+        Wfm   = 0,
+        Cquam = 1,
+    };
+    static const char* daxIqConsumerName(DaxIqConsumer who);
+
+    // Claims `channel` (1-4) for `who`. Returns false (no-op) if another
+    // consumer already holds it. Idempotent if `who` already holds it.
+    bool acquireChannel(int channel, DaxIqConsumer who);
+    // Releases `channel` if held by `who`; no-op otherwise (e.g. double-release).
+    void releaseChannel(int channel, DaxIqConsumer who);
+    bool channelHeldBy(int channel, DaxIqConsumer who) const;
+    std::optional<DaxIqConsumer> channelOwner(int channel) const;
+
     // State
     const IqStream& stream(int channel) const;    // channel 1-4
     int capacity() const  { return m_capacity; }
@@ -80,6 +101,7 @@ private:
 
     IqStream m_streams[NUM_CHANNELS];  // index 0-3 for channels 1-4
     int      m_desiredRate[NUM_CHANNELS]{48000, 48000, 48000, 48000};  // user-selected rate, applied after (re)create
+    std::optional<DaxIqConsumer> m_channelOwner[NUM_CHANNELS];  // exclusive consumer per channel, if any
     int m_capacity{0};
     int m_available{0};
 

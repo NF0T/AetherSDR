@@ -13,6 +13,15 @@ void CquamDemodulator::start(DaxIqModel* daxIq, const QString& panId)
 {
     if (m_active) stop();
 
+    if (!daxIq->acquireChannel(DAX_CHANNEL, DaxIqModel::DaxIqConsumer::Cquam)) {
+        const auto owner = daxIq->channelOwner(DAX_CHANNEL);
+        qCWarning(lcAudio) << "CquamDemodulator: DAX IQ channel" << DAX_CHANNEL
+                           << "already in use by"
+                           << (owner ? DaxIqModel::daxIqConsumerName(*owner) : "?")
+                           << "— refusing to start";
+        return;
+    }
+
     m_daxIq = daxIq;
     m_panId = panId;
     m_panSent = false;
@@ -34,6 +43,7 @@ void CquamDemodulator::stop()
 
     if (m_daxIq) {
         m_daxIq->removeStream(DAX_CHANNEL);
+        m_daxIq->releaseChannel(DAX_CHANNEL, DaxIqModel::DaxIqConsumer::Cquam);
         disconnect(m_daxIq, nullptr, this, nullptr);
         m_daxIq = nullptr;
     }
@@ -74,7 +84,7 @@ void CquamDemodulator::onStreamChanged(int channel)
 void CquamDemodulator::onIqSamples(int channel, QVector<float> iq, int sampleRate)
 {
     if (channel != DAX_CHANNEL || !m_active) return;
-    ensureDsp(sampleRate > 0 ? sampleRate : AUDIO_RATE);
+    ensureDsp(sampleRate > 0 ? sampleRate : kFallbackIqRateHz);
     processIqFloat(iq.constData(), iq.size() / 2);
 }
 
