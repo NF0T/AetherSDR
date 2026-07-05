@@ -153,6 +153,7 @@ using DaxBridge = PipeWireAudioBridge;
 #endif
 class VfoWidget;
 class WfmDemodulator;
+class CquamDemodulator;
 
 // Wheel mode for FlexControl: determines what the encoder knob adjusts.
 //
@@ -182,6 +183,11 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
+signals:
+    void cquamLockChanged(int sliceId, bool locked);
+    void cquamEnabledChanged(int sliceId, bool enabled);
+
+public:
     // Active-session RadioModel. Bound to the current session's model, so it
     // tracks Multi-Flex session switches. Used by the automation bridge
     // (#3646) to read live model state via get(); keep it read-oriented.
@@ -1239,6 +1245,9 @@ private:
     bool m_radeTxActive{false};
     void activateRADE(int sliceId);
     void deactivateRADE();
+
+    void activateCQUAM(int sliceId);
+    void deactivateCQUAM();
     void onRadeSliceModeChanged(const QString& mode);
     void startFreeDvReporting(int sliceId);
     void stopFreeDvReporting(int sliceId);
@@ -1269,6 +1278,9 @@ private:
     void recenterPanFollowOnSlice0();
 
     WfmDemodulator* m_wfmDemod{nullptr};
+    CquamDemodulator* m_cquamDemod{nullptr};
+    int             m_cquamSliceId{-1};
+    QMetaObject::Connection m_cquamFreqConn;
     int             m_wfmSliceId{-1};
     bool            m_wfmCooldown{false};
     int             m_wfmPrevFilterLo{0};

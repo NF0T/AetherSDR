@@ -2655,6 +2655,8 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm,
 
 void AudioEngine::feedAudioData(const QByteArray& pcm)
 {
+    if (m_cquamMode.load()) return; // Drop native AM mono audio
+
     captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),
                            QString(), pcm, DEFAULT_SAMPLE_RATE, 2);
     processRxAudioData(pcm, true);
@@ -6661,6 +6663,12 @@ void AudioEngine::setRadeMode(bool on)
     clearTxAccumulators();
 }
 
+void AudioEngine::setCquamMode(bool on)
+{
+    if (m_cquamMode.load() == on) return;
+    m_cquamMode.store(on);
+}
+
 void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
 {
     if (m_txStreamId == 0) return;
@@ -6910,6 +6918,18 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
     } else {
         m_radeRxBuffer.append(pcm);
     }
+}
+
+void AudioEngine::feedCquamAudio(const QByteArray& pcm)
+{
+    if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen()) return;
+    if (!m_cquamMode.load()) return;
+
+    captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),
+                           QString(), pcm, DEFAULT_SAMPLE_RATE, 2);
+    
+    // Inject directly into the main audio path (EQ, NR, metering) just like standard RX audio
+    processRxAudioData(pcm, true);
 }
 
 } // namespace AetherSDR

@@ -44,6 +44,13 @@ void SliceModel::sendCommand(const QString& cmd)
     emit commandReady(cmd);
 }
 
+void SliceModel::setCquamEnabled(bool enabled)
+{
+    if (m_cquamEnabled == enabled) return;
+    m_cquamEnabled = enabled;
+    emit cquamEnabledChanged(enabled);
+}
+
 void SliceModel::setFrequency(double mhz)
 {
     if (m_locked) {

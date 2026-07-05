@@ -941,6 +941,8 @@ void RxApplet::buildUI()
         applyPrimarySliderStyle(m_sqlSlider);
         row->addWidget(m_sqlSlider, 1);
 
+        // C-QUAM toggle moved exclusively to VFO widget to save space
+
         applySqlModeVisuals();
         connect(m_sqlBtn, &QPushButton::clicked,
                 this, &RxApplet::cycleSqlMode);
@@ -2140,6 +2142,10 @@ void RxApplet::connectSlice(SliceModel* s)
         if (idx >= 0) m_modeCombo->setCurrentIndex(idx);
         updateModeSettings(mode);
     });
+    connect(s, &SliceModel::cquamEnabledChanged, this, [this](bool enabled) {
+        // C-QUAM is now toggled purely from the VFO Widget
+        Q_UNUSED(enabled);
+    });
 
     // Initialize filter/step arrays for the current mode
     updateModeSettings(s->mode());
@@ -2670,7 +2676,7 @@ void RxApplet::updateModeSettings(const QString& mode)
     // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
     //   and gates weak FSK signals (#2504)
     // CW: radio locks squelch on at fixed level, rejects changes
-    bool sqlDisabled = (mode == "DIGU" || mode == "DIGL" || mode == "NT"
+    const bool sqlDisabled = (mode == "DIGU" || mode == "DIGL" || mode == "NT"
                         || mode == "RTTY"
                         || mode == "CW" || mode == "CWL");
     m_sqlBtn->setEnabled(!sqlDisabled);

@@ -182,6 +182,10 @@ public:
     void setRadeMode(bool on);
     bool isRadeMode() const { return m_radeMode; }
 
+    // C-QUAM (AM Stereo) mode
+    void setCquamMode(bool on);
+    bool isCquamMode() const { return m_cquamMode.load(); }
+
     // Sends RADE modem output (float32 PCM) as VITA-49 packets via m_txSocket
     void sendModemTxAudio(const QByteArray& float32pcm);
 
@@ -199,6 +203,9 @@ public:
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
+
+    // Plays C-QUAM decoded audio (float32 stereo 48kHz) bypassing m_cquamMode block
+    void feedCquamAudio(const QByteArray& pcm);
 
     // Client-side NR2 (spectral noise reduction)
     // Q_INVOKABLE: called from main thread, runs on audio worker thread (#502)
@@ -775,6 +782,7 @@ private:
     QByteArray    m_txFloatAccumulator;  // accumulate float32 PCM for RADE modem TX
     QByteArray    m_daxPreTxBuffer;      // short rolling pre-TX buffer for low-latency DAX mode
     std::atomic<bool> m_radeMode{false}; // RADE digital voice mode active (atomic: cross-thread)
+    std::atomic<bool> m_cquamMode{false}; // C-QUAM mode active
     std::atomic<float> m_pcMicGain{1.0f};     // client-side PC mic gain (0.0-1.0)
     std::atomic<bool>  m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
     QElapsedTimer      m_txSourceStartTime;

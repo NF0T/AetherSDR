@@ -878,6 +878,13 @@ void VfoWidget::buildUI()
         auto* freqRow = new QHBoxLayout;
         freqRow->setContentsMargins(0, 0, 0, 0);
         freqRow->setSpacing(4);
+        m_cquamStatusLabel = new QLabel("ST");
+        m_cquamStatusLabel->setFixedHeight(16);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_cquamStatusLabel, "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold;"
+            " background: transparent; border: none; padding: 0; margin: 0; }");
+        m_cquamStatusLabel->hide();
+        freqRow->addWidget(m_cquamStatusLabel);
+
 #ifdef HAVE_RADE
         m_radeStatusLabel = new QLabel;
         m_radeStatusLabel->setFixedHeight(16);
@@ -1346,6 +1353,17 @@ void VfoWidget::buildTabContent()
         m_sqlValueLbl->setFixedWidth(20);
         m_sqlValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sqlRow->addWidget(m_sqlValueLbl);
+
+        m_cquamBtn = new QPushButton("Stereo");
+        m_cquamBtn->setAccessibleName("C-QUAM Stereo");
+        m_cquamBtn->setCheckable(true);
+        m_cquamBtn->setFixedHeight(20);
+        AetherSDR::applyToggleButtonStyle(m_cquamBtn, AetherSDR::ToggleTribe::Success);
+        connect(m_cquamBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit cquamActivated(on, m_slice ? m_slice->sliceId() : -1);
+        });
+        sqlRow->addWidget(m_cquamBtn);
+
         vb->addLayout(sqlRow);
 
         // AGC-T row: mode combo + threshold slider
@@ -3909,6 +3927,17 @@ void VfoWidget::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::modeChanged, this, [this](const QString& mode) {
         m_tabBtns[2]->setText(mode);  // update mode tab label
         updateModeTab();
+    });
+    connect(m_slice, &SliceModel::cquamEnabledChanged, this, [this](bool enabled) {
+        if (m_cquamBtn) {
+            QSignalBlocker sb(m_cquamBtn);
+            m_cquamBtn->setChecked(enabled);
+        }
+        if (m_cquamStatusLabel) {
+            m_cquamStatusLabel->setVisible(enabled);
+        }
+    });
+    connect(m_slice, &SliceModel::modeChanged, this, [this](const QString& mode) {
         // Show/hide mode-specific DSP controls
         // Categorize by mode family (supports future/unknown modes)
         bool isRtty = (mode == "RTTY");
@@ -3936,6 +3965,10 @@ void VfoWidget::setSlice(SliceModel* slice)
         bool sqlDisabled = isDig || isCw || isRtty;
         m_sqlBtn->setEnabled(!sqlDisabled);
         m_sqlSlider->setEnabled(!sqlDisabled);
+        m_cquamBtn->setVisible(mode == "AM" || mode == "SAM");
+        if (!(mode == "AM" || mode == "SAM")) {
+            if (m_cquamBtn->isChecked()) m_cquamBtn->setChecked(false);
+        }
         if (sqlDisabled && m_slice) {
             // Only digital/RTTY modes get a client-side squelch-off override
             // (#2504). CW/CWL squelch is radio-managed — no client push, so no
@@ -5814,5 +5847,14 @@ void VfoWidget::setRadeCallsign(const QString& callsign)
     }
 }
 #endif
+
+void VfoWidget::setCquamLocked(bool locked)
+{
+    if (!m_cquamStatusLabel) return;
+    
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_cquamStatusLabel, 
+        locked ? "QLabel { color: {{color.accent.success}}; font-size: 10px; font-weight: bold; background: transparent; border: none; padding: 0; margin: 0; }"
+               : "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; border: none; padding: 0; margin: 0; }");
+}
 
 } // namespace AetherSDR

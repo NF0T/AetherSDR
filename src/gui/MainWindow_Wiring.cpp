@@ -3392,6 +3392,17 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
 #endif
 
+    connect(w, &VfoWidget::cquamActivated, this, [this](bool on, int sliceId) {
+        if (on) activateCQUAM(sliceId);
+        else if (sliceId == m_cquamSliceId) deactivateCQUAM();
+    });
+
+    connect(this, &MainWindow::cquamLockChanged, w, [w](int sliceId, bool locked) {
+        if (w->slice() && w->slice()->sliceId() == sliceId) {
+            w->setCquamLocked(locked);
+        }
+    });
+
     // WFM is toggled from the spectrum overlay DAX menu (wired in the per-pan
     // setup beside daxIqChannelChanged), not the flag — no connect here. (#3853)
 

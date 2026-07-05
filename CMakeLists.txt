@@ -602,6 +602,8 @@ set(CORE_SOURCES
     src/core/NetSchedulePlanner.cpp
     src/core/NetScheduleStore.cpp
     src/core/NetScheduler.cpp
+    src/core/CquamDemodulator.cpp
+    src/core/CquamDsp.cpp
     src/core/WfmDemodulator.cpp
     src/core/WfmDsp.cpp
     src/core/WaveOutWriter.cpp

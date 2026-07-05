@@ -43,6 +43,7 @@
 #include "core/aprs/AprsSettings.h"
 #include "core/LogManager.h"
 #include "core/WfmDemodulator.h"
+#include "core/CquamDemodulator.h"
 #include "core/WfmSettings.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
@@ -1272,6 +1273,93 @@ void MainWindow::showPskReporterMapDialog()
     m_pskReporterMapDialog->show();
     m_pskReporterMapDialog->raise();
     m_pskReporterMapDialog->activateWindow();
+}
+
+void MainWindow::activateCQUAM(int sliceId)
+{
+    if (m_cquamSliceId == sliceId) return;
+    if (m_cquamSliceId >= 0) deactivateCQUAM();
+
+    auto* s = m_radioModel.slice(sliceId);
+    if (!s) return;
+
+    m_cquamSliceId = sliceId;
+
+    // Pan tracking logic (same as WFM)
+    auto centerPanAtSlice = [this, panId = s->panId(), slice = s]() {
+        const double freq = slice->frequency();
+        auto* pan = m_radioModel.panadapter(panId);
+        if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
+        const QString freqStr = QString::number(freq, 'f', 6);
+        if (pan) pan->applyPanStatus({{"center", freqStr}});
+        m_radioModel.sendCommand(QString("display pan set %1 center=%2").arg(panId, freqStr));
+    };
+    centerPanAtSlice();
+
+    m_cquamDemod = new CquamDemodulator(this);
+    connect(m_cquamDemod, &CquamDemodulator::commandReady,
+            &m_radioModel, &RadioModel::sendCommand);
+    connect(m_cquamDemod, &CquamDemodulator::cquamAudioReady,
+            m_audio, &AudioEngine::feedCquamAudio);
+    connect(m_cquamDemod, &CquamDemodulator::pilotLocked,
+            this, [this](bool locked) { emit cquamLockChanged(m_cquamSliceId, locked); });
+
+    m_cquamDemod->setVolume(static_cast<int>(s->audioGain()));
+    connect(s, &SliceModel::audioGainChanged,
+            m_cquamDemod, [this](float g) { m_cquamDemod->setVolume(static_cast<int>(g)); });
+
+    s->setCquamEnabled(true);
+    m_cquamSliceId = sliceId;
+    emit cquamEnabledChanged(sliceId, true);
+
+    m_cquamDemod->start(&m_radioModel.daxIqModel(), s->panId());
+    
+    if (!m_cquamDemod->isActive()) {
+        qCWarning(lcAudio) << "activateCQUAM: failed to start DAX IQ stream";
+        delete m_cquamDemod;
+        m_cquamDemod = nullptr;
+        m_cquamSliceId = -1;
+        return;
+    }
+
+    m_audio->setCquamMode(true);
+
+    m_cquamFreqConn = connect(s, &SliceModel::frequencyChanged,
+                              this, [this, slice = s, centerPanAtSlice](double sliceFreqMhz) {
+        if (!m_cquamDemod) return;
+        auto* pan = m_radioModel.panadapter(slice->panId());
+        if (!pan) return;
+        const float offsetHz = static_cast<float>((sliceFreqMhz - pan->centerMhz()) * 1e6);
+        if (qAbs(offsetHz) <= m_cquamDemod->maxFreqOffsetHz()) {
+            m_cquamDemod->setFreqOffsetHz(offsetHz);
+        } else {
+            centerPanAtSlice();
+            m_cquamDemod->setFreqOffsetHz(0.0f);
+        }
+    });
+    emit cquamEnabledChanged(sliceId, true);
+}
+
+void MainWindow::deactivateCQUAM()
+{
+    if (m_cquamSliceId < 0) return;
+
+    disconnect(m_cquamFreqConn);
+
+    m_audio->setCquamMode(false);
+
+    if (m_cquamDemod) {
+        delete m_cquamDemod;
+        m_cquamDemod = nullptr;
+    }
+
+    if (auto* s = m_radioModel.slice(m_cquamSliceId)) {
+        s->setCquamEnabled(false);
+    }
+
+    int oldSliceId = m_cquamSliceId;
+    m_cquamSliceId = -1;
+    emit cquamEnabledChanged(oldSliceId, false);
 }
 
 } // namespace AetherSDR

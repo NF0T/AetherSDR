@@ -275,12 +275,15 @@ public:
     // as an opaque, cacheable layer instead of being alpha-blended over the
     // whole window every frame (the dominant idle CPU cost — see #3283).
     void setOpaqueMode(bool on);
+    void setFrequencyHovered(bool hovered);
+    void setCquamLocked(bool locked);
 
     // Which side of the slice marker the flag panel is currently rendered on.
     // Tracked by updatePosition() via m_lastOnLeft.  Used by panFollowVfo()
     // to extend the pan-follow trigger to the flag's outer edge — single-side
     // for non-split slices, both-sides for split pairs (#2761).
     bool onLeft() const { return m_lastOnLeft; }
+    SliceModel* slice() const { return m_slice; }
 
 #ifdef HAVE_RADE
     void setRadeActive(bool on, const QString& label = QStringLiteral("RADE"));
@@ -301,6 +304,7 @@ Q_SIGNALS:
 #ifdef HAVE_RADE
     void radeActivated(bool on, int sliceId);
 #endif
+    void cquamActivated(bool on, int sliceId);
     void recordToggled(bool on);
     void playToggled(bool on);
     void aetherDspRequested();     // user clicked the ADSP button on the DSP tab
@@ -526,6 +530,7 @@ private:
     void syncTabStackHeightToCurrentPage();
     void relayoutToCurrentContent();
     QPushButton* m_sqlBtn{nullptr};
+    QPushButton* m_cquamBtn{nullptr};
     QPointer<RxApplet> m_rxApplet;       // mirrored only while this VFO's slice is active
     QLabel*      m_sqlValueLbl{nullptr}; // captured during buildUI() for syncSqlVisuals
     bool         m_savedSquelchOn{false};
@@ -670,6 +675,8 @@ private:
     ScrollableLabel* m_xitLabel{nullptr};
     // DAX tab
     QComboBox* m_daxCmb{nullptr};
+
+    QLabel*  m_cquamStatusLabel{nullptr};
 
 #ifdef HAVE_RADE
     QLabel*  m_radeStatusLabel{nullptr};   // freq row: "RADE ●" badge only

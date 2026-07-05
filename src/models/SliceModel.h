@@ -139,6 +139,9 @@ public:
     bool    recordOn()    const { return m_recordOn; }
     bool    playOn()      const { return m_playOn; }
     bool    playEnabled() const { return m_playEnabled; }
+    
+    // Client-side DSP state (not persisted to radio)
+    bool    isCquamEnabled() const { return m_cquamEnabled; }
 
     // Getters — FM duplex/repeater
     QString fmToneMode()          const { return m_fmToneMode; }
@@ -149,6 +152,7 @@ public:
     int     fmDeviation()         const { return m_fmDeviation; }
 
     // Setters (emit signals AND send radio commands)
+    void setCquamEnabled(bool enabled);
     void setFrequency(double mhz);           // slice tune autopan=0 — no recenter
     void tuneAndRecenter(double mhz);      // slice tune — recenters pan (band changes)
     void setMode(const QString& mode);
@@ -260,6 +264,7 @@ public:
 
 signals:
     void letterChanged(const QString& newLetter);
+    void cquamEnabledChanged(bool enabled);
     void frequencyChanged(double mhz);
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
@@ -344,6 +349,7 @@ private:
     QString m_letter;          // per-client display letter from `index_letter`
     QString m_panId;           // panadapter assignment (e.g. "0x40000000")
     double  m_frequency{0.0};
+    bool    m_cquamEnabled{false};
     QString m_mode{"USB"};
     QStringList m_modeList;
     int     m_filterLow{-1500};
