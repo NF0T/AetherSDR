@@ -22,7 +22,10 @@ class CquamDemodulator : public QObject
     Q_OBJECT
 public:
     static constexpr int DAX_CHANNEL = 1;
-    static constexpr int AUDIO_RATE  = 48000;
+    // Fallback IQ rate assumed only if DaxIqModel ever reports sampleRate <= 0
+    // — distinct from (and not to be confused with) CquamDsp::kAudioRate,
+    // which is the fixed output audio rate of the decoded stereo pair.
+    static constexpr int kFallbackIqRateHz = 48000;
     static constexpr int FILTER_HZ   = 15000;
 
     explicit CquamDemodulator(QObject* parent = nullptr);

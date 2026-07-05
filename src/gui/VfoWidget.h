@@ -310,7 +310,6 @@ public:
     // coordinates whose clicks still act on the migrated slice, deleted
     // entirely when the old pan is torn down (#4037 review).
     void reparentFlagSatellites(QWidget* newParent);
-    void setFrequencyHovered(bool hovered);
     void setCquamLocked(bool locked);
 
     // Which side of the slice marker the flag panel is currently rendered on.

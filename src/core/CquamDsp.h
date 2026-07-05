@@ -16,18 +16,19 @@ class Resampler;
 // Pipeline:
 //   IQ @ native device rate
 //     → [1] NCO mix-down (phase-continuous offset correction)
-//     → [2] identical twin resamplers → exactly 48 kHz
+//     → [2] identical twin resamplers → exactly kAudioRate (24 kHz, matching
+//           AudioEngine::DEFAULT_SAMPLE_RATE)
 //     → [3] Carrier PLL (locks onto AM carrier)
 //     → [4] Envelope detect (L+R) and Quadrature demod (L-R) with C-QUAM correction
 //     → [5] 25 Hz Pilot detection via Goertzel filter
 //     → [6] Stereo Matrix (auto mono-fallback)
-//     → stereo float audio @ 48 kHz
+//     → stereo float audio @ 24 kHz
 // ---------------------------------------------------------------------------
 class CquamDsp
 {
 public:
     static constexpr int kAudioRate = 24000;
-    static constexpr float kAudioGain = 0.112f; // Baseline volume matching radio's native AM audio level (~ -26dB)
+    static constexpr float kAudioGain = 0.112f; // Baseline volume matching radio's native AM audio level (~ -19dBFS)
 
     explicit CquamDsp(int iqRateHz);
     ~CquamDsp();
@@ -38,7 +39,7 @@ public:
     void setFreqOffsetHz(float offsetHz);
 
     // Demodulate `frames` interleaved IQ pairs at iqRateHz().
-    // audioOut will contain stereo (L,R interleaved) 48 kHz audio.
+    // audioOut will contain stereo (L,R interleaved) audio at kAudioRate (24 kHz).
     void process(const float* iqInterleaved, int frames, std::vector<float>& audioOut);
 
     bool isPilotLocked() const { return m_pilotLocked; }

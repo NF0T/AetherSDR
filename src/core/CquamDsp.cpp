@@ -53,8 +53,14 @@ void CquamDsp::process(const float* iqInterleaved, int frames, std::vector<float
     m_workI.resize(static_cast<size_t>(frames));
     m_workQ.resize(static_cast<size_t>(frames));
     for (int i = 0; i < frames; ++i) {
-        const float I = iqInterleaved[2 * i] / 32768.0f;
-        const float Q = iqInterleaved[2 * i + 1] / 32768.0f;
+        // DAX IQ delivers already-normalized float32 in ±1.0 (same convention
+        // WfmDemodulator consumes directly) — do not rescale here. The AGC
+        // step below (agcGain = 1/dcEnv) makes final output level invariant
+        // to whatever the input scale actually is; rescaling here only
+        // matters for the absolute epsilon gates further down, which is why
+        // those are now expressed relative to dcEnv instead.
+        const float I = iqInterleaved[2 * i];
+        const float Q = iqInterleaved[2 * i + 1];
         const float c = static_cast<float>(std::cos(m_ncoPhase));
         const float s = static_cast<float>(std::sin(m_ncoPhase));
         m_workI[static_cast<size_t>(i)] = I * c - Q * s;
@@ -121,7 +127,13 @@ void CquamDsp::process(const float* iqInterleaved, int frames, std::vector<float
         // envelope (sqrt(I^2+Q^2) = 1+L+R). The quadrature channel is pre-distorted.
         // Unwrapping it requires dividing by cos(phi), which equals I_sync / env.
         float L_minus_R = 0.0f;
-        if (std::abs(I_sync) > 1e-4f && env > 1e-4f) {
+        // Gate relative to the tracked carrier envelope (dcEnv), not a fixed
+        // absolute epsilon — the DAX IQ float scale is a full-scale ±1.0
+        // convention today, but a relative gate stays correct regardless of
+        // the input's absolute amplitude, and still avoids dividing by a
+        // near-zero I_sync during a deep fade/null.
+        const float minCarrier = std::max(dcEnv * 1e-3f, 1e-9f);
+        if (std::abs(I_sync) > minCarrier && env > minCarrier) {
             L_minus_R = Q_sync * (env / I_sync);
             // Clamp to avoid extreme spikes on overmodulation or deep fades
             L_minus_R = std::clamp(L_minus_R, -dcEnv, dcEnv);
@@ -166,9 +178,13 @@ void CquamDsp::process(const float* iqInterleaved, int frames, std::vector<float
             agcGain = 1.0f / dcEnv;
         }
 
-        // kAudioGain sets the baseline level relative to full-scale (0dBFS).
-        // Since native radio audio is ~ -30dBFS to -33dBFS at mid volume, 
-        // a kAudioGain of 0.05f (~ -26dB) perfectly matches the radio's AM level.
+        // kAudioGain sets the baseline level relative to full-scale (0dBFS),
+        // tuned by ear to match native AM/SAM audio at the same slider gain.
+        // Current value (0.112f) is ~-19dBFS, not the ~-26dBFS an earlier
+        // version of this comment described — the constant below is the
+        // source of truth; if the C-QUAM/AM level match needs re-tuning,
+        // adjust this constant (not the AGC/dcEnv step above, which only
+        // normalizes for input signal strength, not absolute output level).
         float sL = std::clamp(outL * agcGain * kAudioGain, -1.0f, 1.0f);
         float sR = std::clamp(outR * agcGain * kAudioGain, -1.0f, 1.0f);
 

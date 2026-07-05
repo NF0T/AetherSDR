@@ -129,10 +129,22 @@ void WfmDemodulator::start(DaxIqModel* daxIq, const QString& deviceId,
 
     // --- Fallback: VITA-49 DaxIqModel (Linux/macOS, or no DAX) ---
     if (!m_usingDaxCapture) {
+        if (!m_daxIq->acquireChannel(DAX_CHANNEL, DaxIqModel::DaxIqConsumer::Wfm)) {
+            const auto owner = m_daxIq->channelOwner(DAX_CHANNEL);
+            qCWarning(lcAudio) << "WfmDemodulator: DAX IQ channel" << DAX_CHANNEL
+                               << "already in use by"
+                               << (owner ? DaxIqModel::daxIqConsumerName(*owner) : "?")
+                               << "— refusing to start";
+            m_daxIq = nullptr;
+            return;
+        }
+
         m_waveOut = new WaveOutWriter(this);
         if (!m_waveOut->open(deviceId, AUDIO_RATE, 2)) {
             qCWarning(lcAudio) << "WfmDemodulator: cannot open audio output" << deviceId;
             delete m_waveOut; m_waveOut = nullptr;
+            m_daxIq->releaseChannel(DAX_CHANNEL, DaxIqModel::DaxIqConsumer::Wfm);
+            m_daxIq = nullptr;
             return;
         }
         connect(m_daxIq, &DaxIqModel::iqSamplesReady, this, &WfmDemodulator::onIqSamples);
@@ -152,7 +164,10 @@ void WfmDemodulator::stop()
     if (m_iqSource) { m_iqSource->stop(); delete m_iqSource; m_iqSource = nullptr; }
     if (m_iqDevice) { m_iqDevice->close(); delete m_iqDevice; m_iqDevice = nullptr; }
     if (m_daxIq) {
-        if (!m_usingDaxCapture) m_daxIq->removeStream(DAX_CHANNEL);
+        if (!m_usingDaxCapture) {
+            m_daxIq->removeStream(DAX_CHANNEL);
+            m_daxIq->releaseChannel(DAX_CHANNEL, DaxIqModel::DaxIqConsumer::Wfm);
+        }
         disconnect(m_daxIq, nullptr, this, nullptr);
         m_daxIq = nullptr;
     }
