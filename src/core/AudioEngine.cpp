@@ -4771,6 +4771,13 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
     if (m_rxProducerRate.load() != DEFAULT_SAMPLE_RATE) {
         resetMainPcmState(DEFAULT_SAMPLE_RATE);
     }
+    // Drop native AM mono audio: feedCquamAudio() injects the stereo-decoded
+    // stream instead. Placed AFTER the typed-producer preamble above so the
+    // PCM-source housekeeping and rate invariant still run on every frame --
+    // feedCquamAudio() relies on the main path already sitting at
+    // DEFAULT_SAMPLE_RATE.
+    if (m_cquamMode.load()) return;
+
     captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),
                            QString(), pcm, DEFAULT_SAMPLE_RATE, 2);
     processRxAudioData(pcm, true);
@@ -9465,6 +9472,12 @@ void AudioEngine::setRadeMode(bool on)
     clearTxAccumulators();
 }
 
+void AudioEngine::setCquamMode(bool on)
+{
+    if (m_cquamMode.load() == on) return;
+    m_cquamMode.store(on);
+}
+
 void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
 {
     // A host-modulating backend (HL2) runs the modulator on THIS host and has
@@ -9972,6 +9985,18 @@ void AudioEngine::applyBackendAudioCapabilities(
         // now false. Flex-owned streams retain their own lifecycle.
         stopTxStream();
     }
+}
+
+void AudioEngine::feedCquamAudio(const QByteArray& pcm)
+{
+    if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen()) return;
+    if (!m_cquamMode.load()) return;
+
+    captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),
+                           QString(), pcm, DEFAULT_SAMPLE_RATE, 2);
+    
+    // Inject directly into the main audio path (EQ, NR, metering) just like standard RX audio
+    processRxAudioData(pcm, true);
 }
 
 } // namespace AetherSDR

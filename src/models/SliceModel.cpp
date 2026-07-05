@@ -111,6 +111,13 @@ bool SliceModel::normalizeFilterPolarity()
     return false;
 }
 
+void SliceModel::setCquamEnabled(bool enabled)
+{
+    if (m_cquamEnabled == enabled) return;
+    m_cquamEnabled = enabled;
+    emit cquamEnabledChanged(enabled);
+}
+
 void SliceModel::setFrequency(double mhz)
 {
     if (m_locked) {

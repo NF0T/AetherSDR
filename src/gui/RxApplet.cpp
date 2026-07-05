@@ -1002,6 +1002,8 @@ void RxApplet::buildUI()
         applyPrimarySliderStyle(m_sqlSlider);
         row->addWidget(m_sqlSlider, 1);
 
+        // C-QUAM toggle moved exclusively to VFO widget to save space
+
         applySqlModeVisuals();
         connect(m_sqlBtn, &QPushButton::clicked,
                 this, &RxApplet::cycleSqlMode);
@@ -2479,6 +2481,10 @@ void RxApplet::connectSlice(SliceModel* s)
         int idx = m_modeCombo->findText(mode);
         if (idx >= 0) m_modeCombo->setCurrentIndex(idx);
         updateModeSettings(mode);
+    });
+    connect(s, &SliceModel::cquamEnabledChanged, this, [this](bool enabled) {
+        // C-QUAM is now toggled purely from the VFO Widget
+        Q_UNUSED(enabled);
     });
 
     // Initialize filter/step arrays for the current mode
