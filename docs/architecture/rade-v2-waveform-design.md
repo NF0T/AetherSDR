@@ -137,6 +137,13 @@ Each decision below is backed by the Phase 0 spike (§8) or by verified source a
    (`FlexWaveformTransport`). No speculative multi-backend framework (§12).
 8. **Clean-room provider.** Implement the (small) waveform provider protocol against the public
    waveform-sdk; do not link GPL-3.0 `smartsdr-dsp` in-process (§11).
+9. **`RAD2` registers as `underlying_mode=DIGU`, `rx_filter 800–2200 Hz`, upper sideband on
+   every band.** Derived from the V2 OFDM source, not from V1 (V1's modem is wider and
+   pilot-bearing, so it is the *wrong* proxy). DIGU rather than USB follows D-Star's own
+   pattern — it registers `DFM`, the *data* variant of its demod family, not `FM`. The filter
+   is deliberately **not** tightened onto the modem, because the modem already band-passes
+   itself and a narrower upstream filter corrupts the reported SNR. Full derivation and the
+   numbers in §10.1.
 
 ## 7. Component design & placement
 
@@ -146,7 +153,7 @@ All new code is gated behind a compile flag **`ENABLE_RADE_V2`** (off by default
 |---|---|---|
 | `FlexWaveformProvider` | `src/core/backends/flex/` | Flex wire protocol → behind `FlexBackend`; keeps EB3 clean and puts the Flex-specific transport where a future backend's transport would sit |
 | `RADEV2Engine` | `src/core/` (`libaethercore`) | Worker-thread QObject; codec core with the transport-agnostic seam |
-| `RAD2` mode | `DigitalVoiceModeRegistry` | New `DigitalVoiceModeId::RadeV2` + descriptor (`radioMode "RAD2"`, `underlyingMode "USB"`) |
+| `RAD2` mode | `DigitalVoiceModeRegistry` | New `DigitalVoiceModeId::RadeV2` + descriptor (`radioMode "RAD2"`, `underlyingMode "DIGU"` — see §10.1; no `DIGL` variant) |
 | GUI wiring | `src/gui/` | New parallel `activateRADEV2()`; V1's `activateRADE()` untouched |
 | Vendored codec | `third_party/radae` | Re-vendored from `radae_nopy@dr-radev2` (Phase 4; vendor **last**) |
 
@@ -159,6 +166,8 @@ The spike drove the risky unknowns to ground before committing to this design. P
   `waveform create name=… mode=RAD2 underlying_mode=USB version=…` on its **own** TCP-4992
   connection (reply code 0). So AetherSDR can host the waveform **in-process, single connection**
   — no dedicated socket, no daemon. Registration adds `RAD2` to the slice `mode_list`.
+  *Note:* the spike registered `underlying_mode=USB`; the design has since settled on `DIGU`
+  (§10.1), which is **not** yet OTA-confirmed as an accepted `underlying_mode` — a Phase 2 check.
 - **Create returns six streams (fw 4.2.20).** `tx/rx_stream_in`, `tx/rx_stream_out`, **plus a
   `byte_stream_in`/`byte_stream_out` pair.** The byte-stream pair is a candidate transport for
   V2's inline callsign/data channel (the vendored D-Star parser reads only 4; ours must read 6).
@@ -245,18 +254,107 @@ clients for display, or accept text from SmartSDR to transmit) and is deferred o
 
 ## 10. The waveform provider protocol (clean-room, from public spec + Phase 0 observation)
 
-Registration on the existing TCP-4992 command channel (after the normal GUI bind + subs):
+Registration on the existing TCP-4992 command channel (after the normal GUI bind + subs).
+Each filter field is its **own** command — they do not combine on one line
+(`third_party/smartsdr-dsp/SmartSDR_Interface/digital_voice_mode_registry.c:178-219`):
 ```
-waveform create name=<X> mode=RAD2 underlying_mode=USB version=<v>
+waveform create name=<X> mode=RAD2 underlying_mode=DIGU version=<v>
         → tx/rx_stream_in, tx/rx_stream_out, byte_stream_in/out  (six stream ids)
 waveform set <X> tx=1
-waveform set <X> rx_filter low_cut=… high_cut=…   (modem passband; RADE fits an SSB channel)
-waveform set <X> udpport=<P>                       (our VITA-49 listener)
+waveform set <X> rx_filter low_cut=800     # positive: DIGU/USB cuts are one-sided
+waveform set <X> rx_filter high_cut=2200
+waveform set <X> rx_filter depth=256
+waveform set <X> tx_filter low_cut=0
+waveform set <X> tx_filter high_cut=2400
+waveform set <X> tx_filter depth=256
+waveform set <X> udpport=<P>               (our VITA-49 listener)
 ```
+
+**Filter-cut units — the trap.** D-Star registers `rx_filter low_cut=-3500` / `high_cut=3500`,
+a **negative** low cut. That is not a different convention, it is a different mode *family*:
+FlexLib clamps `FM`/`DFM`/`DSTR`/`AM`/`SAM`/`AME` symmetrically about the carrier (±12000),
+while `USB`/`DIGU`/`FDV` are clamped one-sided — `if (low < 0) low = 0`
+(`FlexLib/Slice.cs:545-560, 611-625, 675-692`). Copying D-Star's signs onto a DIGU waveform
+silently clamps `low_cut` to 0 and widens the filter to the full passband.
 Data plane: VITA-49 IF-Data over UDP; audio is 24 kHz Complex-float32, big-endian; outbound goes
 to `radio:4991`, inbound to our registered `udpport`. Details and exact framing captured in Phase 0.
 The `byte_stream_in/out` pair is a *local* radio↔client data channel (not over-the-air; see §9.2) —
 out of baseline scope.
+
+### 10.1 `RAD2` registration parameters (§16 Q3)
+
+Derived from the V2 OFDM source at `radae_nopy@5374c52` (`dr-radev2`). **V1 is the wrong proxy
+for any of this** — V1's modem is wider and carries pilots.
+
+| Quantity | Value | Source |
+|---|---|---|
+| `RADE_FS` | 8000 Hz | `src/rade_dsp.h:59` |
+| Nc / M / Ncp / Ns | 14 / 128 / 32 / 2 | `src/rade_v2_ofdm.h` |
+| Carrier spacing Rs′ = Fs/M | 62.5 Hz | computed |
+| First carrier index | 17 → 1062.5 Hz | `src/rade_v2_ofdm.c:51-57` |
+| Occupied carriers | 1062.5 – 1875.0 Hz (idx 17–30) | derived |
+| Actual centroid | **1468.75 Hz** | `(w0+wN)/2`, `src/rade_rx_v2.c:92` |
+| Null-to-null occupancy | ~1000 – 1937.5 Hz (±Rs′ beyond edge carriers) | derived |
+| Modem's own internal BPF | **975 Hz wide @ 1468.75 Hz → 981–1956 Hz** | `src/rade_rx_v2.c:86-96` |
+| Frequency acquisition range | **±31.25 Hz** (= ±Rs′/2) | `src/rade_rx_v2.c:396-398` |
+
+Note the modem is centred **1468.75 Hz, not 1500 Hz** — the code comment says 1500, but
+`carrier_1_freq = 1500 − Rs′·Nc/2` puts the span half a carrier spacing low. 1500 Hz remains the
+right *dial* convention (see below); 1468.75 Hz is the right number to centre a filter on.
+
+**Chosen: `rx_filter low_cut=800`, `high_cut=2200`.** That is ~181 Hz of guard below the modem's
+own BPF edge and ~244 Hz above — both far beyond the ±31.25 Hz the receiver can acquire over, so
+nothing decodable is clipped.
+
+**Do not tighten this filter in pursuit of SNR.** Two reasons, both in the source:
+
+1. **The modem already band-passes itself.** `rade_rx_v2_init(rx, bpf_en)` builds an internal BPF
+   at `1.2 × 812.5 = 975 Hz` centred 1468.75 Hz. Our Flex filter is a *second, cascaded* stage;
+   narrowing it does not improve the modem's effective SNR, because that work is already done
+   inside `rade_rx()`.
+2. **A narrow filter makes the reported SNR lie.** `snr_offset_dB = 10·log10(3000 / B_bpf)`
+   ≈ **4.88 dB** (`src/rade_rx_v2.c:96`) normalises the estimate to a 3 kHz reference *on the
+   assumption that broadband noise reaches the modem*. Strip that noise upstream and
+   `snr_est_dB` reads optimistically high — the number we show the operator becomes wrong.
+
+The real justification for a moderate filter is AGC/ADC headroom and adjacent-signal rejection,
+**not** modem SNR.
+
+**Sideband: `DIGU` on every band — no `DIGL` variant.**
+
+- **`DIGU` rather than `USB`** follows D-Star's own pattern: it registers `DFM`, the *data*
+  variant of its demod family, not `FM`. DIGU is the data variant of USB — same upper-sideband
+  demodulation, but the radio treats it as a data mode (squelch forced off, DVK excluded, no
+  voice-processing assumptions on the transmit chain). AetherSDR already classifies DIGU this way
+  (`src/gui/RxApplet.cpp:2676`, `src/gui/MainWindow.cpp:7807`), and RADE **V1** already sets
+  DIGU/DIGL for exactly this reason — *"passthrough for the OFDM modem"*
+  (`src/gui/MainWindow_DigitalModes.cpp:262`).
+- **DIGU also carries the right dial convention.** `digu_offset` defaults to **1500 Hz**
+  (`src/models/SliceModel.h:488`), which is RADE's nominal centre — so the operator's VFO reads
+  the centre of the signal rather than the suppressed carrier. On plain `USB` our displayed
+  frequency would sit ~1.5 kHz off from what other RADE stations report.
+- **Upper sideband on *all* bands.** Unlike V1 — which picks `DIGL` on LSB-convention bands
+  (`src/gui/MainWindow_DigitalModes.cpp:266-269`) — RAD2 uses DIGU everywhere, following the
+  FT8/WSJT-X convention that digital modes are upper-sideband regardless of band.
+  **This is a stated belief, not yet a citation** (operator recollection of RADE V2's intended
+  convention). We implement DIGU-everywhere from the start and **cite the authoritative RADE V2
+  operating convention here once it is published**; if it turns out to be band-dependent, this
+  becomes a one-line change plus a `DIGL` descriptor.
+
+**Confidence and what still needs measuring.** Everything above is desk-derived from source and
+carries no architectural risk — `rx_filter` is a runtime string, so being wrong costs two integers
+and a reconnect. It therefore does **not** warrant a pre-vendor test rig. But the split matters:
+
+- **Phase 2 (no codec needed, do it then):** confirm the radio *accepts*
+  `underlying_mode=DIGU` (Phase 0 only ever tested `USB`, and the waveform API may accept a
+  narrower mode set than `slice set`); confirm `rx_filter` is honoured and measure its actual
+  shape by reusing the Phase 0 1b sweep against `rx_stream_in`; determine whether `digu_offset`
+  shifts the demodulated passband or only the display (if the former, these cuts are relative
+  to it). Phase 0 1b already proved that radio behaviour can defy derivation — measure it.
+- **Phase 4/5 (needs the vendored codec):** optimise the filter against real decode performance
+  (sync rate, `snr_est_dB`, Dtmax). This is the only part that genuinely must wait; building a
+  standalone V2 harness beforehand would duplicate the vendor work against a still-churning
+  branch.
 
 ## 11. Fidelity & Licensing
 
@@ -282,6 +380,10 @@ audio port.
 ## 13. Testing
 
 - Reuse the RADE stored-file / `RADE_WAV_TAP` methodology and Dtmax metrics for decode validation.
+- **`RAD2` registration check (Phase 2, no codec required):** confirm the radio accepts
+  `underlying_mode=DIGU`; confirm `rx_filter low_cut/high_cut/depth` are honoured and measure the
+  filter's real shape by reusing the Phase 0 1b sweep against `rx_stream_in`; determine whether
+  `digu_offset` shifts the demodulated passband or only the dial display (§10.1).
 - Automation-bridge assertions for the `RAD2` mode lifecycle (activate/deactivate, no mute strand,
   status sub-state).
 - OTA A/B on the FLEX-8400: local-render fidelity vs. the container; PTT release timing; the inline
@@ -330,8 +432,16 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    text surfacing). **Remaining open:** the app-level framing (serialize/sync/CRC/FEC) must match the
    RADE V2 ecosystem convention for interop — adopt upstream's at vendor time (Phase 4); it may not
    be finalized yet, so our framing is provisional until then.
-3. Exact `RAD2` `underlying_mode` and `rx_filter` width for best modem SNR (the modem is narrow;
-   confirm the passband that maximizes decode without over-widening).
+3. **`RAD2` `underlying_mode` + `rx_filter` — CLOSED by derivation (see §10.1).**
+   `underlying_mode=DIGU` (data variant, per D-Star's `DFM`-not-`FM` pattern; carries the
+   1500 Hz dial convention), **upper sideband on every band, no `DIGL`**; `rx_filter
+   low_cut=800 high_cut=2200`. The premise of the original question was wrong: tightening the
+   filter does **not** improve modem SNR — the modem band-passes itself at 975 Hz and a narrow
+   upstream filter biases the *reported* SNR high. **Remaining open:** (a) the DIGU-on-all-bands
+   convention is our belief, awaiting an authoritative RADE V2 citation; (b) Phase 2 must confirm
+   the radio accepts `DIGU` as an `underlying_mode` (Phase 0 only tested `USB`), that `rx_filter`
+   is honoured, and whether `digu_offset` moves the passband or only the display; (c) Phase 4/5
+   optimises the width against real decode performance.
 4. TX path validation into a dummy load (Phase 0 was RX-only).
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
