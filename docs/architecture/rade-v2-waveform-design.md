@@ -61,11 +61,17 @@ These are structural to the "fake mode" approach, which is why V2 is a **new** e
 mode rather than a mutation of V1.
 
 ### 3.2 What changed in RADE V2 (protocol)
-V2 drops the pilot symbols → a narrower modem waveform, ~3 dB more sensitive at low SNR, with
-different sync/framing. The end-of-over/text channel also changes fundamentally: V1 sent the
-callsign as a single LDPC burst at end-of-over (`rade_tx_eoo`); **V2 streams it inline** as one
-BPSK data symbol per modem frame (`rade_tx_set_data_symbol` / `rade_rx_get_data_symbol`) — no
-drain-and-send-EOO step.
+V2 drops the pilot symbols from the *data* frames → a narrower modem waveform, ~3 dB more
+sensitive at low SNR, with different sync/framing. The text channel also changes fundamentally:
+V1 sent the callsign as a single LDPC burst at end-of-over (`rade_tx_eoo`); **V2 streams it
+inline** as one BPSK data symbol per modem frame (`rade_tx_set_data_symbol` /
+`rade_rx_get_data_symbol`).
+
+**The EOO frame itself does not disappear.** What left the EOO is the *callsign*, not the burst.
+V2 still emits an end-of-over frame — `rade_tx_v2_eoo()` writes `RADE_V2_NEOO = 960` complex
+samples (6 × `pend_cp` pilot symbols) = **120 ms at 8 kHz** — and the receiver consumes it as an
+end-of-transmission detector (`eoo_smooth`, threshold `TEOO`, `eoo_flag` in `rade_rx_v2.c`). It
+carries **no data bits**, unlike V1's. See §9.2 for what this means for PTT.
 
 ### 3.3 The V2 C port exists
 The V2 C port lives in **`drowe67/radae_nopy`**, branch `dr-radev2` (not `drowe67/radae`).
@@ -192,9 +198,10 @@ and surfaces the far-end callsign as slice sub-state. No slice mute; the raw mod
 the monitor mix.
 
 **TX:** mic → `AudioEngine` → `RADEV2Engine.encode()` (per frame: `rade_tx_set_data_symbol(next
-callsign bit)`, then `rade_tx`) → modem PCM → `tx_stream_out` → radio transmitter. No burst-EOO
-drain step (callsign streamed inline), so PTT release is near-immediate — simpler than V1's
-three-layer EOO PTT orchestration.
+callsign bit)`, then `rade_tx`) → modem PCM → `tx_stream_out` → radio transmitter. The callsign is
+streamed inline, so there is no *data-bearing* EOO burst to assemble and drain — but V2 still emits
+a 120 ms pilot-only EOO frame, and PTT must be held across it plus buffer flush (§9.2). Much
+simpler than V1's three-layer EOO PTT orchestration, though not instantaneous.
 
 ### 9.1 RX audio output — current expectation: local render only
 
@@ -235,9 +242,21 @@ two are different layers, not competing options.
 The channel is **raw** — no framing, sync, FEC, or CRC. The upstream V2 test streams MSB-first
 ASCII bits, **cycles the message continuously**, and brute-force-searches for it on RX. So the
 *application* owns the text protocol (serialize the callsign; add sync/CRC/FEC as desired; repeat it
-during the over so a late-joining or re-syncing RX catches the next copy). Because it is continuous
-and inline, there is **no end-of-over burst/drain** — this removes V1's EOO pre-buffer/timing
-problems and lets PTT release be near-immediate.
+during the over so a late-joining or re-syncing RX catches the next copy).
+
+**PTT release — improved, but not free.** Because the callsign is continuous and inline, there is
+no need to *drain and assemble* a data-bearing EOO burst, which is what made V1's end-of-over
+expensive (a ~1.845 s pre-buffer, the root cause behind the V1 callsign work). But V2 still emits a
+**120 ms** pilot-only EOO frame (§3.2), and the transmit path must still flush its own buffers, so
+PTT must be held for that tail rather than released on the last voice frame. Budget ~120 ms plus
+drain — roughly an order of magnitude better than V1, not zero. An earlier draft of this RFC
+claimed "no end-of-over burst" and "near-immediate" PTT release; that was wrong, and the TX design
+must not assume it.
+
+**Open (Phase 4): is V2's EOO reachable through the public API?** `rade_tx_v2_eoo()` exists
+internally, but the public wrapper `rade_tx_eoo()` in `rade_api.h:134` is marked *"V1 only"*. Whether
+the vendored public surface exposes a V2 EOO path — and if not, whether we need one or the modem
+emits it internally — must be settled when we vendor.
 
 **Interop dependency (flag).** For callsigns to interoperate with other RADE V2 stations
 (FreeDV-GUI, the container), our app-level framing on this channel **must match the RADE V2
@@ -431,7 +450,9 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    Flex `byte_stream` is a separate *local* channel, deferred (optional future SmartSDR/other-client
    text surfacing). **Remaining open:** the app-level framing (serialize/sync/CRC/FEC) must match the
    RADE V2 ecosystem convention for interop — adopt upstream's at vendor time (Phase 4); it may not
-   be finalized yet, so our framing is provisional until then.
+   be finalized yet, so our framing is provisional until then. **Also open:** whether V2's 120 ms
+   pilot-only EOO frame is reachable through the public API (`rade_tx_eoo()` is marked "V1 only"
+   while `rade_tx_v2_eoo()` exists internally) — settle at vendor time (§9.2).
 3. **`RAD2` `underlying_mode` + `rx_filter` — CLOSED by derivation (see §10.1).**
    `underlying_mode=DIGU` (data variant, per D-Star's `DFM`-not-`FM` pattern; carries the
    1500 Hz dial convention), **upper sideband on every band, no `DIGL`**; `rx_filter
