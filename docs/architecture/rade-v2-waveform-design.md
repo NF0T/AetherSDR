@@ -124,6 +124,8 @@ Each decision below is backed by the Phase 0 spike (§8) or by verified source a
    routing decoded speech back through it truncates RADE's wideband output — this is exactly the
    Flex-FreeDV *container's* quality loss. We instead render the decoded speech locally at full
    FARGAN bandwidth. Local render is therefore **required for fidelity parity, not optional.**
+   (Whether to *also* feed `rx_stream_out` for other clients is a separate, deferred question —
+   it double-backs onto our own render and can't be muted away cleanly; see §9.1.)
 4. **On-client (PC-side) waveform, not on-radio Docker.** A PC-side waveform works on 6000 and
    8000 class alike; on-radio Docker is 8000-class/Aurora only and is FreeDV's job to ship.
 5. **Registry-native `RAD2` pseudo-mode.** Register through `DigitalVoiceModeRegistry` (the
@@ -185,9 +187,33 @@ callsign bit)`, then `rade_tx`) → modem PCM → `tx_stream_out` → radio tran
 drain step (callsign streamed inline), so PTT release is near-immediate — simpler than V1's
 three-layer EOO PTT orchestration.
 
-**Optional other-client audio:** if desired, also feed `rx_stream_out` so other SmartSDR clients
-hear the slice — those clients get the ~2.8 kHz-limited version (unavoidable; the local operator
-still gets full fidelity from the local render). Default: TBD (see §16).
+### 9.1 RX audio output — current expectation: local render only
+
+**Current expectation (this iteration): local-render-only.** By default the RAD2 slice
+contributes **silence** to the monitor — the raw modem is diverted to the waveform, and the
+decoded speech is rendered locally at full FARGAN bandwidth. This is clean in every case: no
+mute, no double, works single- or multi-slice.
+
+**Why the `rx_stream_out` (other-client) feed is not a free option.** Feeding real decoded audio
+to `rx_stream_out` — so *other* SmartSDR clients on the radio hear the RAD2 slice — has a hard
+constraint found while iterating this design: the monitor (`remote_audio_rx`) is **radio-mixed,
+and a client cannot subtract one slice from it** (see [[reference-flex-audio-topology]]). So the
+fed audio **comes straight back to AetherSDR** and doubles/echoes against our own local render
+(and at the degraded ~2.8 kHz). The only suppression is muting the slice — but `audio_mute` is
+**global/per-slice**, so muting (a) **reintroduces the mute-stranding this whole design
+eliminates**, *and* (b) **silences the slice for the very other-clients we were feeding.** Net:
+the feed coexists with local render *only* in the single-slice case where AetherSDR ignores the
+monitor entirely; in multi-slice it doubles with no clean fix on current Flex firmware.
+
+**Plan — implement as an investigation toggle; defer the final decision (hardened by coding).**
+We will implement the `rx_stream_out` feed behind a **dev/experimental toggle**, then A/B compare
+— spectrally *and* perceptually, on **real decoded RADE speech** (not just the 1b sweep) — our
+local render vs. the round-tripped monitor version, to quantify/qualify how audible the ~2.8 kHz
+truncation actually is on voice. The **multiflex use case** (the RAD2 slice audible from other
+clients) is a legitimate one for many operators even if lower-priority for the primary author, so
+investigate it fully — including whether the double-back / global-mute constraint has *any*
+workaround. **The final decision — local-only, remote-only, or an operator toggle — is deferred
+to that data.** Until then the design's baseline assumption is local-render-only.
 
 ## 10. The waveform provider protocol (clean-room, from public spec + Phase 0 observation)
 
@@ -230,6 +256,11 @@ audio port.
   status sub-state).
 - OTA A/B on the FLEX-8400: local-render fidelity vs. the container; PTT release timing; the inline
   callsign channel.
+- **`rx_stream_out` feed A/B (§9.1):** with the dev toggle on, capture the `remote_audio_rx`
+  round-trip of *real decoded RADE speech* and compare — spectrally and perceptually — against the
+  local render; quantify the ~2.8 kHz truncation's audibility on voice. Also characterize the
+  multiflex double-back (what a 2nd client hears; whether any workaround exists) to inform the
+  local-only / remote-only / toggle decision.
 
 ## 14. Rollout / phasing
 
@@ -249,13 +280,20 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
 - **DAX tap (V1's approach)** — rejected: requires the slice mute (radio can't un-mix the monitor
   client-side) and the side-channel; the waveform avoids both.
 - **Full-loop render** (decode → `rx_stream_out` → monitor → client) — rejected as the *primary* audio
-  path: ~2.8 kHz cap (§8, 1b). Retained only as the *optional* other-client feed.
+  path: ~2.8 kHz cap (§8, 1b), and it double-backs onto our own local render with no clean mute
+  (§9.1). Kept only as a *deferred, toggle-gated* other-client feed pending the A/B investigation.
 - **On-radio Docker waveform** — out of scope: 8000-class only; FreeDV's to ship.
 
 ## 16. Open questions
 
-1. Whether to feed `rx_stream_out` by default (other-client audio at ~2.8 kHz) or leave it off
-   (local-operator-only, full fidelity). Likely a setting.
+1. **`rx_stream_out` other-client feed — DIRECTION SET, final decision deferred (see §9.1).**
+   Current expectation: **local-render-only** (baseline). Feeding real audio for other clients
+   double-backs onto us (radio-mixed monitor can't be un-mixed) and the only fix (global
+   `audio_mute`) both strands *and* defeats the feed — so it's not a clean opt-in. **Plan:** build
+   it behind a dev toggle and A/B compare (spectral + perceptual, on real RADE speech) local vs.
+   round-trip, and fully investigate the multiflex case, before choosing local-only / remote-only /
+   toggle. Remaining sub-item: does the waveform framework require a steady `rx_stream_out`
+   (cadence/health) — if so the baseline feeds *silence* rather than nothing (Phase 2 check).
 2. Inline callsign transport: the per-frame `rade_rx/tx_data_symbol` API vs. the discovered
    `byte_stream_in/out` pair — which is cleaner/robust. Investigate in Phase 2/4.
 3. Exact `RAD2` `underlying_mode` and `rx_filter` width for best modem SNR (the modem is narrow;
