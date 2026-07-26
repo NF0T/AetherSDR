@@ -364,11 +364,10 @@ The real justification for a moderate filter is AGC/ADC headroom and adjacent-si
 carries no architectural risk — `rx_filter` is a runtime string, so being wrong costs two integers
 and a reconnect. It therefore does **not** warrant a pre-vendor test rig. But the split matters:
 
-- **Phase 2 (no codec needed):** ~~confirm the radio *accepts* `underlying_mode=DIGU`~~ **DONE,
-  see §10.2.** Still to do: confirm `rx_filter` is honoured and measure its actual shape by
-  reusing the Phase 0 1b sweep against `rx_stream_in`; determine whether `digu_offset` shifts
-  the demodulated passband or only the display (if the former, these cuts are relative to it).
-  Phase 0 1b already proved that radio behaviour can defy derivation — measure it.
+- **Phase 2 (no codec needed):** `underlying_mode=DIGU` accepted (§10.2) and `rx_filter`
+  honoured with `[800, 2200]` measured good (§10.3) — **both DONE.** Still to do: whether
+  `digu_offset` shifts the demodulated passband or only the dial display, which needs a tonal
+  reference rather than the noise method (§10.3 item 7).
 - **Phase 4/5 (needs the vendored codec):** optimise the filter against real decode performance
   (sync rate, `snr_est_dB`, Dtmax). This is the only part that genuinely must wait; building a
   standalone V2 harness beforehand would duplicate the vendor work against a still-churning
@@ -404,6 +403,69 @@ stream IDs, identical to Phase 0's (`tx_stream_in 0x81000005`, `rx_stream_in 0x8
 freed on `waveform remove` and reissued, so the provider must **not** treat a stream ID as unique
 across a create/remove cycle or use one as a session identity.
 
+### 10.3 Data-plane probe — 2026-07-26 (FLEX-8400, fw 4.2.20.41343, sole client)
+
+Slice set to the waveform mode with `underlying_mode=DIGU`, `rx_stream_in` captured and
+analysed. Probe: `tools/flex_waveform_dataplane_probe.py`. RX only; TX never enabled.
+
+**1. No mute — confirmed on hardware.** With the slice in the waveform mode, `audio_mute=0`.
+The central architectural claim of this RFC (§6.2) is now measured rather than inferred: the
+radio diverts the modem audio to the waveform without the client having to mute anything.
+
+**2. `rx_filter` is honoured — but only as latched at registration / mode entry.** Registering
+with a given `high_cut` and then reading the delivered passband:
+
+| `high_cut` at registration | measured −6 dB edge |
+|---|---|
+| 1500 | ~1500 Hz (−3.7 dB @ 1500, −101 dB @ 1750) |
+| 2200 | 2203 Hz |
+| 3200 | 3205 Hz |
+
+But `waveform set <X> rx_filter high_cut=…` issued **while the slice is already in the mode**
+returns **code 0 and changes nothing** — sweeping 1200 / 2200 / 3200 live left the delivered
+edge pinned at the registration value (3200) in all three cases. This is the same
+accepted-but-not-honoured shape as §10.2. **Provider consequence:** set the filter *before*
+putting the slice into the mode, and to change it, re-register rather than issuing a live
+update. Do not expose an operator filter control that silently no-ops.
+
+**3. The registered filter propagates to the slice's own filter fields.** Slice status moved
+from `filter=100/2800` (USB) to `filter=800/3200` (waveform mode) — the registration values.
+
+**4. `[800, 2200]` (§10.1) is validated.** Measured response, relative to in-band: −32 dB @
+750, −0.2 dB @ 1000, flat 1000–2000, −30 dB @ 2250, −72 dB @ 2500. The modem's 1000–1937.5 Hz
+occupancy passes essentially unclipped, with a brick-wall transition (`depth=256`). Margin
+below 1000 Hz is thin, but the receiver can only acquire over ±31.25 Hz, so it is sufficient.
+
+**5. `rx_stream_in` is a complex analytic I/Q pair — in CONJUGATE form.** The two interleaved
+float32 components have equal RMS (matching to 4+ significant figures) and correlation ≈ 0,
+and the spectrum of `A + jB` is one-sided at **negative** frequencies (+freq/−freq measured at
+−77 dB and −133 dB across runs). So the conventional positive-frequency analytic signal is
+**`A − jB`**.
+
+> **This corrects Phase 0**, which read the payload as "real passband, not alternating I/Q
+> pairs" (§8, 1a). It is an I/Q pair. **Provider consequence:** RADE's `rade_rx()` takes
+> `RADE_COMP`, so no Hilbert transform is needed — but the imaginary component must be
+> **negated**. Feeding `A + jB` mirrors the spectrum and will not decode. Re-verify the sign
+> convention if a lower-sideband (`DIGL`) variant is ever used.
+
+**6. Sample rate 24 kHz confirmed steady-state** (24031 / 24043 Hz measured). Phase 0's warning
+holds: a ~1 s startup burst inflates this to ~28 kHz if not discarded.
+
+**7. Still open — `digu_offset` semantics.** The field is present and reads 1500 with the slice
+in the waveform mode, but this probe did **not** establish whether it shifts the demodulated
+passband or only the dial display. That needs a tonal reference (e.g. a known carrier) rather
+than the noise-based method used here, and remains a Phase 2 item.
+
+**Incidental, useful for the provider and for probing:**
+
+- The radio **auto-restores a pan + slice** for a GUI client on connect. The 8400 is 2/2
+  pans/slices, so `slice create` then fails `0x50000003`. This — not a secondary-client
+  restriction — is the precise explanation for the contention Phase 0 hit. Use the restored
+  slice.
+- On `waveform remove`, client disconnect, **or an abrupt probe kill**, the slice reverted
+  cleanly to its previous mode every time. Nothing stranded — a favourable contrast to V1's
+  hand-unwound mute.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -428,10 +490,13 @@ audio port.
 ## 13. Testing
 
 - Reuse the RADE stored-file / `RADE_WAV_TAP` methodology and Dtmax metrics for decode validation.
-- **`RAD2` registration check (Phase 2, no codec required):** confirm the radio accepts
-  `underlying_mode=DIGU`; confirm `rx_filter low_cut/high_cut/depth` are honoured and measure the
-  filter's real shape by reusing the Phase 0 1b sweep against `rx_stream_in`; determine whether
-  `digu_offset` shifts the demodulated passband or only the dial display (§10.1).
+- **`RAD2` registration checks (Phase 2, no codec required):** DIGU acceptance (§10.2) and
+  `rx_filter` shape (§10.3) are done. Remaining: `digu_offset` passband-vs-display semantics,
+  which needs a tonal reference (§10.3 item 7).
+- **Regression guard for the two accepted-but-not-honoured traps (§10.2, §10.3):** assert that
+  the provider sets `rx_filter` *before* mode entry, and that the imaginary component of
+  `rx_stream_in` is negated before reaching the codec. Both are silent-wrong-answer failures,
+  not crashes.
 - Automation-bridge assertions for the `RAD2` mode lifecycle (activate/deactivate, no mute strand,
   status sub-state).
 - OTA A/B on the FLEX-8400: local-render fidelity vs. the container; PTT release timing; the inline
@@ -488,10 +553,10 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    low_cut=800 high_cut=2200`. The premise of the original question was wrong: tightening the
    filter does **not** improve modem SNR — the modem band-passes itself at 975 Hz and a narrow
    upstream filter biases the *reported* SNR high. **Remaining open:** (a) the DIGU-on-all-bands
-   convention is our belief, awaiting an authoritative RADE V2 citation; (b) `DIGU` is confirmed
-   *accepted* (§10.2) but not yet confirmed *honoured* — Phase 2 must still verify `rx_filter` is
-   applied, measure its shape, and determine whether `digu_offset` moves the passband or only the
-   display; (c) Phase 4/5 optimises the width against real decode performance.
+   convention is our belief, awaiting an authoritative RADE V2 citation; (b) `DIGU` accepted
+   (§10.2) and `rx_filter [800, 2200]` measured good on hardware (§10.3) — only `digu_offset`
+   passband-vs-display semantics remain; (c) Phase 4/5 optimises the width against real decode
+   performance.
 4. TX path validation into a dummy load (Phase 0 was RX-only).
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
