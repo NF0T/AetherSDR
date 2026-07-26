@@ -458,10 +458,14 @@ than the noise-based method used here, and remains a Phase 2 item.
 
 **Incidental, useful for the provider and for probing:**
 
-- The radio **auto-restores a pan + slice** for a GUI client on connect. The 8400 is 2/2
-  pans/slices, so `slice create` then fails `0x50000003`. This — not a secondary-client
-  restriction — is the precise explanation for the contention Phase 0 hit. Use the restored
-  slice.
+- The radio **auto-restores a pan + slice per GUI client on connect** (confirmed repeatedly;
+  the restored slice's `client_handle` follows the connection and it disappears when that
+  client drops). A probe that then creates its *own* pan and calls `slice create` gets
+  `0x50000003`. **The exact cause of that error is NOT established** — two pans and two slices
+  have since been observed coexisting fine, so the simple "8400 is 2/2 and the cap is hit"
+  reading does not hold. Whatever the cause, **using the auto-restored slice sidesteps it**,
+  which is what the probes now do. Phase 0's "secondary-client restriction" reading is still
+  wrong; this replaces it with an honest "unexplained, and routed around."
 - On `waveform remove`, client disconnect, **or an abrupt probe kill**, the slice reverted
   cleanly to its previous mode every time. Nothing stranded — a favourable contrast to V1's
   hand-unwound mute.
