@@ -172,8 +172,8 @@ The spike drove the risky unknowns to ground before committing to this design. P
   `waveform create name=… mode=RAD2 underlying_mode=USB version=…` on its **own** TCP-4992
   connection (reply code 0). So AetherSDR can host the waveform **in-process, single connection**
   — no dedicated socket, no daemon. Registration adds `RAD2` to the slice `mode_list`.
-  *Note:* the spike registered `underlying_mode=USB`; the design has since settled on `DIGU`
-  (§10.1), which is **not** yet OTA-confirmed as an accepted `underlying_mode` — a Phase 2 check.
+  *Note:* the spike registered `underlying_mode=USB`; the design has since settled on `DIGU`,
+  which was confirmed accepted in a follow-up probe (§10.2).
 - **Create returns six streams (fw 4.2.20).** `tx/rx_stream_in`, `tx/rx_stream_out`, **plus a
   `byte_stream_in`/`byte_stream_out` pair.** The byte-stream pair is a candidate transport for
   V2's inline callsign/data channel (the vendored D-Star parser reads only 4; ours must read 6).
@@ -364,16 +364,45 @@ The real justification for a moderate filter is AGC/ADC headroom and adjacent-si
 carries no architectural risk — `rx_filter` is a runtime string, so being wrong costs two integers
 and a reconnect. It therefore does **not** warrant a pre-vendor test rig. But the split matters:
 
-- **Phase 2 (no codec needed, do it then):** confirm the radio *accepts*
-  `underlying_mode=DIGU` (Phase 0 only ever tested `USB`, and the waveform API may accept a
-  narrower mode set than `slice set`); confirm `rx_filter` is honoured and measure its actual
-  shape by reusing the Phase 0 1b sweep against `rx_stream_in`; determine whether `digu_offset`
-  shifts the demodulated passband or only the display (if the former, these cuts are relative
-  to it). Phase 0 1b already proved that radio behaviour can defy derivation — measure it.
+- **Phase 2 (no codec needed):** ~~confirm the radio *accepts* `underlying_mode=DIGU`~~ **DONE,
+  see §10.2.** Still to do: confirm `rx_filter` is honoured and measure its actual shape by
+  reusing the Phase 0 1b sweep against `rx_stream_in`; determine whether `digu_offset` shifts
+  the demodulated passband or only the display (if the former, these cuts are relative to it).
+  Phase 0 1b already proved that radio behaviour can defy derivation — measure it.
 - **Phase 4/5 (needs the vendored codec):** optimise the filter against real decode performance
   (sync rate, `snr_est_dB`, Dtmax). This is the only part that genuinely must wait; building a
   standalone V2 harness beforehand would duplicate the vendor work against a still-churning
   branch.
+
+### 10.2 `underlying_mode` acceptance — probed 2026-07-26 (FLEX-8400, fw 4.2.20.41343)
+
+Registration-only probe on a GUI-bound TCP-4992 connection. **No slice and no panadapter are
+required to register a waveform**, so this ran non-disruptively alongside another connected
+client (radio reported `slices=1 panadapters=1` throughout).
+
+| `underlying_mode` | Result |
+|---|---|
+| `USB` | **ACCEPTED** (code 0) — control, matches Phase 0 |
+| `DIGU` | **ACCEPTED** (code 0) — the design choice (§10.1) |
+| `DIGL` | **ACCEPTED** (code 0) — fallback exists if the all-bands convention proves wrong |
+
+So the waveform API does **not** restrict `underlying_mode` to a narrower set than `slice set`,
+and the §10.1 choice of DIGU carries no registration risk. DIGL being accepted also means that if
+the upper-sideband-on-all-bands belief turns out to be wrong, the band-dependent variant is a
+descriptor change and nothing more.
+
+**What this does *not* prove.** A `code 0` reply confirms the radio *accepted the command*, not
+that it applies DIGU demodulation semantics (or the `digu_offset` dial convention) to the
+waveform's audio. A radio can accept a mode string and quietly treat it as its family default.
+Distinguishing "accepted" from "honoured" needs the data-plane test — a slice on the waveform
+mode with `rx_stream_in` captured — which is the remaining §10.1 Phase 2 work and wants a quiet
+radio. Treat DIGU as *registration-safe*, not yet *behaviour-confirmed*.
+
+**Incidental finding — stream IDs are recycled.** All three registrations returned the *same* six
+stream IDs, identical to Phase 0's (`tx_stream_in 0x81000005`, `rx_stream_in 0x81000004`,
+`tx/rx_stream_out 0x01000005`/`0x01000004`, `byte_stream_in/out 0x80100002`/`0x00100002`). IDs are
+freed on `waveform remove` and reissued, so the provider must **not** treat a stream ID as unique
+across a create/remove cycle or use one as a session identity.
 
 ## 11. Fidelity & Licensing
 
@@ -459,10 +488,10 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    low_cut=800 high_cut=2200`. The premise of the original question was wrong: tightening the
    filter does **not** improve modem SNR — the modem band-passes itself at 975 Hz and a narrow
    upstream filter biases the *reported* SNR high. **Remaining open:** (a) the DIGU-on-all-bands
-   convention is our belief, awaiting an authoritative RADE V2 citation; (b) Phase 2 must confirm
-   the radio accepts `DIGU` as an `underlying_mode` (Phase 0 only tested `USB`), that `rx_filter`
-   is honoured, and whether `digu_offset` moves the passband or only the display; (c) Phase 4/5
-   optimises the width against real decode performance.
+   convention is our belief, awaiting an authoritative RADE V2 citation; (b) `DIGU` is confirmed
+   *accepted* (§10.2) but not yet confirmed *honoured* — Phase 2 must still verify `rx_filter` is
+   applied, measure its shape, and determine whether `digu_offset` moves the passband or only the
+   display; (c) Phase 4/5 optimises the width against real decode performance.
 4. TX path validation into a dummy load (Phase 0 was RX-only).
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
