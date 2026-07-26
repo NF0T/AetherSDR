@@ -215,6 +215,34 @@ investigate it fully — including whether the double-back / global-mute constra
 workaround. **The final decision — local-only, remote-only, or an operator toggle — is deferred
 to that data.** Until then the design's baseline assumption is local-render-only.
 
+### 9.2 Callsign / text channel (V2 inline data) — two distinct layers
+
+The far-end callsign rides RADE's **own inline data channel** — `rade_tx_set_data_symbol` /
+`rade_rx_get_data_symbol` — **one BPSK bit per `rade_tx()` step** (a step = `RADE_V2_FRAMES_PER_STEP`
+= 4 LPCNet feature frames ≈ 40 ms, so **~25 bit/s**). This is the **only** path to the far station's
+RADE decoder; the Flex `byte_stream` (below) is local-only and cannot carry over-the-air data. The
+two are different layers, not competing options.
+
+The channel is **raw** — no framing, sync, FEC, or CRC. The upstream V2 test streams MSB-first
+ASCII bits, **cycles the message continuously**, and brute-force-searches for it on RX. So the
+*application* owns the text protocol (serialize the callsign; add sync/CRC/FEC as desired; repeat it
+during the over so a late-joining or re-syncing RX catches the next copy). Because it is continuous
+and inline, there is **no end-of-over burst/drain** — this removes V1's EOO pre-buffer/timing
+problems and lets PTT release be near-immediate.
+
+**Interop dependency (flag).** For callsigns to interoperate with other RADE V2 stations
+(FreeDV-GUI, the container), our app-level framing on this channel **must match the RADE V2
+ecosystem convention.** That convention is **not** in the C port (`radae_nopy` exposes only the raw
+symbol API + a bare test); it lives in FreeDV-GUI's integration and may not be finalized while V2 is
+in development. We **adopt upstream's scheme at vendor time (Phase 4)** and do not invent an
+incompatible one; until it stabilizes our framing is provisional.
+
+**The Flex `byte_stream_in/out`** (returned by `waveform create`, fw 4.2.20; absent from
+`rade_api.h`) is a *separate, local* radio↔client data channel — not over-the-air. It is **not
+needed** for the baseline: `RADEV2Engine` surfaces the decoded callsign to our own UI directly via
+Qt signals. It is a candidate for a *future* nicety (publish decoded text to SmartSDR / other
+clients for display, or accept text from SmartSDR to transmit) and is deferred out of baseline scope.
+
 ## 10. The waveform provider protocol (clean-room, from public spec + Phase 0 observation)
 
 Registration on the existing TCP-4992 command channel (after the normal GUI bind + subs):
@@ -227,6 +255,8 @@ waveform set <X> udpport=<P>                       (our VITA-49 listener)
 ```
 Data plane: VITA-49 IF-Data over UDP; audio is 24 kHz Complex-float32, big-endian; outbound goes
 to `radio:4991`, inbound to our registered `udpport`. Details and exact framing captured in Phase 0.
+The `byte_stream_in/out` pair is a *local* radio↔client data channel (not over-the-air; see §9.2) —
+out of baseline scope.
 
 ## 11. Fidelity & Licensing
 
@@ -294,8 +324,12 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    round-trip, and fully investigate the multiflex case, before choosing local-only / remote-only /
    toggle. Remaining sub-item: does the waveform framework require a steady `rx_stream_out`
    (cadence/health) — if so the baseline feeds *silence* rather than nothing (Phase 2 check).
-2. Inline callsign transport: the per-frame `rade_rx/tx_data_symbol` API vs. the discovered
-   `byte_stream_in/out` pair — which is cleaner/robust. Investigate in Phase 2/4.
+2. **Callsign/text transport — CLARIFIED (see §9.2): not an either/or.** OTA callsign uses RADE's
+   `data_symbol` channel (the only OTA path; ~25 bit/s raw BPSK, app-framed, repeated inline). The
+   Flex `byte_stream` is a separate *local* channel, deferred (optional future SmartSDR/other-client
+   text surfacing). **Remaining open:** the app-level framing (serialize/sync/CRC/FEC) must match the
+   RADE V2 ecosystem convention for interop — adopt upstream's at vendor time (Phase 4); it may not
+   be finalized yet, so our framing is provisional until then.
 3. Exact `RAD2` `underlying_mode` and `rx_filter` width for best modem SNR (the modem is narrow;
    confirm the passband that maximizes decode without over-widening).
 4. TX path validation into a dummy load (Phase 0 was RX-only).
