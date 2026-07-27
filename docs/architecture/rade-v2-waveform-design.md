@@ -367,9 +367,12 @@ The real justification for a moderate filter is AGC/ADC headroom and adjacent-si
   (`src/models/SliceModel.h:488`), which is RADE's nominal centre — so the operator's VFO reads
   the centre of the signal rather than the suppressed carrier. On plain `USB` our displayed
   frequency would sit ~1.5 kHz off from what other RADE stations report.
-  **Qualified by §10.4:** this holds radio-side only. The *client's* offset UI is keyed on the
-  slice mode string, so `underlying_mode=DIGU` does **not** give us the convention in the GUI —
-  `RAD2` has to be added to that family explicitly in Phase 3.
+  **Sharpened by §10.3 item 7 / §10.4:** `digu_offset` is not merely a *dial* convention — it is
+  the **centre a width-specified filter is constructed around** (`lo/hi = offset ∓ width/2`), which
+  is why it matters. That arithmetic is applied by the *client*, keyed on the slice mode string, so
+  `underlying_mode=DIGU` does **not** confer it on `RAD2`; Phase 3 must add `RAD2` to that family
+  or an operator filter preset will clip the modem. Registration here is unaffected — an explicit
+  `low_cut`/`high_cut` pair never goes through the width arithmetic.
 - **Upper sideband on *all* bands.** Unlike V1 — which picks `DIGL` on LSB-convention bands
   (`src/gui/MainWindow_DigitalModes.cpp:266-269`) — RAD2 uses DIGU everywhere, following the
   FT8/WSJT-X convention that digital modes are upper-sideband regardless of band.
@@ -469,10 +472,35 @@ and the spectrum of `A + jB` is one-sided at **negative** frequencies (+freq/−
 **6. Sample rate 24 kHz confirmed steady-state** (24031 / 24043 Hz measured). Phase 0's warning
 holds: a ~1 s startup burst inflates this to ~28 kHz if not discarded.
 
-**7. Still open — `digu_offset` semantics.** The field is present and reads 1500 with the slice
-in the waveform mode, but this probe did **not** establish whether it shifts the demodulated
-passband or only the dial display. That needs a tonal reference (e.g. a known carrier) rather
-than the noise-based method used here, and remains a Phase 2 item.
+**7. `digu_offset` semantics — CLOSED, and the original question was a false binary.** This
+item previously asked whether `digu_offset` "shifts the demodulated passband or only the dial
+display." **It does neither.** It is the **centre frequency the filter is constructed around**
+when a filter is specified as a *width*:
+
+```
+lo = digu_offset - width/2
+hi = digu_offset + width/2          (src/gui/RxApplet.cpp:2464-2469, width < 3000)
+```
+
+So a 1500 Hz-wide preset on a slice with `digu_offset = 1500` yields **750 – 2250 Hz**, not
+0 – 1500 and not a shifted 1500 – 3000.
+
+*Evidence, two independent routes.* **(a) OTA**, via the automation bridge with a slice put into
+a Python-registered waveform mode on `underlying_mode=DIGU`, verified by screenshot — operator-run
+on the Linux machine, 2026-07-26. The session hit a usage limit mid-turn and the write-up was lost,
+so the screenshots are **not** preserved; this entry is reconstructed from the operator's report.
+**(b) Source**, read independently afterwards: the arithmetic above reproduces the reported
+750 – 2250 exactly. Two routes agreeing is why this is recorded as closed despite the missing
+artifacts — but note the OTA leg is testimony, not a re-runnable article.
+
+**This reconciles with item 2 above, and nothing needs re-deriving.** §10.3's measurements
+registered explicit `low_cut`/`high_cut` *pairs*, so no width→centre arithmetic ever applied and
+the edges landed on the registered values, exactly as measured. The offset arithmetic only runs
+on **width-specified** filters. §10.1's `rx_filter [800, 2200]` is an explicit pair and is
+therefore untouched — and, incidentally, is already centred on 1500 with a 1400 Hz width, i.e.
+consistent with the DIGU convention by construction.
+
+**But this makes §10.4 defect 3 materially worse than "a control disappears" — see there.**
 
 **Incidental, useful for the provider and for probing:**
 
@@ -517,17 +545,29 @@ to each family predicate explicitly — this is not a thing the waveform registr
 |---|---|---|---|
 | 1 | **Squelch auto-arms** | `VfoWidget.cpp:4241,4261` (`isDig`→`sqlDisabled`); `RxApplet.cpp:2676` (same list, independently) | Squelch enabled on a slice whose audio is an OFDM modem — **gates decode**. Two independent sites; both need `RAD2`. |
 | 2 | **Auto-notch offered** | `VfoWidget.cpp:4254-4256` — `isVoice = !isRtty && !isCw && !isDig && !isFm && !isFdv` | `RAD2` matches no family ⇒ `isVoice` is true ⇒ ANF/ANFL/ANFT are shown. An adaptive notch on OFDM **chews the carriers** — destructive, not merely useless. |
-| 3 | **DIGU offset control disappears** | `VfoWidget.cpp:4248` (`m_digContainer` visibility); `RxApplet.cpp:2464` (`if (mode == "DIGU")` filter geometry) | The `Offset 1500` control vanishes and the DIGU filter geometry is not applied. See the §10.1 qualification below. |
+| 3 | **DIGU offset control disappears — and the filter-width preset silently clips the modem** | `VfoWidget.cpp:4248` (`m_digContainer` visibility); `RxApplet.cpp:2464` (mode-keyed filter geometry), fallthrough at `RxApplet.cpp:2517-2521` | Worse than a missing control — see below. A width preset on `RAD2` falls through to `lo = 95; hi = width`, which **cuts the top of the modem**. |
 | 4 | **`rfGain` reset** | **not localised** | Observed on mode entry. `rfGain` is **pan**-scoped (`MainWindow.cpp:8292` `setPanRfGain`), not slice-mode-keyed, so it does **not** share the classification root cause above. Cause **not established** — do not assume it is the same bug, and re-observe before designing a fix. |
 
-**This qualifies §10.1's dial-convention claim.** §10.1 argues for `DIGU` partly because it "carries
-the right dial convention" (`digu_offset` = 1500 Hz). Defect 3 shows that reasoning is **only valid
-radio-side**: the *client* offset UI is keyed on the slice mode string, so registering
-`underlying_mode=DIGU` does **not** hand us the 1500 Hz convention in the GUI. `RAD2` must be added
-to the DIGU-offset family explicitly if we want it. The rest of the §10.1 DIGU rationale (data-mode
-treatment on the radio, the D-Star `DFM`-not-`FM` precedent) is untouched by this. Note also that
-§10.3 item 7 — whether `digu_offset` shifts the demodulated passband or only the dial display —
-is *still* open, so the value of chasing this convention at all is not yet settled.
+**Defect 3 in full — this is a decode-breaking trap, not a cosmetic one.** Now that §10.3 item 7
+is closed, the consequence is concrete. `digu_offset` is the **centre a width-specified filter is
+built around**, and that arithmetic is gated on `mode == "DIGU"`. On a `RAD2` slice the mode string
+matches nothing, so `applyFilterPreset()` falls through to the default at `RxApplet.cpp:2517-2521`:
+
+| Slice mode | Operator picks a 1500 Hz preset | Covers the modem's 1000 – 1937.5 Hz? |
+|---|---|---|
+| `DIGU` (offset 1500) | `750 – 2250` | **Yes**, comfortably |
+| `RAD2` (fallthrough) | `95 – 1500` | **No** — everything above 1500 Hz is cut |
+
+That removes roughly the upper half of the occupied carriers. The failure mode is a slice that
+**stops decoding after the operator touches the filter**, with no error and no visible cause —
+and during Phase 4 bring-up it would look exactly like a codec bug.
+
+**This sharpens, rather than weakens, §10.1's DIGU rationale.** The offset does real work; it is
+not a display convention. What §10.4 establishes is only that the work is **not inherited** — the
+client applies it by literal mode-string match, so `RAD2` must be added to that family explicitly
+in Phase 3. Registration-side nothing changes: §10.1 registers an explicit `low_cut`/`high_cut`
+pair, which never goes through the width arithmetic. The rest of the §10.1 rationale (data-mode
+treatment on the radio, the D-Star `DFM`-not-`FM` precedent) is untouched.
 
 **Scope note.** These are Phase 3 (GUI wiring) items, not Phase 2. They are recorded here rather
 than only in the phase plan because they are *evidence about the design* — specifically, evidence
@@ -558,9 +598,15 @@ audio port.
 ## 13. Testing
 
 - Reuse the RADE stored-file / `RADE_WAV_TAP` methodology and Dtmax metrics for decode validation.
-- **`RAD2` registration checks (Phase 2, no codec required):** DIGU acceptance (§10.2) and
-  `rx_filter` shape (§10.3) are done. Remaining: `digu_offset` passband-vs-display semantics,
-  which needs a tonal reference (§10.3 item 7).
+- **`RAD2` registration checks (Phase 2, no codec required):** DIGU acceptance (§10.2),
+  `rx_filter` shape (§10.3) and `digu_offset` semantics (§10.3 item 7) are all done. Nothing
+  registration-side remains unmeasured.
+- **Filter-preset guard (Phase 3, from §10.3 item 7 + §10.4 defect 3):** assert that a
+  width-specified filter preset on a `RAD2` slice produces a passband **centred on 1500 Hz**
+  (e.g. 1500 → 750–2250), not the `lo = 95; hi = width` fallthrough. Pin it with the modem's
+  1000–1937.5 Hz occupancy as the assertion, so the test states the *reason* rather than the
+  numbers. This is the highest-value test in §13: it is the one defect that silently stops
+  decode in response to an ordinary operator action.
 - **Regression guard for the two accepted-but-not-honoured traps (§10.2, §10.3):** assert that
   the provider sets `rx_filter` *before* mode entry, and that the imaginary component of
   `rx_stream_in` is negated before reaching the codec. Both are silent-wrong-answer failures,
@@ -626,9 +672,10 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    low_cut=800 high_cut=2200`. The premise of the original question was wrong: tightening the
    filter does **not** improve modem SNR — the modem band-passes itself at 975 Hz and a narrow
    upstream filter biases the *reported* SNR high. **Remaining open:** (a) the DIGU-on-all-bands
-   convention is our belief, awaiting an authoritative RADE V2 citation; (b) `DIGU` accepted
-   (§10.2) and `rx_filter [800, 2200]` measured good on hardware (§10.3) — only `digu_offset`
-   passband-vs-display semantics remain; (c) Phase 4/5 optimises the width against real decode
+   convention is our belief, awaiting an authoritative RADE V2 citation; ~~(b) `digu_offset`
+   semantics~~ **CLOSED** — `DIGU` accepted (§10.2), `rx_filter [800, 2200]` measured good on
+   hardware (§10.3), and `digu_offset` resolved as the width-centring frequency rather than a
+   shift of anything (§10.3 item 7); (c) Phase 4/5 optimises the width against real decode
    performance.
 4. TX path validation into a dummy load (Phase 0 was RX-only).
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
