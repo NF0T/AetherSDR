@@ -218,6 +218,12 @@ streamed inline, so there is no *data-bearing* EOO burst to assemble and drain �
 a 120 ms pilot-only EOO frame, and PTT must be held across it plus buffer flush (§9.2). Much
 simpler than V1's three-layer EOO PTT orchestration, though not instantaneous.
 
+**Holding PTT is necessary but not sufficient.** Per §10.5 item 4 the transmit pump is *driven by
+inbound `tx_stream_in` packets*, not by a clock of ours — so when the radio stops delivering them
+the emit path stops too, and the EOO tail is dropped no matter what PTT is doing. The provider must
+synthesize buffers to flush the tail, the way the D-Star path already does for its own tail. Any TX
+design that treats "hold PTT ~120 ms" as the whole fix is wrong.
+
 ### 9.1 RX audio output — current expectation: local render only
 
 **Current expectation (this iteration): local-render-only.** By default the RAD2 slice
@@ -574,6 +580,106 @@ than only in the phase plan because they are *evidence about the design* — spe
 bounding how much the waveform approach gives us for free. The answer is: the mode identity and the
 mute, yes; the mode *family* semantics, no.
 
+### 10.5 The TX contract — desk-derived (§16 Q4, "Tier 0")
+
+Phase 0 was RX-only, leaving the transmit half of the provider unspecified. Most of it turns out
+to be recoverable **without keying a transmitter**, because a working waveform TX implementation is
+already vendored: the D-Star provider transmits, so the contract is readable rather than guessable.
+
+**Provenance note.** Everything below is a *wire-observable* fact — packet layout, constants,
+cadence, command order — of the kind Phase 0 derived independently from captures (§8, §10.3), and
+the overlapping items agree. Reading the vendored tree to establish protocol facts is Principle I
+protocol-authority work and does not change the §11 clean-room posture: `vita_output.c`,
+`sched_waveform.c` and `hal_listener.c` are **FlexRadio** (2012-2014) and are read, not copied;
+`dstar_tx_stream.c` and `digital_voice_tx_gate.c` are **AetherSDR's own** (GPL-3.0-or-later by
+virtue of living in that tree), so their *design* is our prior art while the files stay unlinked.
+
+**1. Outbound framing is fully specified — and we have already exercised it.** One function emits
+both outbound streams (`vita_output.c:132-155`, `:203-211`):
+
+| Field | Value |
+|---|---|
+| Header | `IF_DATA_WITH_STREAM_ID \| CLASS_ID_PRESENT \| TSI_UTC \| TSF_REAL_TIME \| (packet_count << 16) \| (7 + samples*2)` |
+| `class_id_h` | `FLEXRADIO_OUI` = **0x001C2D** |
+| `class_id_l` | `SL_VITA_SLICE_AUDIO_CLASS` = **0x534C03E3** (`0x534C<<16 \| 24 kHz 0x03 \| 32bps 0x60 \| stereo 0x180 \| IEEE-754 0x200`) |
+| Timestamp | UTC seconds + fractional **picoseconds** (`usec × 1e6`) |
+| Payload | big-endian float pairs, 8 B/sample, **128 samples/packet** (`HAL_TX_BUFFER_SIZE`) |
+| Destination | **radio:4991** (`vita_output.c:121`) |
+
+This is byte-identical to what the Phase 0 1b probe already built and the radio already accepted,
+so **outbound framing carries no residual risk** — it is exercised code, not a fresh guess.
+
+**2. The packet count is a per-stream 4-bit rolling counter**, starting at 0 for a newly seen
+stream and wrapping at 16 (`vita_output.c:79-103`). The provider must keep one counter *per stream
+id*, not one globally.
+
+**3. On the outbound streams the two floats are STEREO AUDIO, not I/Q.** D-Star writes
+`real = imag = <the same mono sample>` — for decoded speech on `rx_stream_out`
+(`sched_waveform.c:1442-1443`) *and* for the modulated passband on `tx_stream_out`
+(`sched_waveform.c:1862-1865`). The class id says so literally (`SL_CLASS_AUDIO_STEREO`).
+
+> **This substantially defuses the TX sideband risk flagged for "Tier 3".** Because D-Star
+> duplicates the channels *and D-Star demonstrably works on the air*, the radio **cannot** be
+> interpreting the outbound pair as I/Q — doing so would transmit a mirrored/double-sideband mess.
+> So the TX path takes a **real** passband signal (RADE's `rade_tx()` output → `real()`, exactly as
+> V1 already does), duplicated into both slots, and the radio's DIGU stage does the upconversion.
+> There is no conjugate convention to get wrong on transmit.
+>
+> The asymmetry with §10.3's inbound finding is *semantically justified*, not a contradiction:
+> `rx_stream_in` is the demodulator's complex baseband, which genuinely needs I/Q; the outbound
+> streams are audio.
+
+**4. TX cadence is slaved to the inbound `tx_stream_in` stream.** The scheduler is purely
+reactive — unlink an inbound buffer, classify it by stream id
+(`digital_voice_mode_registry.c:240-253`), process, emit. There is no free-running transmit clock.
+
+> **This is the single most important Tier 0 finding for RADE V2, because of the EOO.** When the
+> radio stops delivering `tx_stream_in` at unkey, the pump stops — and any tail still queued is
+> simply never sent. V2 must emit a **120 ms pilot-only EOO frame** *after* the last voice frame
+> (§3.2, §9.2), so this would silently truncate it.
+>
+> D-Star already hit this and solved it: during its drain/ending phases it **synthesizes** buffer
+> descriptors stamped with `tx_stream_in_id` so the normal TX path keeps running
+> (`sched_waveform.c:1330-1338`). RADE V2 needs the same mechanism for the EOO tail. That file is
+> AetherSDR's own, so this is a design pattern we may reuse — it just has to be reimplemented
+> rather than linked.
+
+**5. Which stream id to emit on is genuinely unsettled — two sources disagree, and both work.**
+
+| Source | Emits on | Evidence |
+|---|---|---|
+| D-Star provider (shipped) | the **inbound** id (`0x81000004` / `0x81000005`) | `hal_listener.c:604` stamps the received id into the descriptor; nothing remaps it; the `*_out_id` fields are parsed at `digital_voice_mode_registry.c:82-83` and **never read again** |
+| Phase 0 probe 1b | `rx_stream_out_id` (`0x01000004`) | §8, 1b — the injected sweep reached the monitor |
+
+Both evidently function, which suggests the radio routes on the low bits and tolerates the
+direction bit either way. The provider must still pick one. **Cheapest resolution: a Tier 1
+no-RF check** — inject on each id in turn and see which produces monitor audio. Until then,
+prefer the *_out ids (they are what the API returns and what our own probe validated) and treat
+the D-Star behaviour as the fallback.
+
+**6. Registration order for TX** (`digital_voice_mode_registry.c:196-220`): `waveform set <X> tx=1`
+comes **first**, then the three `tx_filter` fields, with `udpport` **last**. Note D-Star registers
+`tx_filter low_cut=0 high_cut=4800` — one-sided — while its `rx_filter` is symmetric `±3500`. So
+the tx_filter sign convention does **not** simply mirror the rx_filter family clamping described in
+§10, and our DIGU-family values are **unverified**; treat §10's `tx_filter [0, 2400]` as proposed,
+not confirmed.
+
+**7. There is a fault taxonomy to design against.** `TX_FAULT`, `TIMEOUT` and `STUCK_INPUT` all
+drive the gate to `CANCEL` (`digital_voice_tx_gate.c:217-226`). The provider needs an explicit
+cancel path, not just a happy path.
+
+**What Tier 0 does *not* answer — carried to Tier 1 (no RF) and Tier 2 (dummy load):**
+
+- Does `tx_stream_in` flow before PTT, or only while transmitting? (Decides whether we source mic
+  audio from the radio or from AetherSDR's own `AudioEngine`, which §9 currently assumes.)
+- **Amplitude/scaling convention.** D-Star carries an explicit tunable TX gain
+  (`_dstar_scale_tx_sample`, `sched_waveform.c:551-553`), which implies full-scale is not obvious
+  and had to be calibrated. → the Tier 2 ALC-linearity sweep.
+- Does the radio apply speech processing (ALC/compression) on a **DIGU**-underlying waveform? OFDM
+  would not survive it. → Tier 2.
+- Which stream id to emit on (item 5). → Tier 1.
+- `tx_filter` clamping for a USB-family underlying mode (item 6). → Tier 1.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -620,6 +726,17 @@ audio port.
   they are worth a regression test rather than a code review.
 - OTA A/B on the FLEX-8400: local-render fidelity vs. the container; PTT release timing; the inline
   callsign channel.
+- **EOO tail guard (from §10.5 item 4):** assert the full 120 ms pilot-only EOO actually reaches
+  `tx_stream_out` after the last voice frame, by counting emitted samples — not by asserting PTT
+  timing. The failure mode is a *truncated* tail when the radio stops driving the pump, which a
+  PTT-duration assertion would pass straight through while the far end loses end-of-over detection.
+- **TX validation tiers (§16 Q4):** Tier 1 is no-RF (which stream id the radio honours on emit;
+  `tx_filter` clamping under a USB-family underlying mode; whether `tx_stream_in` flows before
+  PTT). Tier 2 keys into a dummy load at minimum power and reads the radio's own telemetry —
+  `FWDPWR`/`REFPWR`/`SWR` and the post-ALC dBFS meter (`MeterModel.h:117,140-148`) — sweeping
+  injected amplitude to test **power-transfer linearity**, since any ALC/compression in the path
+  would wreck OFDM. Tier 2 keys the transmitter and is operator-supervised, never agent-initiated
+  (the automation bridge already refuses TX-keying actions, `AutomationServer.cpp:5488`).
 - **`rx_stream_out` feed A/B (§9.1):** with the dev toggle on, capture the `remote_audio_rx`
   round-trip of *real decoded RADE speech* and compare — spectrally and perceptually — against the
   local render; quantify the ~2.8 kHz truncation's audibility on voice. Also characterize the
@@ -677,7 +794,16 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    hardware (§10.3), and `digu_offset` resolved as the width-centring frequency rather than a
    shift of anything (§10.3 item 7); (c) Phase 4/5 optimises the width against real decode
    performance.
-4. TX path validation into a dummy load (Phase 0 was RX-only).
+4. **TX path — largely CLOSED on paper by §10.5; RF validation still outstanding.** The wire
+   contract (framing, packet counting, stereo-not-I/Q outbound, radio-driven cadence, registration
+   order, fault taxonomy) is desk-derived from the vendored provider and needs no transmitter. Two
+   consequences worth carrying: the outbound pair is **audio, so there is no TX conjugate/sideband
+   convention to get wrong**, and the TX pump is **slaved to inbound `tx_stream_in`**, so V2's
+   120 ms EOO tail requires synthesized buffers or it is silently truncated. **Remaining:**
+   (a) a Tier 1 no-RF check of which stream id to emit on and of `tx_filter` clamping for a
+   USB-family underlying mode; (b) a Tier 2 dummy-load run for the amplitude/ALC-linearity
+   question — whether the radio applies speech processing that OFDM would not survive — plus
+   whether `tx_stream_in` flows before PTT.
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
 ## 17. References
