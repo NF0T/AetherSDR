@@ -165,8 +165,23 @@ All new code is gated behind a compile flag **`ENABLE_RADE_V2`** (off by default
 
 ## 8. Phase 0 evidence (hardened by coding, live FLEX-8400 fw 4.2.20.41343)
 
-The spike drove the risky unknowns to ground before committing to this design. Probes:
-`tools/` (dev-only; the throwaway `flex_probe*.py` scripts are not shipped).
+The spike drove the risky unknowns to ground before committing to this design. Every claim below
+is reproducible — the probe that produced it is preserved in `tools/` (dev-only, not built or
+shipped):
+
+| Finding | Article |
+|---|---|
+| OQ#1 (in-process registration) | `tools/flex_waveform_phase0_oq1_probe.py` |
+| 1a (`rx_stream_in` VITA-49 format) | `tools/flex_waveform_phase0_rxformat_probe.py` |
+| 1b (round-trip ~2.8 kHz cap) | `tools/flex_waveform_phase0_roundtrip_probe.py` |
+| §10.2 (`underlying_mode` acceptance) | `tools/flex_waveform_probe.py` |
+| §10.3 (data plane, no-mute, conjugate I/Q) | `tools/flex_waveform_dataplane_probe.py` |
+
+An earlier draft recorded the Phase 0 three as lost with their session scratchpad; they were
+recovered intact on 2026-07-26 and committed. Each carries a header noting what it produced and,
+where applicable, **which of its own conclusions was later corrected** — 1a's "real passband"
+reading is superseded by §10.3 item 5. They are historical articles, not maintained reference
+implementations; read the RFC section, not the script, for what is currently believed true.
 
 - **OQ#1 — GO.** A GUI-client connection (`client gui` → `client station`) successfully ran
   `waveform create name=… mode=RAD2 underlying_mode=USB version=…` on its **own** TCP-4992
@@ -352,6 +367,9 @@ The real justification for a moderate filter is AGC/ADC headroom and adjacent-si
   (`src/models/SliceModel.h:488`), which is RADE's nominal centre — so the operator's VFO reads
   the centre of the signal rather than the suppressed carrier. On plain `USB` our displayed
   frequency would sit ~1.5 kHz off from what other RADE stations report.
+  **Qualified by §10.4:** this holds radio-side only. The *client's* offset UI is keyed on the
+  slice mode string, so `underlying_mode=DIGU` does **not** give us the convention in the GUI —
+  `RAD2` has to be added to that family explicitly in Phase 3.
 - **Upper sideband on *all* bands.** Unlike V1 — which picks `DIGL` on LSB-convention bands
   (`src/gui/MainWindow_DigitalModes.cpp:266-269`) — RAD2 uses DIGU everywhere, following the
   FT8/WSJT-X convention that digital modes are upper-sideband regardless of band.
@@ -470,6 +488,52 @@ than the noise-based method used here, and remains a Phase 2 item.
   cleanly to its previous mode every time. Nothing stranded — a favourable contrast to V1's
   hand-unwound mute.
 
+### 10.4 Stock-client GUI observation — 2026-07-26 (what a waveform mode looks like with *no* RAD2 code)
+
+With a waveform registered and slice 0 set to it, an **unmodified AetherSDR 26.7.3** — containing
+no `RAD2` code whatsoever — was observed rendering the slice. This is the cheapest possible
+experiment for the §6.5 UX claim, and it cuts both ways: it **demonstrates** the headline fix and
+it **surfaces four defects** that Phase 3 must fix and that would otherwise have been found late,
+during engine bring-up, mixed in with codec bugs.
+
+**The split-brain fix is demonstrated, not merely argued.** The stock client showed:
+
+- the **mode field and dropdown read the waveform's mode**, not `underlying_mode`;
+- the registered `rx_filter` drawn correctly as a **one-sided upper-sideband passband**
+  (corroborating the §10 sign-clamping analysis from the GUI side);
+- **`audioMute = false`.**
+
+Because a waveform **is** a real mode, the V1 pathology (§3.1) cannot occur — nothing had to be
+built to get this. This retires the "will the registry-native approach actually fix the UX"
+question at zero cost.
+
+**But `underlying_mode` is not inherited by the client-side UI.** Three of the four defects below
+share one root cause: **AetherSDR classifies mode families by literal comparison against the
+*slice's* mode string**, and a waveform's mode string (`RAD2`) matches no family. The radio may
+apply DIGU demodulation semantics; the *client* does not know it should. Phase 3 must add `RAD2`
+to each family predicate explicitly — this is not a thing the waveform registration does for us.
+
+| # | Defect | Site | Consequence |
+|---|---|---|---|
+| 1 | **Squelch auto-arms** | `VfoWidget.cpp:4241,4261` (`isDig`→`sqlDisabled`); `RxApplet.cpp:2676` (same list, independently) | Squelch enabled on a slice whose audio is an OFDM modem — **gates decode**. Two independent sites; both need `RAD2`. |
+| 2 | **Auto-notch offered** | `VfoWidget.cpp:4254-4256` — `isVoice = !isRtty && !isCw && !isDig && !isFm && !isFdv` | `RAD2` matches no family ⇒ `isVoice` is true ⇒ ANF/ANFL/ANFT are shown. An adaptive notch on OFDM **chews the carriers** — destructive, not merely useless. |
+| 3 | **DIGU offset control disappears** | `VfoWidget.cpp:4248` (`m_digContainer` visibility); `RxApplet.cpp:2464` (`if (mode == "DIGU")` filter geometry) | The `Offset 1500` control vanishes and the DIGU filter geometry is not applied. See the §10.1 qualification below. |
+| 4 | **`rfGain` reset** | **not localised** | Observed on mode entry. `rfGain` is **pan**-scoped (`MainWindow.cpp:8292` `setPanRfGain`), not slice-mode-keyed, so it does **not** share the classification root cause above. Cause **not established** — do not assume it is the same bug, and re-observe before designing a fix. |
+
+**This qualifies §10.1's dial-convention claim.** §10.1 argues for `DIGU` partly because it "carries
+the right dial convention" (`digu_offset` = 1500 Hz). Defect 3 shows that reasoning is **only valid
+radio-side**: the *client* offset UI is keyed on the slice mode string, so registering
+`underlying_mode=DIGU` does **not** hand us the 1500 Hz convention in the GUI. `RAD2` must be added
+to the DIGU-offset family explicitly if we want it. The rest of the §10.1 DIGU rationale (data-mode
+treatment on the radio, the D-Star `DFM`-not-`FM` precedent) is untouched by this. Note also that
+§10.3 item 7 — whether `digu_offset` shifts the demodulated passband or only the dial display —
+is *still* open, so the value of chasing this convention at all is not yet settled.
+
+**Scope note.** These are Phase 3 (GUI wiring) items, not Phase 2. They are recorded here rather
+than only in the phase plan because they are *evidence about the design* — specifically, evidence
+bounding how much the waveform approach gives us for free. The answer is: the mode identity and the
+mute, yes; the mode *family* semantics, no.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -503,6 +567,11 @@ audio port.
   not crashes.
 - Automation-bridge assertions for the `RAD2` mode lifecycle (activate/deactivate, no mute strand,
   status sub-state).
+- **Mode-family classification guard (Phase 3, from §10.4):** assert that `RAD2` lands in the
+  squelch-disabled family (both sites), is excluded from `isVoice` so auto-notch stays hidden, and
+  appears in the DIGU-offset family. All three are *silent* misbehaviours — squelch gating decode
+  and a notch eating OFDM carriers look like codec failures, not GUI bugs, which is exactly why
+  they are worth a regression test rather than a code review.
 - OTA A/B on the FLEX-8400: local-render fidelity vs. the container; PTT release timing; the inline
   callsign channel.
 - **`rx_stream_out` feed A/B (§9.1):** with the dev toggle on, capture the `remote_audio_rx`
