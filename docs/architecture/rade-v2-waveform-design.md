@@ -247,7 +247,7 @@ design that treats "hold PTT ~120 ms" as the whole fix is wrong.
 > |---|---|---|
 > | Fidelity | full | **equal** (§10.7); Opus on WAN only |
 > | Other clients hear the slice | no | **yes** |
-> | Latency | minimal | **+22 ms** on LAN (§10.8) |
+> | Latency | minimal | **+22 ms** remote-over-VPN, ~16 ms on-site (§10.8) |
 > | Double-back | none | none |
 > | Slice volume / mute work normally | no — needs its own plumbing | **yes** |
 > | Parallel audio side-channel | **yes** | none |
@@ -269,9 +269,11 @@ design that treats "hold PTT ~120 ms" as the whole fix is wrong.
 > every other mode's — the operator's slice volume and mute simply work, and other clients hear
 > the slice for free.
 >
-> **What would change the recommendation:** WAN operation being materially worse under Opus, or a
-> use case where AetherSDR must produce RADE audio while the radio's monitor path is unavailable.
-> Both are worth checking before this is settled, and neither is measured yet.
+> **What would change the recommendation:** SmartLink operation being materially worse under Opus,
+> or a use case where AetherSDR must produce RADE audio while the radio's monitor path is
+> unavailable. Note the 22 ms was measured **remote over a WireGuard VPN**, not on a bench — the
+> radio classifies that link as LAN, so it is uncompressed, and an on-site operator sees ~16 ms
+> (§10.8). Opus is therefore a **SmartLink** concern specifically, not a remote-operation one.
 
 ---
 
@@ -873,8 +875,32 @@ buffer, and ~24 ms of growth over 7.4 s is a ~0.3 % clock error. **A real provid
 output off the received `rx_stream_in` packets — the radio's own clock — and does not drift.**
 Quantisation is one packet, 5.33 ms.
 
-**Caveat:** LAN, `compression=none`. A WAN client additionally gets Opus plus real network RTT
-(`RadioModel::audioCompressionParam()`). This is the floor, not the worst case.
+**Test conditions — this is a REMOTE measurement, not a bench one.** The measuring station is not
+on site with the radio: it reaches it over a **WireGuard VPN** (same ISP, short path, `TTL=63`
+confirming a routed hop). The radio nevertheless classifies the link as **LAN**, so the monitor
+stream is `compression=none` — **no Opus is involved.** That is worth stating plainly because it
+corrects the earlier framing of this caveat: **Opus is a SmartLink concern, not a
+remote-operation concern.** A VPN-connected remote operator gets uncompressed audio.
+
+**Decomposition.** Network RTT to the radio, measured separately: **min 5 ms, avg 7 ms, max 10 ms**.
+
+| component | ms |
+|---|---|
+| measured round trip (min) | ~22 |
+| − network RTT over the VPN | ~6 |
+| **= radio-side buffering / mixing / packetisation** | **~16** |
+
+So the ~22 ms is **~16 ms of radio and ~6 ms of network**, which makes the result portable rather
+than site-specific:
+
+- **on-site LAN operator:** ~16 ms
+- **this station (remote, VPN, same-ISP, uncompressed):** ~22 ms
+- **SmartLink or a longer/worse path:** higher, and Opus enters
+
+**This strengthens the §9.1 recommendation rather than weakening it.** 22 ms is not an idealised
+bench floor that real deployments would fall short of — it is what a *typical, slightly
+better-than-average remote VPN operator* actually experiences, with the on-site case better still.
+The remaining unmeasured case is SmartLink.
 
 **Method note — the probe drove the WRONG SLICE for two runs.** `slice_ids()` returns every
 in-use slice on the radio, and AetherSDR was connected holding slice 0; our own slice was slice 1.
@@ -977,11 +1003,13 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    the registered `rx_filter`. So this is no longer "local render, with an optional degraded feed
    for other clients" — it is a straight choice between **A: local render only** and **B: return
    path only**, at equal fidelity. A+B together remains rejected (double-back, now measured).
-   **Latency is now measured: ~22 ms on LAN (§10.8)** — negligible beside RADE's own framing and
-   codec delay. With fidelity equal and latency small, **the recommendation is B** (§9.1), on the
+   **Latency is now measured: ~22 ms remote over a WireGuard VPN, ~16 ms of which is the radio
+   itself, so ~16 ms on-site (§10.8)** — negligible beside RADE's own framing and codec delay, and
+   measured under realistic remote conditions rather than on a bench. With fidelity equal and latency small, **the recommendation is B** (§9.1), on the
    §2 grounds that option A *is* the "parallel audio side-channel" this design set out to remove.
-   **Still open before it is settled:** WAN behaviour under Opus, and whether any use case needs
-   RADE audio while the radio's monitor path is unavailable. Operator's call.
+   **Still open before it is settled:** SmartLink behaviour under Opus (a VPN link is classified
+   LAN and stays uncompressed), and whether any use case needs RADE audio while the radio's
+   monitor path is unavailable. Operator's call.
    *Superseded sub-question, retained for history:*
    Current expectation: **local-render-only** (baseline). Feeding real audio for other clients
    double-backs onto us (radio-mixed monitor can't be un-mixed) and the only fix (global
