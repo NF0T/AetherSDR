@@ -201,6 +201,19 @@ signals:
     // the registration — §7.1's "code 0 means accepted, never applied".
     void rxStreamLive();
 
+    // §7.1 T1 — one inbound `tx_stream_in` packet arrived. THIS IS THE ENTIRE
+    // TRANSMIT CLOCK. The radio's scheduler is purely reactive: there is no
+    // free-running transmit timebase anywhere in the system, so when the radio
+    // stops delivering these, everything downstream stops with it.
+    //
+    // Carries only a sample count, deliberately. The payload is not decoded
+    // because we do not use it: §10.6 T3 confirmed the stream is PTT-gated, and
+    // §10.9 D found it flowing but carrying silence with `mic_selection=PC`.
+    // Whether it can carry usable mic audio was never proven — so the design
+    // takes the CLOCK from here and the AUDIO from AudioEngine (§9), which
+    // makes that open question irrelevant rather than load-bearing.
+    void txClockPacket(int samples);
+
 private:
     void readPending();
     bool emitOn(quint32 streamId, std::span<const float> mono);

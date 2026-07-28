@@ -611,6 +611,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/flex/FlexWaveformProvider.cpp  # RADE V2 waveform (ENABLE_RADE_V2)
     src/core/backends/flex/FlexWaveformStream.cpp    # RADE V2 data plane (ENABLE_RADE_V2)
+    src/core/backends/flex/FlexWaveformTransport.cpp # RADE V2 codec seam (ENABLE_RADE_V2)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)

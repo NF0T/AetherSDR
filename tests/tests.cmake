@@ -4210,6 +4210,20 @@ if(ENABLE_RADE_V2)
         aethercore Qt6::Core Qt6::Network Qt6::Test)
     set_target_properties(flex_waveform_stream_test PROPERTIES AUTOMOC ON)
     add_test(NAME flex_waveform_stream_test COMMAND flex_waveform_stream_test)
+
+    # RADE V2 transport + TX pump (RFC §7.1 T1/T2/T3/T8). T3 is why this exists:
+    # there is no free-running transmit clock, so the ~120 ms EOO tail cannot go
+    # out on the normal path — it needs synthesized ticks. A test that keys,
+    # waits, and unkeys passes with the whole mechanism deleted, so the guards
+    # assert ticks continue with INBOUND STOPPED.
+    add_executable(flex_waveform_transport_test tests/flex_waveform_transport_test.cpp)
+    target_include_directories(flex_waveform_transport_test PRIVATE src)
+    target_link_libraries(flex_waveform_transport_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::Test)
+    set_target_properties(flex_waveform_transport_test PROPERTIES AUTOMOC ON)
+    add_test(NAME flex_waveform_transport_test COMMAND flex_waveform_transport_test)
+    set_tests_properties(flex_waveform_transport_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 # RFC §7.2 — the RADE V2 / radio-backend dependency points ONE way. Deliberately

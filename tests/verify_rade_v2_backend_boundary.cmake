@@ -52,28 +52,45 @@ foreach(file IN LISTS backend_files)
     file(RELATIVE_PATH rel "${SOURCE_DIR}" "${file}")
     math(EXPR scanned "${scanned} + 1")
 
-    # Rule 1 — nothing in the backend tree mentions RADE. Case-insensitive so
-    # RADEV2Engine, rade_api.h, radae/ and RadeV2 are all caught.
-    string(TOLOWER "${contents}" lowered)
+    # Strip comments before matching anything.
+    #
+    # Prose is not coupling, and this guard is worthless if it cannot tell the
+    # difference. The transport's own header legitimately draws the dependency
+    # arrow "RADEV2Engine -> FlexWaveformTransport -> command sink" in a comment
+    # — documenting the rule is the opposite of breaking it, and a check that
+    # punishes the documentation trains people to delete the documentation.
+    #
+    # This also matters for the guard's OWN mutation test: without stripping, a
+    # commented-out `// FlexWaveformProvider* m_rade;` trips it, so the guard
+    # looks like it works while actually only proving it can find a string.
+    # Mutations must be real code.
+    #
+    # Block comments first (CMake regex has no non-greedy, hence the classic
+    # /*-consuming form), then line comments.
+    string(REGEX REPLACE "/\\*[^*]*\\*+([^/*][^*]*\\*+)*/" " " code "${contents}")
+    string(REGEX REPLACE "//[^\n]*" " " code "${code}")
+
+    # Rule 1 — nothing in the backend tree references RADE in code.
+    # Case-insensitive on the stem so RADEV2Engine, rade_api.h, radae/ and
+    # RadeV2 are all caught.
+    string(TOLOWER "${code}" lowered)
     if(lowered MATCHES "rade")
-        # Prose in a comment is not coupling. Only flag a real code reference:
-        # an #include, or a RADE-named identifier being used.
-        if(contents MATCHES "#[ \t]*include[^\n]*[Rr][Aa][Dd][AaEe]"
-           OR contents MATCHES "RADEV2Engine"
-           OR contents MATCHES "RadeV2Engine"
-           OR contents MATCHES "rade_[a-z_]*\\(")
+        if(code MATCHES "#[ \t]*include[^\n]*[Rr][Aa][Dd][AaEe]"
+           OR code MATCHES "RADEV2Engine"
+           OR code MATCHES "RadeV2Engine"
+           OR code MATCHES "rade_[a-z_]*\\(")
             list(APPEND violations
-                 "${rel}: references RADE — §7.2 forbids the backend tree knowing the codec exists")
+                 "${rel}: references RADE in code — §7.2 forbids the backend tree knowing the codec exists")
         endif()
     endif()
 
-    # Rule 2 — FlexBackend names none of the transport trio.
+    # Rule 2 — FlexBackend names none of the transport trio, in code.
     get_filename_component(stem "${file}" NAME_WE)
     if(stem STREQUAL "FlexBackend")
         foreach(name IN LISTS transport_names)
-            if(contents MATCHES "${name}")
+            if(code MATCHES "${name}")
                 list(APPEND violations
-                     "${rel}: names ${name} — §7.2 says FlexBackend is not modified and does not own the transport")
+                     "${rel}: names ${name} in code — §7.2 says FlexBackend is not modified and does not own the transport")
             endif()
         endforeach()
     endif()
