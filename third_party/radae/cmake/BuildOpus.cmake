@@ -1,5 +1,20 @@
 message(STATUS "Will build vendored opus with FARGAN")
 
+# OPUS_EXTRA_PATCH_COMMAND — optional post-extract patch hook.
+#
+# Empty by default, so the RADE V1 build is unchanged: an empty PATCH_COMMAND is
+# a no-op in ExternalProject. RADE V2 sets it (see the ENABLE_RADE_V2 block in
+# the top-level CMakeLists.txt) to raise MAX_CONV_INPUTS_ALL, which V2's wider
+# decoder needs and V1 does not.
+#
+# TEMPORARY. The permanent fix is to re-bake opus-rade-prepared.tar.gz with both
+# of upstream's nnet patches, best done once V1 is gone and the snapshot has a
+# single consumer. Raising the bound is V1-safe, so one snapshot can serve both
+# and this hook can then be deleted outright.
+if(NOT DEFINED OPUS_EXTRA_PATCH_COMMAND)
+    set(OPUS_EXTRA_PATCH_COMMAND "")
+endif()
+
 set(OPUS_VENDOR_DIR "${CMAKE_SOURCE_DIR}/third_party/opus-rade")
 if (NOT DEFINED OPUS_PREPARED_ARCHIVE)
 set(OPUS_PREPARED_ARCHIVE "${OPUS_VENDOR_DIR}/opus-rade-prepared.tar.gz")
@@ -67,6 +82,7 @@ if(WIN32)
         DOWNLOAD_EXTRACT_TIMESTAMP NO
         URL "${OPUS_PREPARED_ARCHIVE}"
         URL_HASH ${OPUS_PREPARED_ARCHIVE_HASH}
+        PATCH_COMMAND ${OPUS_EXTRA_PATCH_COMMAND}
         CMAKE_ARGS
             ${OPUS_CMAKE_ARGS}
         BUILD_BYPRODUCTS ${_opus_byproducts}
@@ -117,6 +133,7 @@ elseif(APPLE AND BUILD_OSX_UNIVERSAL)
         DOWNLOAD_EXTRACT_TIMESTAMP NO
         URL "${OPUS_PREPARED_ARCHIVE}"
         URL_HASH ${OPUS_PREPARED_ARCHIVE_HASH}
+        PATCH_COMMAND ${OPUS_EXTRA_PATCH_COMMAND}
         CMAKE_ARGS
             ${OPUS_CMAKE_ARGS}
             -DCMAKE_OSX_ARCHITECTURES=x86_64
@@ -127,6 +144,7 @@ elseif(APPLE AND BUILD_OSX_UNIVERSAL)
         DOWNLOAD_EXTRACT_TIMESTAMP NO
         URL "${OPUS_PREPARED_ARCHIVE}"
         URL_HASH ${OPUS_PREPARED_ARCHIVE_HASH}
+        PATCH_COMMAND ${OPUS_EXTRA_PATCH_COMMAND}
         CMAKE_ARGS
             ${OPUS_CMAKE_ARGS}
             -DCMAKE_OSX_ARCHITECTURES=arm64
@@ -163,6 +181,7 @@ else()
         DOWNLOAD_EXTRACT_TIMESTAMP NO
         URL "${OPUS_PREPARED_ARCHIVE}"
         URL_HASH ${OPUS_PREPARED_ARCHIVE_HASH}
+        PATCH_COMMAND ${OPUS_EXTRA_PATCH_COMMAND}
         CMAKE_ARGS
             ${OPUS_CMAKE_ARGS}
         INSTALL_COMMAND ""
