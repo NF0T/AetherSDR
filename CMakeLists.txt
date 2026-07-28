@@ -356,6 +356,22 @@ if(ENABLE_RADE_V2 AND EXISTS "${RADE_V2_DIR}/src/rade_api.h")
     # Opus comes from AetherSDR's VENDORED snapshot, not upstream's fetch-from-
     # GitHub script — offline, reproducible, and one shared dependency rather
     # than one per codec version. Upstream's copy is kept for reference only.
+    #
+    # But V2 needs one thing V1 does not: MAX_CONV_INPUTS_ALL raised from 1536
+    # to 2048, for decoder conv layers up to 1792 inputs. Upstream ships that as
+    # src/opus-nnet.c.diff and applies it alongside opus-nnet.h.diff; our
+    # pre-baked snapshot carries only the .h change. Without it V2 builds and
+    # links cleanly and then aborts on the first rade_tx() — and under NDEBUG
+    # would write past the buffer instead of asserting.
+    #
+    # Applied POST-EXTRACT and only on this path, so the V1 build is untouched
+    # (an empty PATCH_COMMAND is a no-op). TEMPORARY: fold both patches into
+    # opus-rade-prepared.tar.gz once V1 is removed and the snapshot has a single
+    # consumer, then delete this and the hook in BuildOpus.cmake.
+    set(OPUS_EXTRA_PATCH_COMMAND
+        ${CMAKE_COMMAND}
+        -DOPUS_SRC=<SOURCE_DIR>
+        -P ${RADE_V2_DIR}/cmake/PatchOpusForV2.cmake)
     include(${RADE_DIR}/cmake/BuildOpus.cmake)
 
     # radae_tx.c / radae_rx.c are standalone programs upstream (the renamed
