@@ -180,6 +180,86 @@ All new code is gated behind a compile flag **`ENABLE_RADE_V2`** (off by default
 | GUI wiring | `src/gui/` | New parallel `activateRADEV2()`; V1's `activateRADE()` untouched |
 | Vendored codec | `third_party/radae` | Re-vendored from `radae_nopy@dr-radev2` (Phase 4; vendor **last**) |
 
+## 7.1 Implementation constraints — the measured must-honours
+
+Every constraint below was **measured on hardware**, not inferred. They are consolidated here
+because §10 discovered them across eleven separate probe sessions and an implementer should not
+have to reconstruct the list by reading all of it.
+
+**🔇 marks a SILENT failure** — no error, no non-zero reply, no crash. The command is accepted, or
+the code compiles and runs, and the result is simply wrong. **15 of the 32 rows are silent**, and
+several would present during Phase 4 as *"the codec doesn't work"*, which is the most expensive
+possible time to find them. **Every 🔇 row wants a regression test**, because code review cannot
+catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
+
+### Registration / control plane
+
+| # | Constraint | If violated | Evidence |
+|---|---|---|---|
+| R1 | Order: `waveform create` → `set tx=1` → filters → **`udpport` last** | — | §10.5 |
+| R2 | Each filter field is its **own** command; they do not combine on one line | rejected | §10 |
+| R3 | 🔇 `rx_filter` is **latched at registration / mode entry**. Set it *before* the slice enters the mode; to change it, **re-register** | live `set` returns **code 0 and does nothing** | §10.3 |
+| R4 | 🔇 `tx_filter` is **accepted and entirely ignored** — do not rely on it, do not expose it as an operator control | silently no-ops; two registrations differing by 1400 Hz gave identical curves | §10.10 |
+| R5 | 🔇 Filter cuts for the **USB/DIGU family are one-sided** (`if (low<0) low=0`). D-Star's negative `low_cut` is an FM-family idiom | copying it clamps to 0 and **silently widens** the filter | §10 |
+| R6 | 🔇 Stream IDs are **recycled** across create/remove — never use one as session identity | stale-ID bugs after a re-register | §10.2 |
+| R7 | `waveform create` returns **six** streams (incl. the `byte_stream` pair). The vendored D-Star parser reads only four | miss the data channel | §8 |
+| R8 | Registration needs **no slice and no panadapter** | — | §10.2 |
+
+### RX data plane
+
+| # | Constraint | If violated | Evidence |
+|---|---|---|---|
+| X1 | `rx_stream_in` is **24 kHz Complex-float32, big-endian, 128 samples/packet** | — | §8, §10.3 |
+| X2 | 🔇 **Inbound is CONJUGATE I/Q — negate the imaginary component** (`A − jB`) | feeding `A + jB` **mirrors the spectrum and never decodes** | §10.3 |
+| X3 | Discard the ~1 s startup burst before measuring rate (it reads ~28 kHz) | wrong rate | §10.3 |
+| X4 | **No muting.** `audio_mute=0` with the slice in the waveform mode | — | §10.3 |
+| X5 | A waveform-mode slice contributes **exactly zero** to the monitor until we feed it | — | §10.6 |
+
+### Emit — applies to BOTH directions
+
+| # | Constraint | If violated | Evidence |
+|---|---|---|---|
+| E1 | 🔇 **Emit on the INBOUND id** (`rx_stream_in_id` / `tx_stream_in_id`). The `*_out` ids are **not honoured** — measured at exactly zero, twice, including a retry after the path was proven live | **silence, no error anywhere** | §10.6, §10.9 |
+| E2 | 🔇 **Outbound is STEREO AUDIO, not I/Q** — duplicate mono into both float slots and do **not** conjugate | conjugating inverts the sideband: normal on every meter, decodes for nobody | §10.5, §10.11 |
+| E3 | 🔇 Packet count is a **per-STREAM** 4-bit rolling counter starting at 0 | a global counter desyncs the moment two streams run | §10.5 |
+| E4 | Header `IF_DATA_WITH_STREAM_ID \| CLASS_ID \| TSI_UTC \| TSF_REAL_TIME \| (count<<16) \| (7+n*2)`; `class_id_h=0x001C2D`, `class_id_l=0x534C03E3`; UTC sec + fractional **picoseconds**; → **radio:4991** | rejected/ignored | §10.5 |
+
+### TX
+
+| # | Constraint | If violated | Evidence |
+|---|---|---|---|
+| T1 | 🔇 The TX pump is **slaved to inbound `tx_stream_in`** — there is no free-running clock | emit stops when the radio stops | §10.5 |
+| T2 | `tx_stream_in` does **not** flow before PTT — the pump is started *and* stopped by the radio | — | §10.6 |
+| T3 | 🔇 **T1+T2 ⇒ the 120 ms EOO tail needs SYNTHESIZED buffers.** Holding PTT alone emits nothing | far end loses end-of-over detection; **a PTT-duration test passes straight through this** | §10.5, §9.2 |
+| T4 | The radio **holds TX through an underrun** (power sags, carrier stays) | — | §10.9 |
+| T5 | TX path is **linear, no ALC, no compression**; linear above drive ≈0.35 | — | §10.9, §10.10 |
+| T6 | 🔇 **Band-limiting must happen in our own TX chain.** The V2 modulator does no shaping at all and `tx_filter` is ignored | unsuppressed sinc sidelobes | §10.1, §10.10 |
+| T7 | **Upper sideband is correct** — `DIGU` puts our audio above the dial | — | §10.11 |
+| T8 | `TX_FAULT` / `TIMEOUT` / `STUCK_INPUT` all → `CANCEL`; needs an explicit cancel path | no recovery | §10.5 |
+
+### Mode identity / GUI (Phase 3)
+
+| # | Constraint | If violated | Evidence |
+|---|---|---|---|
+| G1 | 🔇 Add `RAD2` to the squelch-disabled family — **two independent sites** | squelch auto-arms and **gates decode** | §10.4 |
+| G2 | Exclude `RAD2` from `isVoice` so auto-notch stays hidden | adaptive notch **chews OFDM carriers** | §10.4 |
+| G3 | 🔇 Add `RAD2` to the DIGU-offset family | a width preset falls through to `lo=95; hi=width`, **clipping the top half of the modem** | §10.3, §10.4 |
+| G4 | `digu_offset` is the **centre a width-specified filter is built around** — not a passband shift, and measured not to shift RF placement either | — | §10.3, §10.11 |
+
+### Environment
+
+| # | Constraint | Evidence |
+|---|---|---|
+| N1 | Teardown is clean on `waveform remove`, disconnect, **or abrupt kill** — the slice reverts, nothing stranded | §10.3 |
+| N2 | 🔇 Select slices by **`client_handle`**, never positionally — another client's slice can sort first | §10.8 |
+| N3 | 🔇 `slice tune` outside the panadapter's span returns **code 0 and does nothing**; move the pan first | §10.9 |
+
+> **Pattern worth naming.** R3, R4, N3 and E1 are the same shape: **the Flex API returns code 0 for
+> commands it does not honour.** A reply code confirms the command was *accepted*, never that it
+> was *applied*. Any provider code that sets something and assumes it took should read it back —
+> and where read-back is impossible (as with `tx_filter`), the setting must not be exposed as
+> though it works.
+
 ## 8. Phase 0 evidence (hardened by coding, live FLEX-8400 fw 4.2.20.41343)
 
 The spike drove the risky unknowns to ground before committing to this design. Every claim below
