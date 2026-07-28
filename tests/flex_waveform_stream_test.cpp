@@ -103,6 +103,13 @@ private slots:
     void conjugationSignIsDetectable();  // proves the above can fail
     void rejectsPartialFloatPair();
     void appendsRatherThanReplaces();
+
+    // ─── emit side ───
+    void buildsMeasuredOutboundHeader();     // §7.1 E4
+    void outboundIsStereoAudioNotIq();       // §7.1 E2 — the inverse trap
+    void outboundRoundTripsThroughRxDecode();// E2 vs X2, stated as a property
+    void emitCountIsPerStream();             // §7.1 E3
+    void emitRefusesWithoutDestination();
 };
 
 void FlexWaveformStreamTest::parsesMeasuredHeader() {
@@ -213,6 +220,139 @@ void FlexWaveformStreamTest::appendsRatherThanReplaces() {
     QCOMPARE(FlexWaveformStream::decodeRxPayload(a.constData(), a.size(), out), 16);
     QCOMPARE(out.size(), size_t(32));
     QCOMPARE(out[16], out[0]);   // second packet starts where the first did
+}
+
+// ─── emit side ─────────────────────────────────────────────────────────────
+
+namespace {
+
+quint32 beU32At(const QByteArray& b, int off) {
+    quint32 v = 0;
+    std::memcpy(&v, b.constData() + off, 4);
+    return qFromBigEndian<quint32>(v);
+}
+
+float beFloatAt(const QByteArray& b, int off) {
+    return std::bit_cast<float>(beU32At(b, off));
+}
+
+}  // namespace
+
+void FlexWaveformStreamTest::buildsMeasuredOutboundHeader() {
+    const std::vector<float> mono(FlexWaveformStream::kTxSamplesPerPkt, 0.25f);
+    const QByteArray pkt = FlexWaveformStream::buildAudioPacket(
+        0x81000004u, /*count=*/3, /*utcSec=*/0x11223344ull,
+        /*fracPicos=*/0x00000001AABBCCDDull, mono);
+
+    // 28-byte header, then TWO floats per mono sample (§7.1 E2).
+    QCOMPARE(pkt.size(), 28 + FlexWaveformStream::kTxSamplesPerPkt * 8);
+
+    const quint32 word0 = beU32At(pkt, 0);
+    // §7.1 E4 — type 1 IFDataWithStream on the way OUT, even though the radio
+    // sends us type 3. Matching the inbound type does not work.
+    QVERIFY(word0 & FlexWaveformStream::kHdrIfDataStream);
+    QVERIFY(word0 & FlexWaveformStream::kHdrClassPresent);
+    QVERIFY(word0 & FlexWaveformStream::kHdrTsiUtc);
+    QVERIFY(word0 & FlexWaveformStream::kHdrTsfRealTime);
+    QCOMPARE(int((word0 >> 16) & 0x0Fu), 3);
+    // Packet size is in 32-bit WORDS: 7 header + 2 per sample.
+    QCOMPARE(word0 & 0xFFFFu,
+             quint32(7 + FlexWaveformStream::kTxSamplesPerPkt * 2));
+
+    QCOMPARE(beU32At(pkt, 4),  0x81000004u);
+    QCOMPARE(beU32At(pkt, 8),  FlexWaveformStream::kFlexOui);
+    QCOMPARE(beU32At(pkt, 12), FlexWaveformStream::kAudioClassId);
+    QCOMPARE(beU32At(pkt, 16), 0x11223344u);
+    // 64-bit picosecond fraction, high word first.
+    QCOMPARE(beU32At(pkt, 20), 0x00000001u);
+    QCOMPARE(beU32At(pkt, 24), 0xAABBCCDDu);
+}
+
+void FlexWaveformStreamTest::outboundIsStereoAudioNotIq() {
+    // §7.1 E2 — the inverse of X2, and the reason these are separate functions.
+    //
+    // Outbound must be the SAME sample in both slots. If someone "reused" the
+    // receive path's conjugation, the second slot would be negated (or zero for
+    // real input) and this fails immediately.
+    const std::vector<float> mono{0.5f, -0.25f, 0.75f, -1.0f, 0.0f, 0.125f};
+    const QByteArray pkt = FlexWaveformStream::buildAudioPacket(
+        0x81000004u, 0, 0, 0, mono);
+
+    for (size_t i = 0; i < mono.size(); ++i) {
+        const int off = 28 + int(i) * 8;
+        const float left  = beFloatAt(pkt, off);
+        const float right = beFloatAt(pkt, off + 4);
+        QCOMPARE(left, mono[i]);
+        QVERIFY2(right == mono[i],
+                 "right slot differs from left — outbound was treated as I/Q; "
+                 "§7.1 E2 says duplicate the mono sample, do not conjugate");
+    }
+}
+
+void FlexWaveformStreamTest::outboundRoundTripsThroughRxDecode() {
+    // States the X2/E2 asymmetry as a property rather than as a comment.
+    //
+    // Read an OUTBOUND packet's payload with the INBOUND decoder. Because the
+    // outbound slots are identical and the inbound decoder negates the second,
+    // a correct pair of implementations yields conj(z) == z̄ with equal
+    // magnitude parts — i.e. imag == -real, never imag == +real. If either side
+    // ever grew the other's convention, this flips.
+    const std::vector<float> mono{0.5f, -0.25f, 0.75f};
+    const QByteArray pkt = FlexWaveformStream::buildAudioPacket(
+        0x81000004u, 0, 0, 0, mono);
+
+    std::vector<std::complex<float>> asIq;
+    QCOMPARE(FlexWaveformStream::decodeRxPayload(pkt.constData() + 28,
+                                                 pkt.size() - 28, asIq), 3);
+    for (size_t i = 0; i < mono.size(); ++i) {
+        QCOMPARE(asIq[i].real(), mono[i]);
+        QCOMPARE(asIq[i].imag(), -mono[i]);
+    }
+}
+
+void FlexWaveformStreamTest::emitCountIsPerStream() {
+    // §7.1 E3 — the counter is per STREAM. A shared counter desyncs the moment
+    // two streams run, which is the normal case as soon as TX starts while RX
+    // is still flowing. Verified through the public emit path, not by poking
+    // the map, so it also covers "first packet is 0" and the 4-bit wrap.
+    FlexWaveformStream s;
+    QVERIFY(s.open(0) != 0);
+    s.setRadioAddress(QHostAddress::LocalHost);
+    s.setRxStreamId(0x81000004u);
+    s.setTxStreamId(0x81000005u);
+
+    // Nothing is listening; that is fine — writeDatagram to loopback still
+    // succeeds, and what is under test is the counter, not delivery.
+    const std::vector<float> mono(8, 0.1f);
+    for (int i = 0; i < 3; ++i) QVERIFY(s.emitRxReturn(mono));
+    for (int i = 0; i < 2; ++i) QVERIFY(s.emitTxReturn(mono));
+    QCOMPARE(s.stats().emitted, quint64(5));
+    QCOMPARE(s.stats().emitFailed, quint64(0));
+
+    // Direct check of the wrap and independence at the builder level.
+    for (int c = 0; c < 18; ++c) {
+        const QByteArray p = FlexWaveformStream::buildAudioPacket(1, c, 0, 0, mono);
+        QCOMPARE(int((beU32At(p, 0) >> 16) & 0x0Fu), c & 0x0F);
+    }
+}
+
+void FlexWaveformStreamTest::emitRefusesWithoutDestination() {
+    // Every one of these would otherwise be a silent no-send. §7.1's whole
+    // theme is that "it went nowhere" must not look like success.
+    FlexWaveformStream s;
+    const std::vector<float> mono(8, 0.1f);
+
+    QVERIFY(!s.emitRxReturn(mono));                 // socket closed
+    QVERIFY(s.open(0) != 0);
+    QVERIFY(!s.emitRxReturn(mono));                 // no radio address
+    s.setRadioAddress(QHostAddress::LocalHost);
+    QVERIFY(!s.emitRxReturn(mono));                 // no stream id
+    s.setRxStreamId(0x81000004u);
+    QVERIFY(!s.emitRxReturn({}));                   // nothing to send
+    QVERIFY(s.emitRxReturn(mono));                  // now it should go
+
+    QCOMPARE(s.stats().emitted, quint64(1));
+    QCOMPARE(s.stats().emitFailed, quint64(4));
 }
 
 QTEST_APPLESS_MAIN(FlexWaveformStreamTest)
