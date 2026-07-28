@@ -3,7 +3,9 @@
 #ifdef AETHER_ENABLE_RADE_V2
 
 #include <bit>
+#include <chrono>
 #include <cstring>
+#include <map>
 
 #include <QElapsedTimer>
 #include <QLoggingCategory>
@@ -28,12 +30,30 @@ inline float beFloat(const char* p) {
     return std::bit_cast<float>(qFromBigEndian<quint32>(bits));
 }
 
+// Append one big-endian float32.
+inline void putBeFloat(char* p, float f) {
+    const quint32 bits = qToBigEndian<quint32>(std::bit_cast<quint32>(f));
+    std::memcpy(p, &bits, sizeof(bits));
+}
+
+inline void putBeU32(char* p, quint32 v) {
+    const quint32 bits = qToBigEndian<quint32>(v);
+    std::memcpy(p, &bits, sizeof(bits));
+}
+
 }  // namespace
 
 struct FlexWaveformStream::Private {
     QUdpSocket* socket = nullptr;
     quint16 port = 0;
     quint32 rxStreamId = 0;
+    quint32 txStreamId = 0;
+    QHostAddress radioAddr;
+
+    // §7.1 E3 — per-STREAM 4-bit rolling count. A single shared counter
+    // desyncs the moment two streams run, which is the normal case the instant
+    // TX starts while RX is still flowing.
+    std::map<quint32, int> emitCount;
 
     int settleMs = 1000;          // §7.1 X3, measured
     QElapsedTimer settleClock;    // starts at the first packet of a stream
@@ -113,6 +133,21 @@ void FlexWaveformStream::setRxStreamId(quint32 id) {
 
 quint32 FlexWaveformStream::rxStreamId() const { return d->rxStreamId; }
 
+void FlexWaveformStream::setTxStreamId(quint32 id) {
+    if (d->txStreamId == id) return;
+    d->txStreamId = id;
+    d->emitCount.erase(id);   // §7.1 R6 + E3 — new stream, count restarts at 0
+    qCDebug(lcRadeV2Rx).nospace() << "tx stream id = 0x" << Qt::hex << id;
+}
+
+quint32 FlexWaveformStream::txStreamId() const { return d->txStreamId; }
+
+void FlexWaveformStream::setRadioAddress(const QHostAddress& addr) {
+    d->radioAddr = addr;
+}
+
+QHostAddress FlexWaveformStream::radioAddress() const { return d->radioAddr; }
+
 void FlexWaveformStream::setSettleMs(int ms) { d->settleMs = ms < 0 ? 0 : ms; }
 int FlexWaveformStream::settleMs() const { return d->settleMs; }
 
@@ -166,6 +201,91 @@ int FlexWaveformStream::decodeRxPayload(const char* payload, int payloadBytes,
         out.emplace_back(a, -b);
     }
     return pairs;
+}
+
+QByteArray FlexWaveformStream::buildAudioPacket(quint32 streamId, int packetCount,
+                                                quint64 utcSec, quint64 fracPicos,
+                                                std::span<const float> mono) {
+    const int n = static_cast<int>(mono.size());
+    QByteArray pkt;
+    pkt.resize(kVitaHeaderBytes + n * 8);
+    char* p = pkt.data();
+
+    // §7.1 E4 — the measured header. Packet size counts 32-bit WORDS: seven
+    // header words plus two per sample, because each sample goes out twice.
+    //
+    // Note kHdrIfDataStream (type 1), NOT the type 3 the radio sends us. The
+    // asymmetry is real; matching the inbound type does not work.
+    const quint32 word0 = kHdrIfDataStream | kHdrClassPresent
+                        | kHdrTsiUtc | kHdrTsfRealTime
+                        | (static_cast<quint32>(packetCount & 0x0F) << 16)
+                        | static_cast<quint32>(7 + n * 2);
+
+    putBeU32(p +  0, word0);
+    putBeU32(p +  4, streamId);
+    putBeU32(p +  8, kFlexOui);
+    putBeU32(p + 12, kAudioClassId);
+    putBeU32(p + 16, static_cast<quint32>(utcSec));
+    // Fractional timestamp is 64-bit PICOseconds, high word first.
+    putBeU32(p + 20, static_cast<quint32>((fracPicos >> 32) & 0xFFFFFFFFu));
+    putBeU32(p + 24, static_cast<quint32>(fracPicos & 0xFFFFFFFFu));
+
+    // ─────────────────────────────────────────────────────────────────────
+    // §7.1 E2 — STEREO AUDIO. The same sample in both slots, unmodified.
+    //
+    // Do NOT reach for decodeRxPayload()'s conjugation here, however symmetric
+    // it looks. Inbound is I/Q and needs `-b`; outbound is a pair of audio
+    // channels and needs neither an imaginary part nor a sign. Conjugating
+    // inverts the sideband — and an inverted sideband is normal power, normal
+    // occupancy, normal on every meter the radio has, and decodable by nobody.
+    // Measured upper-sideband-correct as written (RFC §10.11).
+    // ─────────────────────────────────────────────────────────────────────
+    char* pay = p + kVitaHeaderBytes;
+    for (int i = 0; i < n; ++i) {
+        putBeFloat(pay + i * 8,     mono[static_cast<size_t>(i)]);
+        putBeFloat(pay + i * 8 + 4, mono[static_cast<size_t>(i)]);
+    }
+    return pkt;
+}
+
+bool FlexWaveformStream::emitOn(quint32 streamId, std::span<const float> mono) {
+    if (!d->socket || streamId == 0 || d->radioAddr.isNull() || mono.empty()) {
+        d->stats.emitFailed++;
+        return false;
+    }
+
+    // §7.1 E3 — per-stream count, post-increment so the first packet is 0.
+    int& c = d->emitCount[streamId];
+    const int count = c;
+    c = (c + 1) & 0x0F;
+
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(now);
+    const auto rem  = now - secs;
+    const quint64 picos = static_cast<quint64>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(rem).count()) * 1000ull;
+
+    const QByteArray pkt = buildAudioPacket(streamId, count,
+                                            static_cast<quint64>(secs.count()),
+                                            picos, mono);
+    const qint64 sent = d->socket->writeDatagram(pkt, d->radioAddr, kVitaOutPort);
+    if (sent != pkt.size()) {
+        d->stats.emitFailed++;
+        qCWarning(lcRadeV2Rx) << "emit short write" << sent << "of" << pkt.size();
+        return false;
+    }
+    d->stats.emitted++;
+    return true;
+}
+
+bool FlexWaveformStream::emitRxReturn(std::span<const float> mono) {
+    // §7.1 E1 — rx_stream_IN. Not rx_stream_out; that one is measured silent.
+    return emitOn(d->rxStreamId, mono);
+}
+
+bool FlexWaveformStream::emitTxReturn(std::span<const float> mono) {
+    // §7.1 E1 — tx_stream_IN, same reasoning.
+    return emitOn(d->txStreamId, mono);
 }
 
 void FlexWaveformStream::readPending() {
