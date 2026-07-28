@@ -125,13 +125,16 @@ Each decision below is backed by the Phase 0 spike (§8) or by verified source a
    slice's raw modem audio to us — eliminating the mute and the split-brain by construction
    (it's a real mode). *Verified:* Phase 0 OQ#1 — a GUI-client connection can register a
    waveform in-process on its own connection (§8).
-3. **Local render for OUTPUT; waveform only for INPUT + registration.** Routing decoded speech
-   back out through the radio monitor doubles against our own render with no clean way to suppress
-   either copy (§9.1) — that argument is independent of any bandwidth measurement and is what
-   carries this decision. **The supporting claim that the return path is hard-capped at ~2.8 kHz
-   (§8, 1b) is currently DISPUTED — see §10.6 T1** — so local render should be read as
-   *strongly preferred on architectural grounds*, and the stronger "required for fidelity parity"
-   framing is on hold until the cap is re-measured on a stream id the radio actually honours.
+3. **RX audio output — REOPENED. The fidelity argument for local render has been refuted.**
+   This decision previously read "local render is *required* for fidelity parity" because the
+   return path was believed hard-capped at ~2.8 kHz (§8, 1b). **That measurement was invalid and
+   the cap does not exist** — §10.7 measures the return path as flat to at least 8 kHz and
+   unaffected by the registered `rx_filter`. Decoded speech can be handed back to the radio
+   without meaningful loss.
+   The live choice is now **local render only** vs **return-path only**, decided on latency,
+   multiflex reach and WAN compression rather than on bandwidth. Doing *both* remains rejected
+   (they double against each other with no clean suppression — §9.1). Baseline stays local render
+   pending the latency measurement; see §9.1 and §16 Q1.
    (Whether to *also* feed `rx_stream_out` for other clients is a separate, deferred question —
    it double-backs onto our own render and can't be muted away cleanly; see §9.1.)
 4. **On-client (PC-side) waveform, not on-radio Docker.** A PC-side waveform works on 6000 and
@@ -204,10 +207,10 @@ implementations; read the RFC section, not the script, for what is currently bel
   filter (`filt <idx> 0 <hi>`, accepted) up to **11000 Hz did not move the rolloff** — so the cap
   is **fixed at ~2.8 kHz and not filter-adjustable.** This is the container's quality loss, and
   it is why we render locally (decision §6.3).
-  > ⚠️ **DISPUTED — do not cite this result without reading §10.6 T1.** 1b injected on
-  > `rx_stream_out_id`, which Tier 1 measurement now shows the radio **never honours**. The audio
-  > 1b analysed therefore cannot be shown to be its own injected sweep, and the ~2.8 kHz figure is
-  > **unsupported pending re-measurement** on `rx_stream_in_id`. The rest of §8 is unaffected.
+  > ❌ **REFUTED — this result is wrong. See §10.7.** 1b injected on `rx_stream_out_id`, which
+  > §10.6 T1 shows the radio **never honours**. Re-measured properly on `rx_stream_in_id`, the
+  > return path is **flat to at least 8 kHz** and is **not shaped by the registered `rx_filter`
+  > at all**. There is no ~2.8 kHz cap. The rest of §8 is unaffected.
 - **Firmware** reconfirmed `4.2.20.41343` (three ways).
 
 ## 9. Data flow
@@ -230,7 +233,37 @@ the emit path stops too, and the EOO tail is dropped no matter what PTT is doing
 synthesize buffers to flush the tail, the way the D-Star path already does for its own tail. Any TX
 design that treats "hold PTT ~120 ms" as the whole fix is wrong.
 
-### 9.1 RX audio output — current expectation: local render only
+### 9.1 RX audio output — REOPENED 2026-07-28 (the fidelity argument was refuted)
+
+> **Read this first.** Everything below the rule was written when the return path was believed
+> hard-capped at ~2.8 kHz. **§10.7 measured it flat to at least 8 kHz**, so the fidelity argument
+> that made local render *required* is gone. The section is kept because its *other* argument —
+> the double-back — survives intact and is now measured rather than inferred (§10.6 T1 observed
+> injected audio returning in our own monitor).
+>
+> **The corrected framing is a two-way choice, not a baseline plus an optional extra:**
+>
+> | | **A — local render only** | **B — return path only** |
+> |---|---|---|
+> | Fidelity | full | **equal** (§10.7); Opus on WAN only |
+> | Other clients hear the slice | no | **yes** |
+> | Latency | minimal | + radio round trip (**unmeasured**) |
+> | Double-back | none | none |
+> | Behaves like every other mode | no | yes |
+>
+> **A + B together stays rejected** — that is the only configuration the double-back argument
+> below actually rules out, and `audio_mute` cannot fix it (global, and it would silence the very
+> clients being fed).
+>
+> B is now genuinely attractive: it gets multiflex for free and makes a `RAD2` slice behave like
+> any other slice on the radio. **The deciding axis is latency**, which nobody has measured — a
+> decode → radio → mix → client round trip on top of RADE's own latency may or may not be
+> acceptable for conversational use. **Baseline remains A** until that number exists, because A is
+> the safe default, not because B is known worse.
+
+---
+
+#### Superseded reasoning (kept for the double-back argument, which still holds)
 
 **Current expectation (this iteration): local-render-only.** By default the RAD2 slice
 contributes **silence** to the monitor — the raw modem is diverted to the waveform, and the
@@ -766,6 +799,50 @@ Two consequences:
   and a stream that is silent until PTT is awkward as a primary source. Whether `tx_stream_in`
   carries usable mic audio *while keyed* is a Tier 2 question.
 
+### 10.7 The return path is NOT band-limited — 2026-07-28 (no RF)
+
+The re-measurement §10.6 called for. Probe: `tools/flex_waveform_return_bandwidth_probe.py`.
+A 100 Hz → 11 kHz log sweep injected on **`rx_stream_in_id`** (the honoured id), captured
+concurrently from `remote_audio_rx` (uncompressed), across three registered `rx_filter` settings.
+
+Returned response, dB relative to each trace's own 300–2000 Hz level:
+
+| Hz | `[800, 2200]` | `[100, 2800]` | `[0, 8000]` |
+|---|---|---|---|
+| 1000 | −0.1 | +0.2 | −1.5 |
+| 2000 | −4.8 | −3.2 | −2.2 |
+| 2800 | −5.9 | −4.7 | −3.8 |
+| 4000 | −5.4 | −8.0 | −7.7 |
+| 6000 | −7.3 | −10.0 | −9.0 |
+| 8000 | −10.1 | −8.3 | −9.5 |
+
+**Two findings, both negative in the useful sense:**
+
+1. **There is no band limit.** At 8 kHz the response is down only ~10 dB, with no knee anywhere.
+   And that ~10 dB is *the sweep, not the channel*: a logarithmic sweep distributes energy ∝ 1/f,
+   i.e. −3 dB/octave, and 500 Hz → 8 kHz is four octaves = **−12 dB expected on a perfectly flat
+   path**. The measurement is flat to within the method's noise. A real brick wall — like 1b's
+   claimed −60…−72 dB by 3–4 kHz — is nowhere in this data.
+2. **The registered `rx_filter` does not shape the return at all.** The three curves are the same
+   inside measurement scatter, even though the slice's filter fields demonstrably followed each
+   registration (`800/2200`, `100/2800`, `0/8000` confirmed in slice status). So the filter
+   applies to the modem audio the radio sends *to* the waveform, not to the audio the waveform
+   sends *back*. This also retires a concern raised while designing the test: that a filter chosen
+   for the modem's 1000–1937.5 Hz occupancy would mangle returned speech. It cannot.
+
+> **Do not cite the probe's printed "−6 dB edges" (2754 / 2479 / 2443 Hz) as filter edges.** They
+> are an artifact of a first-crossing heuristic run against a gently sloping, slightly rippled
+> trace; the response continues at only −7…−10 dB out to 8 kHz. The heuristic was written
+> expecting a brick wall and is not meaningful in its absence.
+
+**Caveats.** Measured with a synthetic sweep on a LAN with `compression=none`. The path is flat and
+linear, so real decoded speech will behave the same — but a *real* client on a WAN link gets
+**Opus** on its monitor stream (`RadioModel::audioCompressionParam()`: opus on WAN/Auto-WAN, none
+on LAN), which is a separate and genuine degradation that this probe deliberately excluded.
+Latency was not measured and is now the open variable.
+
+**Consequence: §6.3 is reopened.** See §9.1.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -853,7 +930,16 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
 
 ## 16. Open questions
 
-1. **`rx_stream_out` other-client feed — DIRECTION SET, final decision deferred (see §9.1).**
+1. **RX audio output — REOPENED, and the premise it rested on was WRONG (see §9.1, §10.7).**
+   The ~2.8 kHz cap does not exist; the return path is flat to at least 8 kHz and is not shaped by
+   the registered `rx_filter`. So this is no longer "local render, with an optional degraded feed
+   for other clients" — it is a straight choice between **A: local render only** and **B: return
+   path only**, at equal fidelity. A+B together remains rejected (double-back, now measured).
+   **The one measurement that decides it is LATENCY** — the decode → radio → mix → client round
+   trip, on top of RADE's own. Nobody has measured it; it needs no codec and no RF. Secondary
+   inputs: Opus on WAN monitor streams (LAN is uncompressed), and how much the multiflex case is
+   worth. Baseline stays A as the safe default, not as a verdict.
+   *Superseded sub-question, retained for history:*
    Current expectation: **local-render-only** (baseline). Feeding real audio for other clients
    double-backs onto us (radio-mixed monitor can't be un-mixed) and the only fix (global
    `audio_mute`) both strands *and* defeats the feed — so it's not a clean opt-in. **Plan:** build
