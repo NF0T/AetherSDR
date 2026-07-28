@@ -301,6 +301,14 @@ void FlexWaveformStream::readPending() {
             d->stats.malformed++;
             continue;
         }
+        // §7.1 T1 — the transmit clock. Checked BEFORE the rx filter and never
+        // subject to the X3 settle window: tx_stream_in is PTT-gated (T2), so
+        // discarding its first second would eat the start of every over.
+        if (d->txStreamId != 0 && hdr.streamId == d->txStreamId) {
+            emit txClockPacket(hdr.payloadBytes / 8);
+            continue;
+        }
+
         if (d->rxStreamId == 0 || hdr.streamId != d->rxStreamId) {
             // Not ours. Expected in normal operation: the radio will send other
             // streams here if anything else was ever pointed at this port.
