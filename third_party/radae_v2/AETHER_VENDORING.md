@@ -60,12 +60,12 @@ re-vendor.
    > The prediction here was that a mismatch would "fail loudly at link time."
    > **That was wrong, and the real failure is worse — see below.**
 
-## ⚠ OPEN: V2 needs a SECOND Opus patch that V1 never did
+## RESOLVED: V2 needs a SECOND Opus patch that V1 never did
 
-**Status: diagnosed, not yet fixed. The V2 codec builds, links, and then dies
-at runtime.**
+**Status: FIXED via a post-extract PATCH_COMMAND. `rade_v2_codec_test` now
+passes end to end — 226 frames synced, 113 decoded, SNR 24.5 dB on loopback.**
 
-`rade_v2_codec_test` gets as far as modulating and then aborts:
+Before the fix, `rade_v2_codec_test` got as far as modulating and then aborted:
 
 ```
 Fatal (internal) error in .../build_opus/dnn/nnet.c, line 128:
@@ -97,12 +97,25 @@ a stack buffer and guards it with an assertion; nothing about it is visible to
 the linker. A release build with `NDEBUG` would skip the assertion and **write
 past the buffer instead** — so this must be fixed, not configured around.
 
-**Fix (not yet applied):** AetherSDR's `third_party/radae/cmake/BuildOpus.cmake`
-builds from a pre-patched `opus-rade-prepared.tar.gz`, so the second patch has
-to be re-baked into that snapshot (or applied post-extract for the V2 path).
-Whichever route, the resulting Opus is then **V2-capable and still V1-correct** —
-raising the ceiling does not change V1 behaviour — so one shared snapshot can
-serve both.
+**Fix as applied.** `BuildOpus.cmake` builds from a pre-patched
+`opus-rade-prepared.tar.gz`, so rather than re-baking the snapshot now, the
+change is applied **post-extract** through a new `OPUS_EXTRA_PATCH_COMMAND`
+hook on `ExternalProject_Add`. The hook is empty by default — an empty
+`PATCH_COMMAND` is a no-op — so **the V1 build is unchanged**; only the
+`ENABLE_RADE_V2` path sets it, to `cmake/PatchOpusForV2.cmake`.
+
+That script does a guarded string replacement rather than shelling out to
+`patch`: upstream's `sh -c "patch ..."` needs a POSIX shell and a `patch`
+binary, neither dependable on Windows, and a missing one fails in a way that
+looks nothing like its cause. It is idempotent, and it **hard-errors if the
+anchor text moves** rather than silently doing nothing — a no-op replace would
+leave the build looking healthy right up to the runtime abort.
+
+**TEMPORARY BRIDGE, by design.** The permanent fix is to re-bake the tarball
+with both of upstream's nnet patches, which is best done when V1 is removed and
+the snapshot has exactly one consumer. Raising the bound is V1-safe — a larger
+ceiling changes no V1 behaviour — so one snapshot can then serve everything and
+this hook plus `PatchOpusForV2.cmake` can be deleted outright.
 
 ### The Win32 export macro
 
