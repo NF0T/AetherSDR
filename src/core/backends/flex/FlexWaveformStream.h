@@ -14,20 +14,30 @@
 // Gated behind ENABLE_RADE_V2 (OFF by default), same as the provider.
 //
 // ─── The constraints this class exists to honour ───────────────────────────
-// X1  24 kHz Complex-float32, big-endian, 128 samples/packet
+// X1  24 kHz Complex-float32, big-endian, 128 samples/packet   (inbound)
 // X2  🔇 inbound is CONJUGATE I/Q — negate the imaginary component
 // X3  discard the ~1 s startup burst
+// E1  🔇 emit on the INBOUND id; the *_out ids are not honoured
+// E2  🔇 outbound is STEREO AUDIO, not I/Q — duplicate mono, do NOT conjugate
 // E3  packet count is a per-STREAM 4-bit rolling counter
+// E4  header shape, class id, UTC + picosecond timestamp, → radio:4991
 //
-// X2 is the one to be careful with. `A + jB` mirrors the spectrum and simply
-// never decodes; there is no error and nothing logs. A reviewer reading
-// `imag = b` has no way to know it should be `-b`, which is exactly why the
-// conjugation lives in a static function with a unit test rather than inline
-// in the socket read loop.
+// ─── The trap ──────────────────────────────────────────────────────────────
+// X2 and E2 are OPPOSITES, and both fail silently.
+//
+//   inbound  — conjugate I/Q      → negate imag to recover the passband
+//   outbound — stereo audio       → duplicate mono, no conjugation at all
+//
+// The receive path's `-b` looks like it should be symmetric on transmit. It is
+// not. Conjugating on the way out inverts the sideband, which reads as normal
+// on every meter the radio has and decodes for nobody. Both directions
+// therefore convert in static functions with mutation-checked tests, rather
+// than sharing one "obviously reusable" helper — the reuse IS the bug.
 
 #ifdef AETHER_ENABLE_RADE_V2
 
 #include <complex>
+#include <span>
 #include <vector>
 
 #include <QHostAddress>
@@ -52,6 +62,19 @@ public:
     static constexpr int      kRxSampleRateHz  = 24000;
     static constexpr int      kRxSamplesPerPkt = 128;
 
+    // Emit side (§7.1 E4). Note the asymmetry, which is real and measured: the
+    // radio SENDS us type 3 (ExtDataWithStream) and ACCEPTS type 1
+    // (IFDataWithStream). Making the two match would be tidier and does not
+    // work.
+    static constexpr quint16  kVitaOutPort     = 4991;         // vita_output.c:121
+    static constexpr quint32  kFlexOui         = 0x001C2Du;
+    static constexpr quint32  kAudioClassId    = 0x534C03E3u;  // SL_VITA_SLICE_AUDIO
+    static constexpr quint32  kHdrIfDataStream = 0x10000000u;
+    static constexpr quint32  kHdrClassPresent = 0x08000000u;
+    static constexpr quint32  kHdrTsiUtc       = 0x00400000u;
+    static constexpr quint32  kHdrTsfRealTime  = 0x00200000u;
+    static constexpr int      kTxSamplesPerPkt = 128;          // = HAL_TX_BUFFER_SIZE
+
     // ─── Socket lifecycle ──────────────────────────────────────────────────
     //
     // Bind and return the port the radio should send to — hand it straight to
@@ -70,6 +93,15 @@ public:
     // every registration and must never be cached elsewhere as an identity.
     void setRxStreamId(quint32 id);
     quint32 rxStreamId() const;
+
+    // The tx_stream_in id, for the transmit direction (stage 5). Set from the
+    // same create reply; same recycling caveat.
+    void setTxStreamId(quint32 id);
+    quint32 txStreamId() const;
+
+    // Where emitted packets go — the radio's address, port 4991 (§7.1 E4).
+    void setRadioAddress(const QHostAddress& addr);
+    QHostAddress radioAddress() const;
 
     // §7.1 X3 — the radio front-loads roughly a second of buffered audio when a
     // stream starts; measured, it reads as a ~28 kHz rate rather than 24 kHz.
@@ -104,6 +136,39 @@ public:
     static int decodeRxPayload(const char* payload, int payloadBytes,
                                std::vector<std::complex<float>>& out);
 
+    // Build one outbound audio packet: 28-byte header per §7.1 E4, then the
+    // mono block duplicated into interleaved big-endian float32 stereo.
+    //
+    // §7.1 E2 — outbound is STEREO AUDIO, **not** I/Q, and is **not**
+    // conjugated. This is the exact opposite of decodeRxPayload() above, and
+    // the asymmetry is the whole reason both are separate static functions with
+    // their own tests. Conjugating here inverts the sideband: every meter on
+    // the radio reads normal and nobody can decode it.
+    //
+    // Static and clock-injected (utcSec / fracPicos passed in) so the byte
+    // layout can be asserted exactly, with no wall clock in the test.
+    static QByteArray buildAudioPacket(quint32 streamId, int packetCount,
+                                       quint64 utcSec, quint64 fracPicos,
+                                       std::span<const float> mono);
+
+    // ─── Emit ──────────────────────────────────────────────────────────────
+    //
+    // §7.1 E1 — 🔇 EMIT ON THE INBOUND ID. The `*_out` ids are not honoured;
+    // injecting on them was measured at exactly zero, twice, the second time
+    // after the path had been proven live. There is no error anywhere — the
+    // audio simply does not exist.
+    //
+    // That is why these take no stream id. The two directions are named methods
+    // resolving to the stored INBOUND ids, so there is no parameter into which
+    // an `*_out` id can be passed. E1 is enforced by the signature rather than
+    // by a comment somebody has to read.
+    //
+    // Returns false if the socket is closed, the id is unset, or the send
+    // failed. Timestamps come from the system clock; the counter advances per
+    // stream (§7.1 E3).
+    bool emitRxReturn(std::span<const float> mono);   // decoded audio → the slice
+    bool emitTxReturn(std::span<const float> mono);   // modulated audio → the air
+
     // ─── Diagnostics ───────────────────────────────────────────────────────
     //
     // These exist because most of what can go wrong here goes wrong silently.
@@ -118,6 +183,8 @@ public:
         quint64 malformed      = 0;   // too short, or a partial float pair
         quint64 settleDropped  = 0;   // discarded by the X3 window
         quint64 sequenceGaps   = 0;   // §7.1 E3 counter discontinuities
+        quint64 emitted        = 0;   // outbound packets sent
+        quint64 emitFailed     = 0;   // outbound sends that did not go out
     };
     Stats stats() const;
     void resetStats();
@@ -136,6 +203,7 @@ signals:
 
 private:
     void readPending();
+    bool emitOn(quint32 streamId, std::span<const float> mono);
 
     struct Private;
     Private* d;
