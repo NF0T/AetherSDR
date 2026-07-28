@@ -39,6 +39,9 @@ option(REQUIRE_ASR_GPU "Fail if no ASR GPU backend (Vulkan/Metal) is enabled (us
 option(REQUIRE_ASR_SHERPA "Fail if sherpa-onnx is not found (non-whisper ASR backend; use for release builds)" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(ENABLE_DSTAR "Build the local D-STAR waveform helper (vendored smartsdr-dsp/ThumbDV)" ON)
+# RADE V2 as an in-process Flex waveform (docs/architecture/rade-v2-waveform-design.md).
+# OFF until the release phase (RFC §7) — RADE V1 is untouched and unaffected either way.
+option(ENABLE_RADE_V2 "Build the in-process RADE V2 Flex waveform provider (in development)" OFF)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
@@ -606,6 +609,7 @@ set(AETHER_SETTINGS_SOURCES
 set(CORE_SOURCES
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexWaveformProvider.cpp  # RADE V2 waveform (ENABLE_RADE_V2)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -2528,6 +2532,16 @@ elseif(REQUIRE_ASR_SHERPA)
 else()
     message(STATUS "sherpa-onnx not found — non-whisper ASR backend disabled "
         "(run scripts/setup/setup-sherpa-onnx.sh to enable)")
+endif()
+
+# RADE V2 in-process waveform provider (docs/architecture/rade-v2-waveform-design.md).
+# The source is always compiled; its contents are wrapped in
+# #ifdef AETHER_ENABLE_RADE_V2, so with the option OFF it is an empty
+# translation unit and the default build is byte-identical. RADE V1 is
+# untouched by this flag in either state.
+if(ENABLE_RADE_V2)
+    target_compile_definitions(aethercore PUBLIC AETHER_ENABLE_RADE_V2)
+    message(STATUS "RADE V2 in-process waveform provider ENABLED (in development)")
 endif()
 
 if(RADE_FOUND)
