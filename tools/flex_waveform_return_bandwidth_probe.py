@@ -94,9 +94,14 @@ def main():
             r.cmd(f"sub {s} all")
         r.pump(2.5)
 
-        ids = r.slice_ids()
+        ids = r.my_slice_ids()
         if not ids:
-            raise RuntimeError("no slice available")
+            raise RuntimeError(
+                "this connection owns no slice -- refusing to drive another "
+                "client's slice (see Flex.my_slice_ids)")
+        if len(r.slice_ids()) > len(ids):
+            print(f"  note: {len(r.slice_ids())} slices on radio, "
+                  f"{len(ids)} ours ({ids}) -- other clients present")
         sid = ids[0]
         f0 = r.fields(f"slice {sid} ")
         saved_mode = f0.get("mode")
