@@ -176,7 +176,7 @@ All new code is gated behind a compile flag **`ENABLE_RADE_V2`** (off by default
 |---|---|---|
 | `FlexWaveformProvider` | `src/core/backends/flex/` | Control plane: `waveform create/set/remove` on TCP 4992. Flex wire protocol, so EB3 permits it only here — and it is where a future backend's transport would sit. **Beside `FlexBackend`, not behind it** (§7.2) |
 | `FlexWaveformStream` | `src/core/backends/flex/` | Data plane: the UDP socket, VITA-49 framing, and the X2 conjugation. Split from the provider because the port must be bound **before** registration (R1 sends `udpport` last) |
-| `FlexWaveformTransport` | `src/core/backends/flex/` | Owns the two above and implements the codec↔transport seam (§6 decision 7). The only object `RADEV2Engine` sees |
+| `FlexWaveformTransport` | `src/core/backends/flex/` | Owns the two above and implements the codec↔transport seam (§6 decision 7). The only object `RADEV2Engine` sees. Seam is **signals, not an interface pointer** — the codec is a worker-thread QObject, and queued connections make the threading a compile-time non-issue instead of a runtime race |
 | `RADEV2Engine` | `src/core/` (`libaethercore`) | Worker-thread QObject; codec core with the transport-agnostic seam |
 | `RAD2` mode | `DigitalVoiceModeRegistry` | New `DigitalVoiceModeId::RadeV2` + descriptor (`radioMode "RAD2"`, `underlyingMode "DIGU"` — see §10.1; no `DIGL` variant) |
 | GUI wiring | `src/gui/` | New parallel `activateRADEV2()`; V1's `activateRADE()` untouched |
@@ -987,6 +987,15 @@ Two consequences:
   and a stream that is silent until PTT is awkward as a primary source. Whether `tx_stream_in`
   carries usable mic audio *while keyed* is a Tier 2 question.
 
+> **DECIDED in implementation (stage 5): `tx_stream_in` is the CLOCK, `AudioEngine` is the AUDIO.**
+> The transport takes only a sample count from each inbound TX packet and never decodes the
+> payload. §10.9 D found the stream flowing while keyed but carrying silence (peak 0.0000, with
+> `mic_selection=PC` and no PC audio present), so "can it carry usable mic audio" was never
+> answered — and this split means it does not have to be. The open question stops being
+> load-bearing and becomes a curiosity: T1's cadence requirement is satisfied either way, and the
+> audio comes from the path §9 already specifies. **Re-measuring it is no longer on the critical
+> path.**
+
 ### 10.7 The return path is NOT band-limited — 2026-07-28 (no RF)
 
 The re-measurement §10.6 called for. Probe: `tools/flex_waveform_return_bandwidth_probe.py`.
@@ -1311,10 +1320,29 @@ before the transport is written rather than after.
   else. `outboundRoundTripsThroughRxDecode` states the asymmetry as a property rather than as two
   independent assertions, so the pair cannot drift into agreement.
 - **§7.2 backend-boundary guard — LANDED (`rade_v2_backend_boundary_test`).** Nothing under
-  `src/core/backends/` may reference RADE, and `FlexBackend` may not name the provider, the stream
-  or the transport. Deliberately **not** gated on `ENABLE_RADE_V2`: a check that runs only with the
-  feature on cannot catch the commit that turns the feature off and leaves the coupling behind.
-  Both rules mutation-checked independently.
+  `src/core/backends/` may reference RADE **in code**, and `FlexBackend` may not name the provider,
+  the stream or the transport. Deliberately **not** gated on `ENABLE_RADE_V2`: a check that runs
+  only with the feature on cannot catch the commit that turns the feature off and leaves the
+  coupling behind. Both rules mutation-checked independently, with a comment-only control proving
+  prose does not trip it.
+  > It strips comments before matching, and that is load-bearing rather than cosmetic. The first
+  > version did not, and it fired on the transport's own header for drawing the dependency arrow in
+  > a comment — a check that punishes the documentation trains people to delete the documentation.
+  > Worse, its own mutation test had used a *commented-out* declaration, so the guard had appeared
+  > to work while only proving it could find a string. Re-mutated with real code afterwards.
+- **The EOO tail guard — LANDED (`flex_waveform_transport_test`), and the most easily faked test in
+  this document.** §7.1 T1+T2 ⇒ T3: with no free-running transmit clock and the radio stopping
+  `tx_stream_in` at unkey, the ~120 ms tail needs **synthesized** ticks. A test that keys, waits out
+  the tail duration and unkeys **passes with the entire drain mechanism deleted**, because while PTT
+  is held the real clock is still running — that is the bug reproduced inside the test meant to
+  catch it. Verified empirically: under mutation, `realClockDrivesTicksWhileKeyed` still passes
+  while the three tail tests fail. So the assertions are that ticks continue **with inbound
+  stopped**, and `tailIsNotDrivenByInbound` pins it by asserting the stream received *zero*
+  datagrams during the drain.
+  > The mutation also surfaced something the design had not called out: with no drain timer the
+  > **tail timeout never fires either**, so a stuck codec would hold the transmitter keyed
+  > indefinitely. `setTailTimeoutMs` is therefore a safety property, not a tuning knob — a truncated
+  > EOO is a decode problem, a stuck carrier is an interference problem.
 - Automation-bridge assertions for the `RAD2` mode lifecycle (activate/deactivate, no mute strand,
   status sub-state).
 - **Mode-family classification guard (Phase 3, from §10.4):** assert that `RAD2` lands in the
