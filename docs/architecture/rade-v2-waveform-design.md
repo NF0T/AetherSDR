@@ -1010,10 +1010,9 @@ the tail still has to be *fed* to be emitted, and holding PTT alone emits nothin
 see the probe's method notes). Given §10.1 now establishes `tx_filter` as the *only* suppression
 for V2's unshaped sidelobes, this deserves an unhurried run rather than a truncated one.
 
-**Still deferred to an off-air receiver**, with no telemetry substitute: transmitted spectrum,
-**sideband sense** (§10.5's stereo-not-I/Q inference remains unverified on air, and no power meter
-can see an inverted sideband — the single most important open item), IMD under real OFDM
-peak-to-average, and EVM.
+**Deferred at the time of writing — sideband sense has since been CLOSED, see §10.11**, and it
+needed no off-air receiver at all. What is still outstanding is transmitted sidelobe level
+(measurable in software), IMD, and EVM, none of which blocks Phase 2.
 
 ### 10.10 `tx_filter` is NOT honoured — and linearity re-confirmed with a matched antenna
 
@@ -1070,6 +1069,62 @@ not ours to control per-waveform.
    side effects, or (b) narrow the *global* transmit filter, which is shared with every other mode
    and would need save/restore. **(a) is the answer.** The global filter still contributes ~8–11 dB
    at 3–3.5 kHz, so this is hardening rather than a hole.
+
+### 10.11 SIDEBAND SENSE — CLOSED. Upper sideband is correct; no TX conjugation.
+
+The last question that was blocking on measurement, and the largest open risk in the TX design:
+§10.5 inferred *from reading the shipped D-Star provider* that the outbound waveform streams carry
+stereo **audio** rather than I/Q, and therefore that there is no conjugate convention to get wrong
+on transmit. That was a code reading. It is now measured.
+
+**No off-air receiver was needed.** The Flex will draw its own transmitted signal on the
+panadapter (`transmit set show_tx_in_waterfall=1`, default 0), and the panadapter is in the **RF
+frequency domain** — precisely where the question lives. The FFT bins were read numerically
+(PCC **0x8003**, 12-byte sub-header, `uint16` bins where **lower raw = stronger**), at a 20 kHz
+span across 1024 bins = **19.5 Hz/bin**. Probe: `tools/flex_waveform_sideband_probe.py`.
+
+The instrument had to earn trust first. This 8400 has `num_scu=1`, so RX is blanked while
+transmitting — whatever the pan shows during TX is radio-generated, not received. So the same tone
+was pushed through the **same** path under two underlying modes, giving a control that shares every
+code path with the test:
+
+| pass | predicted | measured | error |
+|---|---|---|---|
+| `DIGU`, 1000 Hz | +1000 Hz | **+987 Hz** | 13 Hz |
+| `DIGU`, 2000 Hz | +2000 Hz | **+1984 Hz** | 16 Hz |
+| `DIGL`, 1000 Hz | −1000 Hz | **−1007 Hz** | 7 Hz |
+
+Every error is inside one bin.
+
+- **Control 1 — is the axis a real frequency mapping?** Tone moved 1000 Hz; peak moved **997 Hz**.
+  PASS. The display is not a fixed graphic.
+- **Control 2 — is the display sideband-aware at all?** `DIGU` +987 Hz versus `DIGL` −1007 Hz:
+  **opposite sides of the dial.** PASS. Had both landed on the same side, the method would have
+  been incapable of answering and we would have fallen back to a receiver.
+
+> **RESULT: `DIGU` puts our transmitted audio ABOVE the dial. Upper sideband is correct, and the
+> provider must NOT conjugate on transmit.** §10.5's inference is confirmed by measurement from a
+> completely independent direction — the code reading said "outbound is audio, so no conjugate
+> convention applies", and the RF-domain measurement agrees. The TX path stays: `rade_tx()` →
+> `real()` → duplicate into both float slots → `tx_stream_in`.
+>
+> Note the asymmetry with RX is now **measured on both sides**: inbound `rx_stream_in` is conjugate
+> I/Q and its imaginary component must be negated (§10.3 item 5); outbound is audio and must not be
+> touched. Getting either one wrong produces a signal that looks perfectly normal on every meter
+> and decodes for nobody.
+
+**Bonus — this also closes the §10.3 item 7 residual.** That item ended "whether `digu_offset`
+shifts the demodulated passband or only the dial display… needs a tonal reference rather than the
+noise-based method used here." This *is* a tonal reference, in the RF domain: a 1000 Hz audio tone
+landed at dial **+987 Hz** and a 2000 Hz tone at **+1984 Hz** — i.e. at exactly the audio
+frequency, with no 1500 Hz displacement anywhere. **`digu_offset` does not shift the transmitted
+RF placement.** It is the filter-centring/dial convention established in §10.3 item 7 and nothing
+more, now confirmed in the domain that item asked for.
+
+**What remains deferred is now genuinely low-value:** transmitted sidelobe levels (measurable in
+software against the samples we generate, since we author them), IMD (a linear transmitter at 1 W,
+nowhere near compression), and EVM (needs the codec, and is subsumed by "a real RADE V2 station
+decodes us"). **None of it blocks Phase 2.**
 
 ## 11. Fidelity & Licensing
 
@@ -1221,8 +1276,11 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    is measured **accepted but IGNORED** — two very different registrations gave identical curves,
    with the real filtering coming from the radio's global `lo=100 hi=2900`. Consequence: the
    provider must band-limit **in its own TX chain**, since that is the only per-waveform control.
-   **Remaining — all of it needs an off-air receiver:** transmitted spectrum, **sideband sense**
-   (the largest open risk), IMD under real OFDM peak-to-average, and EVM.
+   **Sideband sense is now CLOSED (§10.11)** — measured via the radio's own panadapter with two
+   controls, no receiver required: `DIGU` puts our audio ABOVE the dial, so upper sideband is
+   correct and the provider must not conjugate on transmit. That was the largest open risk in the
+   TX design. **Q4 is effectively closed**; what is left (sidelobe level, IMD, EVM) is low-value
+   and does not block Phase 2.
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
 ## 17. References
