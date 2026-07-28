@@ -4191,6 +4191,17 @@ add_executable(CAT_Flex_test
 target_include_directories(CAT_Flex_test PRIVATE src)
 target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 
+# RADE V2 waveform-create reply parsing (RFC §7.1 R6/R7). Only built with the
+# feature, since the class does not exist without it. Guards a SILENT failure:
+# a partial parse yields zeroed stream ids that read as ordinary defaults.
+if(ENABLE_RADE_V2)
+    add_executable(flex_waveform_provider_test tests/flex_waveform_provider_test.cpp)
+    target_include_directories(flex_waveform_provider_test PRIVATE src)
+    target_link_libraries(flex_waveform_provider_test PRIVATE aethercore Qt6::Core Qt6::Test)
+    set_target_properties(flex_waveform_provider_test PROPERTIES AUTOMOC ON)
+    add_test(NAME flex_waveform_provider_test COMMAND flex_waveform_provider_test)
+endif()
+
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
 # Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
