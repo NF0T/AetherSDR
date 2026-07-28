@@ -161,6 +161,33 @@ class Flex:
                 ids.add(body.split()[1])
         return sorted(ids)
 
+    def my_slice_ids(self):
+        """Slices owned by THIS connection, by `client_handle`.
+
+        ALWAYS prefer this over slice_ids(). `slice_ids()` returns every in-use
+        slice on the radio including other clients' -- and if AetherSDR (or any
+        other client) is connected, its slice can sort first. Driving that one
+        both corrupts the measurement (our monitor still carries OUR untouched
+        slice) and reaches into another client's state.
+        """
+        owner = {}
+        me = (self.handle or "").lower()
+        if me.startswith("0x"):
+            me = me[2:]
+        for line in self.status:
+            body = line.split("|", 1)[-1]
+            if not body.startswith("slice "):
+                continue
+            toks = body.split()
+            if len(toks) < 2:
+                continue
+            sid = toks[1]
+            for tok in toks[2:]:
+                if tok.startswith("client_handle="):
+                    h = tok.split("=", 1)[1].lower()
+                    owner[sid] = h[2:] if h.startswith("0x") else h
+        return sorted(s for s, h in owner.items() if h == me)
+
     def close(self):
         try:
             self.sock.close()
