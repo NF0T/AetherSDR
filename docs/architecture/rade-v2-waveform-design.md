@@ -296,8 +296,8 @@ new wire path and no second socket — the in-process, single-connection result 
 **The rule, stated so it is checkable:** the dependency points **one way** —
 `RADEV2Engine → FlexWaveformTransport → command sink`. No file in `src/core/backends/` may include
 a RADE header, and `FlexBackend.{h,cpp}` may not name the provider, the stream, or the transport.
-That is a grep, and EB3 already scans this tree; a guard is cheap and belongs with the Phase 2 exit
-criteria (§13).
+That is a grep. **It has landed** as `rade_v2_backend_boundary_test` (§13), deliberately outside the
+`ENABLE_RADE_V2` gate, and both rules were mutation-checked before being trusted.
 
 ## 8. Phase 0 evidence (hardened by coding, live FLEX-8400 fw 4.2.20.41343)
 
@@ -1303,6 +1303,18 @@ before the transport is written rather than after.
   the provider sets `rx_filter` *before* mode entry, and that the imaginary component of
   `rx_stream_in` is negated before reaching the codec. Both are silent-wrong-answer failures,
   not crashes.
+- **The X2/E2 inversion guard — LANDED (`flex_waveform_stream_test`).** X2 and E2 are opposites:
+  inbound I/Q must be conjugated, outbound stereo audio must **not** be. The receive path's `-b`
+  looks like it should be symmetric on transmit, and reusing it there inverts the sideband — normal
+  power, normal occupancy, normal on every meter, decodable by nobody. Guarded in both directions
+  and **mutation-checked**: flipping either sign in production fails the matching test and nothing
+  else. `outboundRoundTripsThroughRxDecode` states the asymmetry as a property rather than as two
+  independent assertions, so the pair cannot drift into agreement.
+- **§7.2 backend-boundary guard — LANDED (`rade_v2_backend_boundary_test`).** Nothing under
+  `src/core/backends/` may reference RADE, and `FlexBackend` may not name the provider, the stream
+  or the transport. Deliberately **not** gated on `ENABLE_RADE_V2`: a check that runs only with the
+  feature on cannot catch the commit that turns the feature off and leaves the coupling behind.
+  Both rules mutation-checked independently.
 - Automation-bridge assertions for the `RAD2` mode lifecycle (activate/deactivate, no mute strand,
   status sub-state).
 - **Mode-family classification guard (Phase 3, from §10.4):** assert that `RAD2` lands in the
