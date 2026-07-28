@@ -413,6 +413,46 @@ nothing decodable is clipped.
 The real justification for a moderate filter is AGC/ADC headroom and adjacent-signal rejection,
 **not** modem SNR.
 
+**⚠ This reasoning is RX-ONLY. It does NOT transfer to `tx_filter` — the transmit case is the
+opposite.** Verified in the V2 source at `radae_nopy@5374c52`:
+
+| | RX | TX |
+|---|---|---|
+| Does the modem filter itself? | **Yes** — `rade_rx_v2_init(rx, bpf_en)` builds a 975 Hz BPF at 1468.75 Hz (`rade_rx_v2.c:71-95`) | **No. Nothing at all.** |
+| Symbol shaping | n/a | **None** — hard `memcpy` boundaries |
+| Effect of tightening the Flex filter | no benefit; biases reported SNR high | **suppresses genuine out-of-band emissions** |
+
+`rade_v2_ofdm_mod_frame()` (`rade_v2_ofdm.c:122-151`) is the entire transmit signal chain: build
+the frequency-domain symbol from the latent, IDFT, `memcpy` a cyclic prefix in front, concatenate.
+`rade_tx_v2_process()` returns that result directly (`rade_tx_v2.c:87`) — no window, no taper, no
+overlap-add, no BPF, no post-scaling. Searching the TX path for `bpf|filter|window|taper|raised|
+hann|shap` returns nothing.
+
+**Consequence: V2's transmitted spectrum has unsuppressed sinc sidelobes.** Rectangular symbol
+boundaries put the first sidelobe around −13 dB with a slow rolloff, so real energy lands well
+outside the 1000–1937.5 Hz occupancy. **The Flex `tx_filter` is the only out-of-band suppression
+anywhere in the chain.**
+
+Both legs of the RX argument fail here, and it is worth being explicit about why, because the
+symmetry is tempting:
+
+1. *"The modem already band-passes itself"* — **false on TX.** It does no filtering whatsoever.
+2. *"A narrow filter makes the reported SNR lie"* — **no TX analogue.** `snr_offset_dB` is a
+   receive-side estimator; nothing on transmit reports SNR.
+
+**So `tx_filter` should be matched to the modem, not opened wide** — the opposite of the guidance
+above it. §10's draft registration proposes `tx_filter low_cut=0 high_cut=2400`, whose `low_cut=0`
+passes sidelobe energy all the way down to DC; that should become roughly **`[800, 2200]`**, the
+same shape as `rx_filter`, arrived at for an entirely different reason. §10.3 measured that
+response as flat across 1000–2000 Hz with a brick-wall transition, so the outer carriers
+(1062.5 and 1875 Hz) sit inside the flat region rather than on the skirts — which is the thing to
+avoid, since band-edge ripple would raise EVM on exactly those carriers. Linear-phase FIR gives
+flat group delay, so a constant delay is added but no ISI; the CP is 32 samples = 4 ms at 8 kHz.
+
+**This raises the value of the Tier 2 `tx_filter` check rather than lowering it.** If the filter is
+*not* honoured (the §10.6 T2 outcome left that unknown), then nothing suppresses the sidelobes and
+we need another answer.
+
 **Sideband: `DIGU` on every band — no `DIGL` variant.**
 
 - **`DIGU` rather than `USB`** follows D-Star's own pattern: it registers `DFM`, the *data*
