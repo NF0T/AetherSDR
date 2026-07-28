@@ -247,19 +247,31 @@ design that treats "hold PTT ~120 ms" as the whole fix is wrong.
 > |---|---|---|
 > | Fidelity | full | **equal** (§10.7); Opus on WAN only |
 > | Other clients hear the slice | no | **yes** |
-> | Latency | minimal | + radio round trip (**unmeasured**) |
+> | Latency | minimal | **+22 ms** on LAN (§10.8) |
 > | Double-back | none | none |
-> | Behaves like every other mode | no | yes |
+> | Slice volume / mute work normally | no — needs its own plumbing | **yes** |
+> | Parallel audio side-channel | **yes** | none |
 >
 > **A + B together stays rejected** — that is the only configuration the double-back argument
 > below actually rules out, and `audio_mute` cannot fix it (global, and it would silence the very
 > clients being fed).
 >
-> B is now genuinely attractive: it gets multiflex for free and makes a `RAD2` slice behave like
-> any other slice on the radio. **The deciding axis is latency**, which nobody has measured — a
-> decode → radio → mix → client round trip on top of RADE's own latency may or may not be
-> acceptable for conversational use. **Baseline remains A** until that number exists, because A is
-> the safe default, not because B is known worse.
+> **Recommendation: B**, subject to the operator's call. Latency came in at ~22 ms (§10.8), which
+> is negligible beside RADE's own framing and codec delay, and fidelity is equal. The decisive
+> argument is not either of those, though — it is §2:
+>
+> > **§2 Goals: "No slice muting, no split-brain mode, *no parallel audio side-channel*."**
+>
+> **Option A *is* a parallel audio side-channel.** It rebuilds, in new code, the shape of the V1
+> pathology this design exists to remove: a private decode → private buffer → private mix path
+> alongside the radio's real one, with its own volume handling, its own failure modes, and a slice
+> whose own audio controls do nothing. Option B has the radio carry RAD2 audio the way it carries
+> every other mode's — the operator's slice volume and mute simply work, and other clients hear
+> the slice for free.
+>
+> **What would change the recommendation:** WAN operation being materially worse under Opus, or a
+> use case where AetherSDR must produce RADE audio while the radio's monitor path is unavailable.
+> Both are worth checking before this is settled, and neither is measured yet.
 
 ---
 
@@ -843,6 +855,36 @@ Latency was not measured and is now the open variable.
 
 **Consequence: §6.3 is reopened.** See §9.1.
 
+### 10.8 Return-path latency — 2026-07-28 (no RF)
+
+The number §9.1 turns on. Probe: `tools/flex_waveform_return_latency_probe.py`. A steady 24 kHz
+stream of silence on `rx_stream_in_id` with 40 ms tone bursts punched into it; each burst
+timestamped as its packet leaves the socket and again when it reappears in `remote_audio_rx`.
+The monitor is exactly silent in the waveform mode, so onset detection is unambiguous.
+
+| burst | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| ms | 22.7 | 22.1 | 25.5 | 35.5 | 45.6 | 43.5 | 46.7 | 46.2 |
+
+**Round trip ≈ 22 ms.** Take the *minimum*, not the median (39.5 ms): the upward drift across the
+run is **our sender's clock**, not the radio's latency. The probe paces packets off a local
+`perf_counter` at exactly 128/24000 s; any mismatch against the radio's 24 kHz accumulates in its
+buffer, and ~24 ms of growth over 7.4 s is a ~0.3 % clock error. **A real provider clocks its
+output off the received `rx_stream_in` packets — the radio's own clock — and does not drift.**
+Quantisation is one packet, 5.33 ms.
+
+**Caveat:** LAN, `compression=none`. A WAN client additionally gets Opus plus real network RTT
+(`RadioModel::audioCompressionParam()`). This is the floor, not the worst case.
+
+**Method note — the probe drove the WRONG SLICE for two runs.** `slice_ids()` returns every
+in-use slice on the radio, and AetherSDR was connected holding slice 0; our own slice was slice 1.
+The probe set *AetherSDR's* slice to the waveform mode while measuring a monitor still carrying
+our own untouched slice's band noise — which produced a full page of plausible, entirely bogus
+numbers (including a −1500 ms "latency"). Probes now select via `Flex.my_slice_ids()`, matching
+`client_handle` against the connection's own handle, and refuse to run if this connection owns no
+slice. **Any probe in this series that picks a slice positionally is suspect whenever a second
+client is connected.**
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -935,10 +977,11 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    the registered `rx_filter`. So this is no longer "local render, with an optional degraded feed
    for other clients" — it is a straight choice between **A: local render only** and **B: return
    path only**, at equal fidelity. A+B together remains rejected (double-back, now measured).
-   **The one measurement that decides it is LATENCY** — the decode → radio → mix → client round
-   trip, on top of RADE's own. Nobody has measured it; it needs no codec and no RF. Secondary
-   inputs: Opus on WAN monitor streams (LAN is uncompressed), and how much the multiflex case is
-   worth. Baseline stays A as the safe default, not as a verdict.
+   **Latency is now measured: ~22 ms on LAN (§10.8)** — negligible beside RADE's own framing and
+   codec delay. With fidelity equal and latency small, **the recommendation is B** (§9.1), on the
+   §2 grounds that option A *is* the "parallel audio side-channel" this design set out to remove.
+   **Still open before it is settled:** WAN behaviour under Opus, and whether any use case needs
+   RADE audio while the radio's monitor path is unavailable. Operator's call.
    *Superseded sub-question, retained for history:*
    Current expectation: **local-render-only** (baseline). Feeding real audio for other clients
    double-backs onto us (radio-mixed monitor can't be un-mixed) and the only fix (global
