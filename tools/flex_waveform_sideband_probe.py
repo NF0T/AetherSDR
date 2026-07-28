@@ -292,10 +292,15 @@ def main():
             print("Re-run with --arm to transmit.")
             return 0
 
-        # Re-check power immediately before any RF. An earlier run read 5 W here
-        # and refused — almost certainly the previous band's memory, caught
-        # mid-transition before the 6 m value settled. The gate has to be read
-        # at the moment of use, not once at setup.
+        # Re-check power immediately before any RF.
+        #
+        # An earlier run read 5 W here and refused. I guessed that was a stale
+        # read of the previous band's memory caught mid-transition. It was not:
+        # the operator had genuinely left the radio at 5 W and lowered it to 1 W
+        # between runs. So the gate reported the TRUTH both times, and the
+        # "stale read" theory was an invented explanation for correct behaviour.
+        # Worth keeping the re-check anyway — power is a live setting a human can
+        # change between setup and use, which is exactly what happened.
         final_pwr = read_rfpower(r)
         if final_pwr is None or float(final_pwr) > MAX_WATTS:
             raise RuntimeError(f"power re-check at arm time: {final_pwr} W")
