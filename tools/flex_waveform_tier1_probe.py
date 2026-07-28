@@ -229,6 +229,23 @@ class Emitter:
         inter[1::2] = mono
         return hdr + inter.tobytes()
 
+    def send_tone_samples(self, stream_id, mono):
+        """Emit an arbitrary mono waveform, paced at the real sample rate."""
+        npk = len(mono) // SPP
+        t0 = time.perf_counter()
+        dt = SPP / FS
+        for i in range(npk):
+            chunk = mono[i * SPP:(i + 1) * SPP]
+            self.udp.sendto(self.packet(stream_id, chunk), (self.host, VITA_PORT))
+            target = t0 + (i + 1) * dt
+            while True:
+                rem = target - time.perf_counter()
+                if rem <= 0:
+                    break
+                if rem > 0.002:
+                    time.sleep(rem - 0.001)
+        return npk
+
     def send_tone(self, stream_id, freq, secs, amp=0.3):
         npk = int(secs * FS / SPP)
         t0 = time.perf_counter()
