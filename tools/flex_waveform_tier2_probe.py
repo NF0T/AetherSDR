@@ -562,7 +562,8 @@ def test_a_and_d(sess, meters, sender, fwd_id, tx_in_id, tx_out_id):
     return None
 
 
-def test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids=None):
+def test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids=None,
+           swr_id=None, ref_id=None):
     print("\n=== B: ALC / compression linearity  [the one that matters] ===")
     print("  linear path => +6 dB power per doubling of amplitude")
     rows = []
@@ -583,6 +584,12 @@ def test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids=None):
             alc = []
             for aid in (alc_ids or []):
                 alc += meters.sample(aid, secs=0.2)
+            # SWR and reflected power, sampled per step. Into a mismatched
+            # antenna the radio may fold back drive as power rises, which would
+            # masquerade as compression -- so record the match alongside the
+            # transfer rather than reasoning about it afterwards.
+            swr = meters.sample(swr_id, secs=0.2) if swr_id else []
+            ref = meters.sample(ref_id, secs=0.2) if ref_id else []
             sender.enabled = False
         if not fwd:
             print(f"  amp={amp:.2f}: no samples")
@@ -590,18 +597,26 @@ def test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids=None):
         dbm = float(np.median(fwd))
         rows.append((amp, dbm, dbm_to_w(dbm),
                      max(comp) if comp else None,
-                     max(alc) if alc else None))
+                     max(alc) if alc else None,
+                     float(np.median(swr)) if swr else None,
+                     float(np.median(ref)) if ref else None))
 
     if len(rows) < 2:
         return
-    print(f"\n  {'amp':>6} {'dBm':>8} {'watts':>8} {'vs ideal':>11} "
-          f"{'COMPPEAK':>9} {'ALC':>7}")
-    a0, d0 = rows[0][0], rows[0][1]
-    for amp, dbm, w, comp, alcv in rows:
-        ideal = d0 + 20.0 * math.log10(amp / a0)
+    print(f"\n  {'amp':>6} {'dBm':>8} {'watts':>8} {'COMPPEAK':>9} {'ALC':>8} "
+          f"{'SWR':>6} {'REF dBm':>8}")
+    for amp, dbm, w, comp, alcv, swrv, refv in rows:
         c = f"{comp:.1f}" if comp is not None else "n/a"
         al = f"{alcv:.1f}" if alcv is not None else "n/a"
-        print(f"  {amp:6.2f} {dbm:8.1f} {w:8.3f} {dbm-ideal:+11.1f} {c:>9} {al:>7}")
+        sw = f"{swrv:.2f}" if swrv is not None else "n/a"
+        rf = f"{refv:.1f}" if refv is not None else "n/a"
+        print(f"  {amp:6.2f} {dbm:8.1f} {w:8.3f} {c:>9} {al:>8} {sw:>6} {rf:>8}")
+    swrs = [r[5] for r in rows if r[5] is not None]
+    if swrs and max(swrs) > 2.0:
+        print(f"\n  NOTE: SWR {min(swrs):.2f}-{max(swrs):.2f} across the sweep. "
+              f"FWDPWR is FORWARD power, not delivered power, and a rising SWR "
+              f"can trigger\n  drive foldback that mimics compression. Foldback's "
+              f"signature is TOP-END SAG specifically — see the step table below.")
     # Judge linearity on STEP-TO-STEP gain, and anchor to the TOP of the sweep.
     #
     # The first version anchored to rows[0] -- the lowest drive, and therefore
@@ -757,6 +772,12 @@ def main():
     ap.add_argument("--arm", action="store_true",
                     help="actually key the transmitter (default: pre-flight only)")
     ap.add_argument("--tests", default="ABCDE", help="subset of tests to run")
+    ap.add_argument("--stay", action="store_true",
+                    help="leave the slice on the test frequency/band at exit "
+                         "instead of restoring it. Restoring moves the slice to "
+                         "another band, and coming back reloads that band's ATU "
+                         "memory — which drops a manually engaged ATU back to "
+                         "bypass and silently changes the match between runs.")
     args = ap.parse_args()
 
     r = Flex(RADIO)
@@ -896,7 +917,8 @@ def main():
         comp_ids = [m for m, _ in find_meters(manifest, "TX", "COMPPEAK")]
         alc_ids = [m for m, _ in find_meters(manifest, "TX", "ALC")]
         swr_id, _ = find_meter(manifest, "TX", "SWR")
-        print(f"\nmeters: FWDPWR={fwd_id} ({fwd_u})  SWR={swr_id}")
+        ref_id, _ = find_meter(manifest, "TX", "REFPWR")
+        print(f"\nmeters: FWDPWR={fwd_id} ({fwd_u})  SWR={swr_id}  REFPWR={ref_id}")
         print(f"        COMPPEAK={comp_ids}  ALC={alc_ids}  "
               f"(per-slice duplicates — sampled together)")
         if fwd_id is None:
@@ -934,7 +956,8 @@ def main():
             if used:
                 sender.stream_id = used
         if "B" in args.tests:
-            test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids)
+            test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids,
+                   swr_id, ref_id)
         if "C" in args.tests:
             test_c(sess, meters, sender, fwd_id, register, sid)
         if "E" in args.tests:
@@ -954,7 +977,19 @@ def main():
             # handles the CW mode switch and restores whatever it found.
             if sess and sess.armed and sess.first_tx:
                 sess.send_cw_id()
-            if sid is not None:
+            if sid is not None and args.stay:
+                # Deliberately NOT restoring frequency/band/mode. Leaving 6 m
+                # keeps whatever ATU state the operator has established; a
+                # round trip through another band reloads that band's ATU
+                # memory and lands back in bypass, changing the match between
+                # runs without anything reporting it.
+                print(f"  --stay: leaving slice {sid} on {TEST_FREQ_MHZ} MHz "
+                      f"(band/pan/mode NOT restored, ATU state preserved)")
+                old_tx = saved.get("tx")
+                if old_tx is not None:
+                    code = r.cmd(f"slice set {sid} tx={old_tx}")[0]
+                    print(f"  tx -> {old_tx}: {code}")
+            elif sid is not None:
                 old_mode = saved.get("mode")
                 old_freq = saved.get("freq")
                 old_tx = saved.get("tx")
