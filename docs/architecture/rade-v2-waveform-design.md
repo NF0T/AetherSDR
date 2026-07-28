@@ -440,18 +440,19 @@ symmetry is tempting:
 2. *"A narrow filter makes the reported SNR lie"* — **no TX analogue.** `snr_offset_dB` is a
    receive-side estimator; nothing on transmit reports SNR.
 
-**So `tx_filter` should be matched to the modem, not opened wide** — the opposite of the guidance
-above it. §10's draft registration proposes `tx_filter low_cut=0 high_cut=2400`, whose `low_cut=0`
-passes sidelobe energy all the way down to DC; that should become roughly **`[800, 2200]`**, the
-same shape as `rx_filter`, arrived at for an entirely different reason. §10.3 measured that
-response as flat across 1000–2000 Hz with a brick-wall transition, so the outer carriers
-(1062.5 and 1875 Hz) sit inside the flat region rather than on the skirts — which is the thing to
-avoid, since band-edge ripple would raise EVM on exactly those carriers. Linear-phase FIR gives
-flat group delay, so a constant delay is added but no ISI; the CP is 32 samples = 4 ms at 8 kHz.
+**So the transmitted signal needs band-limiting that the modem does not provide** — the opposite of
+the RX guidance above it.
 
-**This raises the value of the Tier 2 `tx_filter` check rather than lowering it.** If the filter is
-*not* honoured (the §10.6 T2 outcome left that unknown), then nothing suppresses the sidelobes and
-we need another answer.
+> **⚠ SUPERSEDED BY MEASUREMENT — see §10.10.** This section originally concluded "set
+> `tx_filter` to roughly `[800, 2200]`". **That does not work: the waveform's `tx_filter` is
+> accepted and silently ignored.** Two registrations differing by 500 Hz and 1400 Hz on the cuts
+> produced curves identical to 0.1 dB. The filtering actually present is the radio's *global*
+> transmit filter (`lo=100 hi=2900`), which is shared with every mode.
+>
+> **The band-limiting therefore has to happen in our own TX chain**, before emitting on
+> `tx_stream_in`. That is the one place with per-waveform control. The modem's 1000–1937.5 Hz
+> occupancy passes the global filter unclipped, so this is about suppressing sidelobes, not about
+> protecting the signal.
 
 **Sideband: `DIGU` on every band — no `DIGL` variant.**
 
@@ -1014,6 +1015,62 @@ for V2's unshaped sidelobes, this deserves an unhurried run rather than a trunca
 can see an inverted sideband — the single most important open item), IMD under real OFDM
 peak-to-average, and EVM.
 
+### 10.10 `tx_filter` is NOT honoured — and linearity re-confirmed with a matched antenna
+
+Second armed run, 2026-07-28, ~48 s keyed, ATU **engaged** this time (`--stay` keeps it that way).
+
+**B re-run — linearity confirmed under a good match, retiring the §10.9 mismatch caveat.**
+
+| amp | fwd dBm | watts | COMPPEAK | ALC | SWR | ref dBm |
+|---|---|---|---|---|---|---|
+| 0.35 | 18.9 | 0.077 | 0.0 | −150.0 | 1.00 | 8.6 |
+| 0.50 | 21.9 | 0.153 | 0.0 | −150.0 | 1.00 | 9.1 |
+| 0.70 | 24.9 | 0.308 | 0.0 | −150.0 | 1.00 | 10.1 |
+| 1.00 | 28.3 | 0.680 | 0.0 | −150.0 | 1.53 | 11.9 |
+
+Worst step error above drive 0.35: **0.35 dB**. Top-end sag: **−0.10 dB** (i.e. none — it
+*over*-performs). SWR 1.00 across the sweep, rising only to 1.53 at full drive. Forward power
+roughly doubled versus the mismatched run (0.680 W vs 0.345 W at drive 1.0), exactly as a better
+match predicts. **The foldback hypothesis is now closed: linear with the mismatch, and linear
+without it.**
+
+**C — the waveform's `tx_filter` is ACCEPTED AND IGNORED.** Constant-amplitude swept tone under
+two very different registrations:
+
+| Hz | `tx_filter [800, 2200]` | `tx_filter [300, 3600]` | Δ |
+|---|---|---|---|
+| 500 | 22.2 | 22.4 | +0.1 |
+| 1000 | 21.9 | 21.9 | 0.0 |
+| 1500 | 21.9 | 21.9 | 0.0 |
+| 2000 | 22.2 | 22.3 | 0.0 |
+| 2400 | 22.5 | 22.5 | 0.0 |
+| 3000 | 14.6 | 14.5 | 0.0 |
+| 3500 | 11.7 | 11.7 | 0.0 |
+
+Largest difference between two registrations that differ by 500 Hz on the low cut and 1400 Hz on
+the high cut: **0.1 dB.** The waveform filter does nothing.
+
+**But a filter IS acting — the radio's GLOBAL transmit filter.** The identical curves both roll
+off above 2400 Hz (−8 dB at 3000, −11 dB at 3500), and the global transmit status carries
+**`lo=100 hi=2900 tx_filter_changes_allowed=1`**. A 100–2900 Hz voice filter with a normal
+transition produces exactly the measured shape. So the suppression we observed is real, it is just
+not ours to control per-waveform.
+
+**Design consequences — this changes §10.1's TX guidance:**
+
+1. **The provider must not rely on `tx_filter`, and must not expose it as an operator control.**
+   It is accepted with code 0 and silently ignored — the same trap family as a live `rx_filter`
+   update (§10.3) and `slice tune` outside the pan span (§10.9 method notes).
+2. **The modem itself is safe.** V2's 1000–1937.5 Hz occupancy sits well inside the global
+   100–2900 Hz filter and passes unclipped — confirmed flat 500–2400 Hz above.
+3. **Sidelobe suppression must move into our own TX chain.** §10.1 established that the V2
+   modulator applies no shaping whatsoever, and §10.1's suggested fix — register a matched
+   `tx_filter` — is now known not to work. The remaining options are (a) **shape or band-pass in
+   the provider before emitting on `tx_stream_in`**, which is local, deterministic and has no
+   side effects, or (b) narrow the *global* transmit filter, which is shared with every other mode
+   and would need save/restore. **(a) is the answer.** The global filter still contributes ~8–11 dB
+   at 3–3.5 kHz, so this is hardening rather than a hole.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -1159,10 +1216,13 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    through intact — the question that could have forced a redesign is answered favourably; the
    radio **holds TX through an underrun** rather than dropping the carrier; and `tx_stream_in` is
    confirmed PTT-gated but carried silence with no mic source connected.
-   **Remaining:** (a) test C — is `tx_filter` honoured — which §10.1 makes *more* important, since
-   the V2 modulator does no shaping and that filter is the only sidelobe suppression;
-   (b) a confirmatory linearity sweep with the ATU engaged, to retire the mismatch caveat;
-   (c) everything needing an off-air receiver, above all **sideband sense**.
+   **Tier 2 is now COMPLETE for everything telemetry can reach (§10.10):** the linearity result is
+   re-confirmed with the ATU engaged and SWR at 1.00, closing the mismatch caveat; and `tx_filter`
+   is measured **accepted but IGNORED** — two very different registrations gave identical curves,
+   with the real filtering coming from the radio's global `lo=100 hi=2900`. Consequence: the
+   provider must band-limit **in its own TX chain**, since that is the only per-waveform control.
+   **Remaining — all of it needs an off-air receiver:** transmitted spectrum, **sideband sense**
+   (the largest open risk), IMD under real OFDM peak-to-average, and EVM.
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
 ## 17. References
