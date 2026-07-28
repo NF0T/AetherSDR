@@ -6,6 +6,12 @@
 > Nothing here authorizes merging to `aethersdr/AetherSDR`; the RFC is the gate on
 > the *upstream PR*, not on fork development.
 >
+> **Sequencing (operator, 2026-07-28):** write and test the code on the fork **first**, then post
+> the RFC, then open the upstream PR — in that order. Neither the posting nor the PR is expected
+> before the FreeDV team finalizes and publishes the RADE V2 C API and begins their own
+> development builds that make real on-air interoperability testing possible. There is no clock on
+> any of it.
+>
 > **Author:** NF0T · **Started:** 2026-07-26 · **Radio under test:** FLEX-8400, fw 4.2.20.41343
 >
 > **Companion docs:** `digital-voice-thumbdv-waveform.md` (D-Star waveform — the closest
@@ -125,16 +131,22 @@ Each decision below is backed by the Phase 0 spike (§8) or by verified source a
    slice's raw modem audio to us — eliminating the mute and the split-brain by construction
    (it's a real mode). *Verified:* Phase 0 OQ#1 — a GUI-client connection can register a
    waveform in-process on its own connection (§8).
-3. **RX audio output — REOPENED. The fidelity argument for local render has been refuted.**
-   This decision previously read "local render is *required* for fidelity parity" because the
-   return path was believed hard-capped at ~2.8 kHz (§8, 1b). **That measurement was invalid and
-   the cap does not exist** — §10.7 measures the return path as flat to at least 8 kHz and
-   unaffected by the registered `rx_filter`. Decoded speech can be handed back to the radio
-   without meaningful loss.
-   The live choice is now **local render only** vs **return-path only**, decided on latency,
-   multiflex reach and WAN compression rather than on bandwidth. Doing *both* remains rejected
-   (they double against each other with no clean suppression — §9.1). Baseline stays local render
-   pending the latency measurement; see §9.1 and §16 Q1.
+3. **RX audio output — DECIDED: the waveform RETURN PATH, not local render.** Decoded speech is
+   handed back to the radio and reaches the operator through the slice's normal audio, exactly as
+   every other mode does.
+   This decision was reversed by measurement. It previously read "local render is *required* for
+   fidelity parity" on the strength of a believed ~2.8 kHz cap on the return path (§8, 1b). **That
+   measurement was invalid and the cap does not exist** — §10.7 finds the return path flat to at
+   least 8 kHz and unaffected by the registered `rx_filter`, and §10.8 measures the added latency
+   at ~22 ms remote over a VPN, ~16 ms of which is the radio itself.
+   With fidelity equal and latency negligible against RADE's own framing delay, the deciding
+   argument is §2's own goal — **"no parallel audio side-channel"**. Local render *is* one: it
+   rebuilds the V1 pathology this design exists to remove, with its own buffer, its own mixing and
+   a slice whose audio controls do nothing. The return path gives multiflex reach for free and
+   makes slice volume and mute simply work.
+   Doing **both** remains rejected (they double against each other with no clean suppression —
+   §9.1). **Revisit trigger:** if on-air testing with the real codec shows audible quality
+   problems, reopen — the operator's explicit condition on this decision.
    (Whether to *also* feed `rx_stream_out` for other clients is a separate, deferred question —
    it double-backs onto our own render and can't be muted away cleanly; see §9.1.)
 4. **On-client (PC-side) waveform, not on-radio Docker.** A PC-side waveform works on 6000 and
