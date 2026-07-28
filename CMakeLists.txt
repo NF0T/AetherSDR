@@ -258,6 +258,28 @@ endif()
 # Opus (with FARGAN/LPCNet) is built from a vendored local snapshot via ExternalProject
 set(RADE_DIR ${CMAKE_SOURCE_DIR}/third_party/radae)
 option(RADE_WAV_TAP "Write diagnostic WAV files at RADE TX tap points (Taps A/B/D/E/F) for offline demod analysis" OFF)
+
+# RADE V1 and V2 are MUTUALLY EXCLUSIVE at link time.
+#
+# The V2 tree (third_party/radae_v2, from radae_nopy@dr-radev2) is a unified
+# library that defines the same symbols as V1 — rade_open, rade_tx, rade_rx and
+# the rest — so linking both into one binary is a duplicate-symbol error, not a
+# configuration to be tuned. Selecting V2 therefore deselects V1.
+#
+# V1 is NOT modified or deleted here (RFC §6 decision 6): it is simply not built
+# in a V2 configuration. V1 is removed later as a clean subtraction.
+#
+# Overriding rather than erroring, because ENABLE_RADE defaults ON and a fatal
+# error would make every V2 configure fail on a default nobody chose. The
+# message is loud so the override is never a surprise.
+if(ENABLE_RADE_V2 AND ENABLE_RADE)
+    message(STATUS
+        "RADE V2 selected — forcing ENABLE_RADE=OFF. V1 and V2 define the same "
+        "symbols and cannot be linked together; V1 digital voice is unavailable "
+        "in this build. See third_party/radae_v2/AETHER_VENDORING.md.")
+    set(ENABLE_RADE OFF)
+endif()
+
 if(ENABLE_RADE AND EXISTS "${RADE_DIR}/src/rade_api.h")
     # macOS universal binary: build Opus for both architectures
     if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64.*arm64|arm64.*x86_64")
@@ -324,6 +346,62 @@ else()
     else()
         message(STATUS "RADE disabled by ENABLE_RADE=OFF.")
     endif()
+endif()
+
+# ─── RADE V2 (radae_nopy@dr-radev2) ─────────────────────────────────────────
+# Unified V1+V2 library; V2 is selected at runtime with RADE_MODE_V2 (0x10).
+# See third_party/radae_v2/AETHER_VENDORING.md for provenance and local deltas.
+set(RADE_V2_DIR ${CMAKE_SOURCE_DIR}/third_party/radae_v2)
+if(ENABLE_RADE_V2 AND EXISTS "${RADE_V2_DIR}/src/rade_api.h")
+    # Opus comes from AetherSDR's VENDORED snapshot, not upstream's fetch-from-
+    # GitHub script — offline, reproducible, and one shared dependency rather
+    # than one per codec version. Upstream's copy is kept for reference only.
+    include(${RADE_DIR}/cmake/BuildOpus.cmake)
+
+    # radae_tx.c / radae_rx.c are standalone programs upstream (the renamed
+    # *_nopy tools), not library sources — V1's list omits their equivalents for
+    # the same reason.
+    set(RADE_SOURCES
+        ${RADE_V2_DIR}/src/rade_api.c
+        ${RADE_V2_DIR}/src/rade_dsp.c
+        ${RADE_V2_DIR}/src/rade_ofdm.c
+        ${RADE_V2_DIR}/src/rade_bpf.c
+        ${RADE_V2_DIR}/src/rade_acq.c
+        ${RADE_V2_DIR}/src/rade_tx.c
+        ${RADE_V2_DIR}/src/rade_rx.c
+        ${RADE_V2_DIR}/src/rade_enc.c
+        ${RADE_V2_DIR}/src/rade_dec.c
+        ${RADE_V2_DIR}/src/rade_enc_data.c
+        ${RADE_V2_DIR}/src/rade_dec_data.c
+        ${RADE_V2_DIR}/src/kiss_fft.c
+        ${RADE_V2_DIR}/src/kiss_fftr.c
+        # V2-only: OFDM, sync, and the V2 encoder/decoder with their weights
+        ${RADE_V2_DIR}/src/rade_tx_v2.c
+        ${RADE_V2_DIR}/src/rade_rx_v2.c
+        ${RADE_V2_DIR}/src/rade_enc_v2.c
+        ${RADE_V2_DIR}/src/rade_dec_v2.c
+        ${RADE_V2_DIR}/src/rade_enc_v2_data.c
+        ${RADE_V2_DIR}/src/rade_dec_v2_data.c
+        ${RADE_V2_DIR}/src/rade_v2_ofdm.c
+        ${RADE_V2_DIR}/src/rade_sync.c
+        ${RADE_V2_DIR}/src/rade_sync_data.c
+    )
+    if(MSVC)
+        set(RADE_WARN_FLAG "/w")
+    else()
+        set(RADE_WARN_FLAG "-w")
+    endif()
+    set_source_files_properties(${RADE_SOURCES} PROPERTIES
+        COMPILE_FLAGS "${RADE_WARN_FLAG} -DIS_BUILDING_RADE_API=1 -DRADE_PYTHON_FREE=1"
+        INCLUDE_DIRECTORIES "${RADE_V2_DIR}/src"
+    )
+    set(RADE_FOUND TRUE)
+    set(RADE_V2_FOUND TRUE)
+    message(STATUS "RADE V2 enabled (radae_nopy@dr-radev2, vendored Opus snapshot)")
+elseif(ENABLE_RADE_V2)
+    set(RADE_V2_FOUND FALSE)
+    message(WARNING "ENABLE_RADE_V2=ON but no source at ${RADE_V2_DIR}. "
+                    "See third_party/radae_v2/AETHER_VENDORING.md.")
 endif()
 
 # Opus codec — required for SmartLink compressed audio, independent of RADE.
@@ -2546,7 +2624,27 @@ if(ENABLE_RADE_V2)
     message(STATUS "RADE V2 in-process waveform provider ENABLED (in development)")
 endif()
 
-if(RADE_FOUND)
+if(RADE_V2_FOUND)
+    # V2 deliberately does NOT define HAVE_RADE.
+    #
+    # HAVE_RADE gates RADE V1's engine and GUI, and V1 decodes the far-end
+    # callsign through rade_text_set_rx_callback() (src/core/RADEEngine.cpp:129).
+    # The V2 tree has no rade_text.* at all — upstream dropped that subsystem
+    # along with ldpc_codes/gp_interleaver/mpdecode_core — so compiling V1
+    # against it fails at link with a missing symbol rather than anywhere
+    # informative. Leaving HAVE_RADE undefined compiles V1 out cleanly, which is
+    # an already-supported configuration (the ENABLE_RADE=OFF path).
+    #
+    # HAVE_OPUS still holds: SmartLink compressed audio needs Opus and gets it
+    # from the same vendored snapshot.
+    target_compile_definitions(aethercore PUBLIC HAVE_RADE_V2 HAVE_OPUS IS_BUILDING_RADE_API=1)
+    target_include_directories(aethercore PRIVATE ${RADE_V2_DIR}/src)
+    if(WIN32)
+        target_link_libraries(aethercore PRIVATE opus)
+    else()
+        target_link_libraries(aethercore PRIVATE opus m)
+    endif()
+elseif(RADE_FOUND)
     # PUBLIC defines: gui (RadeApplet etc.) checks HAVE_RADE/HAVE_OPUS.
     target_compile_definitions(aethercore PUBLIC HAVE_RADE HAVE_OPUS IS_BUILDING_RADE_API=1)
     if(RADE_WAV_TAP)
