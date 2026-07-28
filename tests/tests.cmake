@@ -4234,6 +4234,17 @@ add_test(NAME rade_v2_backend_boundary_test
         -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_rade_v2_backend_boundary.cmake)
 
+# Does the vendored RADE V2 codec actually RUN, not merely link? Exercises the
+# real rade_tx() → rade_rx() modem path with no RF and no transport. Built only
+# when the codec is present, since it calls it directly.
+if(RADE_V2_FOUND)
+    add_executable(rade_v2_codec_test tests/rade_v2_codec_test.cpp)
+    target_include_directories(rade_v2_codec_test PRIVATE src ${RADE_V2_DIR}/src)
+    target_link_libraries(rade_v2_codec_test PRIVATE aethercore Qt6::Core Qt6::Test)
+    set_target_properties(rade_v2_codec_test PROPERTIES AUTOMOC ON)
+    add_test(NAME rade_v2_codec_test COMMAND rade_v2_codec_test)
+endif()
+
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
 # Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
