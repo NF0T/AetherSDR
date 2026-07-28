@@ -174,7 +174,9 @@ All new code is gated behind a compile flag **`ENABLE_RADE_V2`** (off by default
 
 | Component | Location | Notes |
 |---|---|---|
-| `FlexWaveformProvider` | `src/core/backends/flex/` | Flex wire protocol → behind `FlexBackend`; keeps EB3 clean and puts the Flex-specific transport where a future backend's transport would sit |
+| `FlexWaveformProvider` | `src/core/backends/flex/` | Control plane: `waveform create/set/remove` on TCP 4992. Flex wire protocol, so EB3 permits it only here — and it is where a future backend's transport would sit. **Beside `FlexBackend`, not behind it** (§7.2) |
+| `FlexWaveformStream` | `src/core/backends/flex/` | Data plane: the UDP socket, VITA-49 framing, and the X2 conjugation. Split from the provider because the port must be bound **before** registration (R1 sends `udpport` last) |
+| `FlexWaveformTransport` | `src/core/backends/flex/` | Owns the two above and implements the codec↔transport seam (§6 decision 7). The only object `RADEV2Engine` sees |
 | `RADEV2Engine` | `src/core/` (`libaethercore`) | Worker-thread QObject; codec core with the transport-agnostic seam |
 | `RAD2` mode | `DigitalVoiceModeRegistry` | New `DigitalVoiceModeId::RadeV2` + descriptor (`radioMode "RAD2"`, `underlyingMode "DIGU"` — see §10.1; no `DIGL` variant) |
 | GUI wiring | `src/gui/` | New parallel `activateRADEV2()`; V1's `activateRADE()` untouched |
@@ -259,6 +261,43 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 > was *applied*. Any provider code that sets something and assumes it took should read it back —
 > and where read-back is impossible (as with `tx_filter`), the setting must not be exposed as
 > though it works.
+
+## 7.2 Ownership and wiring — `FlexBackend` is not modified
+
+**Decision: `FlexBackend` does not own the waveform provider, does not know RADE exists, and is
+not touched by this work at all.** It supplies nothing; the transport is handed a reply-capable
+command sink by whoever wires it up.
+
+The architectural reason is the one AetherSDR is already committed to: `IRadioBackend` is a *radio*
+abstraction, and there are now three implementors (Flex, HL2, Sim). RADE is a *codec* that happens
+to have exactly one transport today. Putting the codec's lifecycle inside a radio driver inverts
+that relationship, and the cost is paid by every backend added afterwards — each one inherits the
+question "and does this one do RADE?", which is not a question about radios.
+
+There is also a **measured** reason the obvious alternative does not work, recorded here because a
+reviewer will reasonably ask why the existing vendor-extension seam was not used:
+
+> `IRadioBackend::invokeExtension()` **cannot carry a reply body.** `FlexBackend`'s implementation
+> calls `send(cmd)` and then emits `extensionResult(requestId, QVariant(true))` — an acknowledgment
+> that the command was *dispatched*, not the radio's answer. But `waveform create` returns the six
+> stream ids **in its reply body** (§7.1 R7), and there is no other way to learn them. Routing
+> registration through `invokeExtension` would therefore require changing the semantics of a
+> shipped, cross-backend interface that HL2 and Sim also implement — a larger and entirely
+> unrelated change, to reach a place we do not want to be anyway.
+>
+> Note this is the §7.1 pattern one layer up: **`extensionResult` currently means "accepted", not
+> "applied"**, exactly as a radio reply code of 0 does. Worth fixing someday; not here.
+
+What is used instead already exists and already carries the body: `RadioConnection::ResponseCallback`
+(`void(int resultCode, const QString& body)`) and `commandResponse(seq, resultCode, body)`, with seq
+allocation and correlation living above the seam in `RadioModel`. The sink is built from those. No
+new wire path and no second socket — the in-process, single-connection result from §8 (OQ#1) holds.
+
+**The rule, stated so it is checkable:** the dependency points **one way** —
+`RADEV2Engine → FlexWaveformTransport → command sink`. No file in `src/core/backends/` may include
+a RADE header, and `FlexBackend.{h,cpp}` may not name the provider, the stream, or the transport.
+That is a grep, and EB3 already scans this tree; a guard is cheap and belongs with the Phase 2 exit
+criteria (§13).
 
 ## 8. Phase 0 evidence (hardened by coding, live FLEX-8400 fw 4.2.20.41343)
 
@@ -1240,6 +1279,13 @@ backends are RX-only; the `IRadioBackend` audio surface has no per-slice tap yet
 maintainer-gated). So we do **not** build a speculative multi-backend framework now — we keep the
 seam clean so a second transport is additive when a backend actually gains voice TX + a per-slice
 audio port.
+
+The load-bearing half of that promise is **§7.2**: `FlexBackend` is not modified and does not know
+RADE exists. This is what makes "additive" true rather than aspirational — a second transport is a
+new class beside `FlexWaveformTransport`, not an edit to a radio driver, and no existing backend
+acquires a RADE-shaped hole it has to answer for. AetherSDR went from one backend to three inside a
+year; the cost of getting this wrong compounds per backend, which is why the decision is recorded
+before the transport is written rather than after.
 
 ## 13. Testing
 
