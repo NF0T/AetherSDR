@@ -4200,6 +4200,16 @@ if(ENABLE_RADE_V2)
     target_link_libraries(flex_waveform_provider_test PRIVATE aethercore Qt6::Core Qt6::Test)
     set_target_properties(flex_waveform_provider_test PROPERTIES AUTOMOC ON)
     add_test(NAME flex_waveform_provider_test COMMAND flex_waveform_provider_test)
+
+    # RADE V2 RX ingest (RFC §7.1 X1/X2/E3). X2 is the reason this exists: the
+    # inbound I/Q is CONJUGATE, and feeding the modem A+jB mirrors the spectrum
+    # with no error, no level change and no rate change — it just never decodes.
+    add_executable(flex_waveform_stream_test tests/flex_waveform_stream_test.cpp)
+    target_include_directories(flex_waveform_stream_test PRIVATE src)
+    target_link_libraries(flex_waveform_stream_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::Test)
+    set_target_properties(flex_waveform_stream_test PROPERTIES AUTOMOC ON)
+    add_test(NAME flex_waveform_stream_test COMMAND flex_waveform_stream_test)
 endif()
 
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
