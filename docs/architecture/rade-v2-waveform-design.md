@@ -125,11 +125,13 @@ Each decision below is backed by the Phase 0 spike (§8) or by verified source a
    slice's raw modem audio to us — eliminating the mute and the split-brain by construction
    (it's a real mode). *Verified:* Phase 0 OQ#1 — a GUI-client connection can register a
    waveform in-process on its own connection (§8).
-3. **Local render for OUTPUT; waveform only for INPUT + registration.** The waveform's *return*
-   path (`rx_stream_out` → radio monitor → client) is **hard-capped at ~2.8 kHz** (§8, 1b), so
-   routing decoded speech back through it truncates RADE's wideband output — this is exactly the
-   Flex-FreeDV *container's* quality loss. We instead render the decoded speech locally at full
-   FARGAN bandwidth. Local render is therefore **required for fidelity parity, not optional.**
+3. **Local render for OUTPUT; waveform only for INPUT + registration.** Routing decoded speech
+   back out through the radio monitor doubles against our own render with no clean way to suppress
+   either copy (§9.1) — that argument is independent of any bandwidth measurement and is what
+   carries this decision. **The supporting claim that the return path is hard-capped at ~2.8 kHz
+   (§8, 1b) is currently DISPUTED — see §10.6 T1** — so local render should be read as
+   *strongly preferred on architectural grounds*, and the stronger "required for fidelity parity"
+   framing is on hold until the cap is re-measured on a stream id the radio actually honours.
    (Whether to *also* feed `rx_stream_out` for other clients is a separate, deferred question —
    it double-backs onto our own render and can't be muted away cleanly; see §9.1.)
 4. **On-client (PC-side) waveform, not on-radio Docker.** A PC-side waveform works on 6000 and
@@ -202,6 +204,10 @@ implementations; read the RFC section, not the script, for what is currently bel
   filter (`filt <idx> 0 <hi>`, accepted) up to **11000 Hz did not move the rolloff** — so the cap
   is **fixed at ~2.8 kHz and not filter-adjustable.** This is the container's quality loss, and
   it is why we render locally (decision §6.3).
+  > ⚠️ **DISPUTED — do not cite this result without reading §10.6 T1.** 1b injected on
+  > `rx_stream_out_id`, which Tier 1 measurement now shows the radio **never honours**. The audio
+  > 1b analysed therefore cannot be shown to be its own injected sweep, and the ~2.8 kHz figure is
+  > **unsupported pending re-measurement** on `rx_stream_in_id`. The rest of §8 is unaffected.
 - **Firmware** reconfirmed `4.2.20.41343` (three ways).
 
 ## 9. Data flow
@@ -644,18 +650,10 @@ reactive — unlink an inbound buffer, classify it by stream id
 > AetherSDR's own, so this is a design pattern we may reuse — it just has to be reimplemented
 > rather than linked.
 
-**5. Which stream id to emit on is genuinely unsettled — two sources disagree, and both work.**
-
-| Source | Emits on | Evidence |
-|---|---|---|
-| D-Star provider (shipped) | the **inbound** id (`0x81000004` / `0x81000005`) | `hal_listener.c:604` stamps the received id into the descriptor; nothing remaps it; the `*_out_id` fields are parsed at `digital_voice_mode_registry.c:82-83` and **never read again** |
-| Phase 0 probe 1b | `rx_stream_out_id` (`0x01000004`) | §8, 1b — the injected sweep reached the monitor |
-
-Both evidently function, which suggests the radio routes on the low bits and tolerates the
-direction bit either way. The provider must still pick one. **Cheapest resolution: a Tier 1
-no-RF check** — inject on each id in turn and see which produces monitor audio. Until then,
-prefer the *_out ids (they are what the API returns and what our own probe validated) and treat
-the D-Star behaviour as the fallback.
+**5. Which stream id to emit on — RESOLVED by Tier 1 measurement (§10.6): the INBOUND id.**
+The `*_out_id` values are **not honoured at all**. An earlier draft of this item recorded the
+question as "two sources disagree and both work"; the second half of that was wrong. See §10.6
+item T1 for the measurement and for what it means for the Phase 0 1b claim it contradicts.
 
 **6. Registration order for TX** (`digital_voice_mode_registry.c:196-220`): `waveform set <X> tx=1`
 comes **first**, then the three `tx_filter` fields, with `udpport` **last**. Note D-Star registers
@@ -679,6 +677,80 @@ cancel path, not just a happy path.
   would not survive it. → Tier 2.
 - Which stream id to emit on (item 5). → Tier 1.
 - `tx_filter` clamping for a USB-family underlying mode (item 6). → Tier 1.
+
+### 10.6 Tier 1 measurements — 2026-07-28 (FLEX-8400, fw 4.2.20.41343, no RF)
+
+The three §10.5 leftovers that need the radio but **not** a transmitter. Probe:
+`tools/flex_waveform_tier1_probe.py`. Never keys; `waveform set tx=1` and `slice set <id> tx=1`
+are capability/designation only, and both are restored on teardown.
+
+**Positive control first.** With the slice in its ordinary `USB` mode the `remote_audio_rx`
+monitor carried audio at RMS **2.7e-02**. Without this, a null result from T1 would say nothing
+about stream ids — only that the monitor path was misconfigured, which is exactly how the first
+two runs of this probe went wrong.
+
+**Incidental — §9.1's premise confirmed by measurement.** With the slice in the waveform mode and
+nothing injected, the monitor carried **exactly zero** (RMS 0.000e+00 over 376 packets). The
+waveform slice really does contribute silence to the monitor mix, as the local-render baseline
+assumes.
+
+**T1 — the radio honours the INBOUND stream id; the `*_out` ids are ignored.**
+
+| Pass | Emit on | Tone | Monitor RMS | Verdict |
+|---|---|---|---|---|
+| 1 | `rx_stream_out_id` `0x01000004` | 1200 Hz | **0.000e+00** | nothing |
+| 2 | `rx_stream_in_id` `0x81000004` | 1700 Hz | 4.20e-02 | **HONOURED** (+197 dB over median) |
+| 3 | `rx_stream_out_id` `0x01000004` | 900 Hz | **0.000e+00** | nothing |
+
+Pass 3 repeats pass 1 *after* pass 2 has proven the path live, so the null cannot be blamed on
+warm-up or on being the first injection after mode entry. **This matches the shipped D-Star
+provider exactly** (§10.5 item 5: it emits on the inbound id and never reads the `*_out` ids).
+Provider consequence: **emit on `rx_stream_in_id` / `tx_stream_in_id`.** The `*_out` ids returned
+by `waveform create` appear to be informational — do not build against them.
+
+> **This puts the Phase 0 1b claim in doubt, and with it part of §6.3's justification.**
+> §8 1b reported measuring the round-trip of a sweep *injected on `rx_stream_out_id`* — the id we
+> now measure as never honoured. If it was never accepted, the audio 1b analysed cannot have been
+> its own injected sweep, and the "flat to ~2.5 kHz, −6 dB @ ~2800 Hz, unmovable by any filter"
+> result is measuring something unidentified. What 1b actually captured is **not established** —
+> it was non-zero (an all-zero capture would have produced a flat 0 dB trace and no rolloff), so
+> it was *something*, just not demonstrably the injected signal.
+>
+> **What this does and does not change.** It does **not** overturn local render: §9.1's
+> independent argument stands (the monitor is radio-mixed, a client cannot un-mix it, so feeding
+> decoded audio back doubles against our own render with no clean suppression), and that argument
+> never depended on 1b. What it does undermine is the specific claim that the round-trip is
+> **hard-capped at ~2.8 kHz**, which is what elevated local render from *preferred* to
+> *required* in §6.3. That claim should be treated as **unsupported pending re-measurement**.
+> **Re-measurement is now cheap and is still no-RF:** repeat the 1b sweep on `rx_stream_in_id`
+> instead, using the positive control and concurrent capture from this probe.
+
+**T2 — every `tx_filter` value is accepted, and this method cannot see whether any is honoured.**
+`low_cut` = −3500, −1, 0, 300 and `high_cut` = 2400, 4800 all returned code 0, as did
+`depth=256`. So `tx_filter` does **not** reject a negative `low_cut` under a `DIGU` underlying
+mode — but per §10.2/§10.3 acceptance proves only that the command was taken.
+
+No read-back was obtainable: the `transmit` status carries per-band `rfpower`/`tunepower`/
+`inhibit` and no filter cuts, and no transmit-status line appeared at all on mode entry or on
+TX-slice designation. **T2 is therefore only half-answered** — accepted, honouring unknown. The
+`rx_filter` precedent (§10.3: honoured, but latched at registration) is suggestive and nothing
+more. Settling it needs the transmit path actually running, i.e. **Tier 2**.
+
+**T3 — `tx_stream_in` does NOT flow before PTT.** Zero packets on `0x81000005` across 6 s
+unkeyed, while `rx_stream_in` `0x81000004` delivered 1125 packets over the same window — so the
+capture path was demonstrably working. The radio does not stream microphone audio to the waveform
+until it is transmitting.
+
+Two consequences:
+
+- **It compounds §10.5 item 4.** The transmit pump is both *started* and *stopped* by the radio:
+  no packets before key, none after unkey. The EOO tail therefore cannot be flushed by simply
+  continuing to respond — the synthesized-buffer mechanism is not an optimisation, it is the only
+  way the tail gets out.
+- **It leaves §9's mic-source assumption intact but unconfirmed.** §9 sources mic audio from
+  AetherSDR's own `AudioEngine` rather than from `tx_stream_in`. Nothing here contradicts that,
+  and a stream that is silent until PTT is awkward as a primary source. Whether `tx_stream_in`
+  carries usable mic audio *while keyed* is a Tier 2 question.
 
 ## 11. Fidelity & Licensing
 
@@ -775,6 +847,10 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    round-trip, and fully investigate the multiflex case, before choosing local-only / remote-only /
    toggle. Remaining sub-item: does the waveform framework require a steady `rx_stream_out`
    (cadence/health) — if so the baseline feeds *silence* rather than nothing (Phase 2 check).
+   **Updated by §10.6:** the feed, if built, must go out on **`rx_stream_in_id`** — the `*_out`
+   ids are not honoured. And the A/B this question was waiting on is **cheaper than thought and
+   needs no codec**: the ~2.8 kHz cap is now disputed (§10.6 T1), so re-running the 1b sweep on
+   the honoured id is the immediate next measurement, not a Phase 4/5 one.
 2. **Callsign/text transport — CLARIFIED (see §9.2): not an either/or.** OTA callsign uses RADE's
    `data_symbol` channel (the only OTA path; ~25 bit/s raw BPSK, app-framed, repeated inline). The
    Flex `byte_stream` is a separate *local* channel, deferred (optional future SmartSDR/other-client
@@ -799,11 +875,14 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    order, fault taxonomy) is desk-derived from the vendored provider and needs no transmitter. Two
    consequences worth carrying: the outbound pair is **audio, so there is no TX conjugate/sideband
    convention to get wrong**, and the TX pump is **slaved to inbound `tx_stream_in`**, so V2's
-   120 ms EOO tail requires synthesized buffers or it is silently truncated. **Remaining:**
-   (a) a Tier 1 no-RF check of which stream id to emit on and of `tx_filter` clamping for a
-   USB-family underlying mode; (b) a Tier 2 dummy-load run for the amplitude/ALC-linearity
-   question — whether the radio applies speech processing that OFDM would not survive — plus
-   whether `tx_stream_in` flows before PTT.
+   120 ms EOO tail requires synthesized buffers or it is silently truncated. **Tier 1 is now DONE
+   (§10.6):** emit on the **inbound** stream id (the `*_out` ids are ignored); `tx_stream_in` does
+   **not** flow before PTT, so the pump is both started and stopped by the radio and the
+   synthesized-buffer tail flush is mandatory; `tx_filter` accepts everything including a negative
+   `low_cut`, with honouring unverifiable without transmitting. **Remaining — all Tier 2, dummy
+   load, operator-supervised:** the amplitude/ALC-linearity sweep (does the radio apply speech
+   processing OFDM would not survive), whether `tx_filter` is honoured, and whether `tx_stream_in`
+   carries usable mic audio while keyed.
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
 ## 17. References
