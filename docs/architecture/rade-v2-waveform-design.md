@@ -1183,6 +1183,26 @@ audio port.
   injected amplitude to test **power-transfer linearity**, since any ALC/compression in the path
   would wreck OFDM. Tier 2 keys the transmitter and is operator-supervised, never agent-initiated
   (the automation bridge already refuses TX-keying actions, `AutomationServer.cpp:5488`).
+- **TX spectrum via the radio's own panadapter (Phase 2/3) — the only integration check available
+  for §10.10.** §10.10 concluded the provider must band-limit in its own TX chain, because the V2
+  modulator does no shaping (§10.1) and the waveform `tx_filter` is ignored. Without a measurement,
+  "we added a filter and it presumably works" would go unverified all the way to on-air decode
+  attempts. `transmit set show_tx_in_waterfall=1` makes the radio draw its own TX, and §10.11
+  established the pan is a usable instrument: set `y_pixels=256` with an explicit
+  `min_dbm`/`max_dbm` window for **~0.37 dB quantisation**, and `bandwidth=0.020` for
+  **19.5 Hz/bin** — fine enough to resolve V2's individual carriers at 62.5 Hz spacing.
+  - **Method is a before/after, not an absolute.** Capture unshaped and shaped in the *same*
+    session with identical pan settings, toggled by a flag. Only our code changes, which cancels
+    most calibration concerns. Do not compare captures across sessions.
+  - **The baseline must be faithful.** Pure tones will not do — V2's sidelobes come from the
+    **hard symbol boundaries**, so the stand-in has to be real OFDM structure (random symbols →
+    128-point IDFT → 32-sample CP → hard concatenation at 8 kHz) and then upsampled 8 k→24 k the
+    way the provider will. That upsampling filter performs some suppression by itself, which is a
+    design detail worth measuring rather than assuming.
+  - **Scope limit, stated so it is not overclaimed:** this taps the *digital* TX chain, ahead of
+    the analog and PA stages. It shows our shaping composed with the radio's global TX filter and
+    where the occupancy lands. It does **not** show PA spectral regrowth or analog filtering, and
+    supports **no** spectral-purity or regulatory claim. That still needs an off-air receiver.
 - **`rx_stream_out` feed A/B (§9.1):** with the dev toggle on, capture the `remote_audio_rx`
   round-trip of *real decoded RADE speech* and compare — spectrally and perceptually — against the
   local render; quantify the ~2.8 kHz truncation's audibility on voice. Also characterize the
