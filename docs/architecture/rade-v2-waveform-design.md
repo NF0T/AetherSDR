@@ -708,6 +708,11 @@ provider exactly** (§10.5 item 5: it emits on the inbound id and never reads th
 Provider consequence: **emit on `rx_stream_in_id` / `tx_stream_in_id`.** The `*_out` ids returned
 by `waveform create` appear to be informational — do not build against them.
 
+**Replicated under `underlying_mode=USB`** (the mode 1b used) with identical numbers — inbound
+4.19e-02, `*_out` 0.000e+00 on both passes. So the difference from 1b is **not** the underlying
+mode. The only remaining setup difference is that 1b created its own pan+slice while this probe
+uses the auto-restored slice, which is not a plausible routing determinant.
+
 > **This puts the Phase 0 1b claim in doubt, and with it part of §6.3's justification.**
 > §8 1b reported measuring the round-trip of a sweep *injected on `rx_stream_out_id`* — the id we
 > now measure as never honoured. If it was never accepted, the audio 1b analysed cannot have been
@@ -715,6 +720,15 @@ by `waveform create` appear to be informational — do not build against them.
 > result is measuring something unidentified. What 1b actually captured is **not established** —
 > it was non-zero (an all-zero capture would have produced a flat 0 dB trace and no rolloff), so
 > it was *something*, just not demonstrably the injected signal.
+>
+> **A concrete candidate for what 1b actually measured: the slice's ordinary SSB audio.** Every
+> Tier 1 run reports slice 0 in `USB` as `filter=100/2800` — the stock SSB filter. 1b's result was
+> "flat to ~2.5 kHz, **−6 dB @ ~2800 Hz**", which is that filter's response, and its "sweeping
+> the filter did not move the rolloff" is what one would see if the `filt` commands were not
+> reaching the slice being listened to. That is a **hypothesis, not a finding** — it is not proven
+> that 1b's slice was outside the waveform mode — but the numeric coincidence is exact, and it
+> explains both halves of 1b's result at once, including the invariance that made the cap look
+> structural.
 >
 > **What this does and does not change.** It does **not** overturn local render: §9.1's
 > independent argument stands (the monitor is radio-mixed, a client cannot un-mix it, so feeding
