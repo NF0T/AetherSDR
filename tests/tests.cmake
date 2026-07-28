@@ -4212,6 +4212,14 @@ if(ENABLE_RADE_V2)
     add_test(NAME flex_waveform_stream_test COMMAND flex_waveform_stream_test)
 endif()
 
+# RFC §7.2 — the RADE V2 / radio-backend dependency points ONE way. Deliberately
+# OUTSIDE the ENABLE_RADE_V2 guard: a check that only runs when the feature is on
+# cannot catch the commit that turns the feature off and leaves the coupling.
+add_test(NAME rade_v2_backend_boundary_test
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_rade_v2_backend_boundary.cmake)
+
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
 # Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
