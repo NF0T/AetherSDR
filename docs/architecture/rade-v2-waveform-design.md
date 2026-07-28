@@ -238,6 +238,7 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | T6 | 🔇 **Band-limiting must happen in our own TX chain.** The V2 modulator does no shaping at all and `tx_filter` is ignored | unsuppressed sinc sidelobes | §10.1, §10.10 |
 | T7 | **Upper sideband is correct** — `DIGU` puts our audio above the dial | — | §10.11 |
 | T8 | `TX_FAULT` / `TIMEOUT` / `STUCK_INPUT` all → `CANCEL`; needs an explicit cancel path | no recovery | §10.5 |
+| T9 | 🔇 **The 8→24 kHz TX resampler's FIR memory holds the tail of the EOO.** Use V1's loosened `ReqTransBand=45` (~42 taps, ~5 ms) — **not** the default 2.0 (~950 taps, ~118 ms) — *and* keep the §7.1 T3 drain running long enough for the FIR to clear | far end never sees end-of-over; **nothing errors** | §7.1a below, `RADEEngine.cpp:113-118` |
 
 ### Mode identity / GUI (Phase 3)
 
@@ -261,6 +262,58 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 > was *applied*. Any provider code that sets something and assumes it took should read it back —
 > and where read-back is impossible (as with `tx_filter`), the setting must not be exposed as
 > though it works.
+
+## 7.1a T9 in full — the resampler eats the EOO, and T3 does not save it
+
+Raised by the operator during stage 6b, from V1 experience. It is a genuine gap
+in the stage 5 design, so it is written out rather than left as a table row.
+
+**What V1 found.** The 8→24 kHz TX upsampler was deliberately loosened:
+
+```cpp
+// RADEEngine.cpp:113-118
+m_up8to24 = std::make_unique<Resampler>(8000, 24000, 4096, /*ReqTransBand=*/45.0);
+// 45 (max, ~42 taps, ~5 ms FIR) instead of default 2.0 (~950 taps, ~118 ms).
+```
+
+Prong A measured that the default transition band drops `Dtmax12` below the
+detection threshold: a ~118 ms FIR cannot clear inside V1's 60 ms post-EOO
+silence, so the tail is still sitting in filter memory when transmission ends.
+
+**Why "we are pilotless" does not exempt V2.** The mechanism is FIR *latency*,
+not modulation structure. V2's EOO is a fixed precomputed waveform
+(`rade_v2_ofdm_get_eoo()`), detected at the far end by correlation against that
+known template — and a long FIR both delays and smears it. Nothing about
+carrying or not carrying pilots changes how much signal is stranded in a filter.
+
+**What genuinely does change, and it cuts both ways:**
+
+- *Better:* V2's EOO is **960 samples = 120.0 ms** of actual signal (measured,
+  `rade_v2_codec_test`), against V1's 60 ms silence window — roughly double the
+  time for a filter to clear.
+- *Worse:* **§7.1 T3's drain does not fix this, and could mask it.** T3 keeps
+  the *pump* alive after the radio stops asking. It says nothing about samples
+  stranded in our own resampler, which are a separate loss on a separate path.
+  A tail can be perfectly clocked out and still arrive truncated.
+- *Under our control now:* V1 was bounded by a fixed 60 ms silence. We decide
+  when the drain ends, so the deadline is ours to set rather than the codec's.
+
+**Required, therefore:**
+
+1. Carry `ReqTransBand=45.0` onto the V2 TX chain. Cheap, proven, and V2's
+   1000–1937.5 Hz occupancy is *narrower* than V1's 750–2200 Hz, so the wider
+   transition band is at least as safe.
+2. Size the T3 drain as **EOO + FIR latency**, not EOO alone.
+3. `Resampler` has **no `flush()` method at all** — verified, not assumed — so
+   the tail cannot currently be pushed out even deliberately. Adding one is the
+   correct long-term fix (see the standing `research_rade_resampler_flush`
+   finding); until then, over-running the drain is what substitutes for it.
+
+**Why this is 🔇.** Every failure here is silent. The modem transmits, power is
+normal, the panadapter looks right, our own stats show the tail emitted — and
+the far end simply never registers end-of-over. Exactly the shape of §7.1 T3
+itself, one layer further down, which is why a T3 test can pass while T9 is
+broken.
 
 ## 7.2 Ownership and wiring — `FlexBackend` is not modified
 
