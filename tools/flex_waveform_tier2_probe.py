@@ -376,6 +376,7 @@ class TxSession:
         self.meters = meters
         self.armed = armed
         self.slice_id = slice_id
+        self.fallback_mode = WF_MODE   # if the fresh read comes back empty
         self.first_tx = None
         self.last_id = None
         self.keyed_total = 0.0
@@ -425,7 +426,11 @@ class TxSession:
             print("  [ID] (not armed — would send CW ID here)")
             return
         r = self.r
-        prev = r.fields(f"slice {self.slice_id} ").get("mode")
+        # Fresh read: the accumulated buffer gets cleared elsewhere, and a None
+        # here previously meant the slice was left in CW after a mid-run auto-ID
+        # (harmless at teardown, which sets the mode explicitly, but wrong for
+        # the auto-ID path that has to hand the slice back mid-test).
+        prev = fresh_slice(r, self.slice_id).get("mode") or self.fallback_mode
         if prev and prev != "CW":
             r.cmd(f"slice set {self.slice_id} mode=CW")
             r.pump(0.8)
@@ -483,6 +488,13 @@ class _Keyed:
             raise RuntimeError(f"xmit 1 rejected ({code})")
         if self.s.first_tx is None:
             self.s.first_tx = time.time()
+            # Start the regulatory clock at the FIRST transmission. Leaving
+            # last_id as None made maybe_id() fall straight through to an ID on
+            # the second key, since `last_id and elapsed < interval` is False
+            # when last_id is None. §97.119 requires an ID within 10 minutes of
+            # the first transmission, which is exactly this.
+            if self.s.last_id is None:
+                self.s.last_id = self.s.first_tx
         if not self.s.wait_state("TRANSMITTING", timeout=3.0):
             self.s.r.cmd("xmit 0")
             self._done.set()
@@ -530,7 +542,19 @@ def test_a_and_d(sess, meters, sender, fwd_id, tx_in_id, tx_out_id):
                 n = meters.audio_pkts.get(tx_in_id, 0)
                 pk_in = meters.audio_rms.get(tx_in_id, 0.0)
                 print(f"  tx_stream_in 0x{tx_in_id:08X}: {n} pkts, peak {pk_in:.4f}")
-                print("  -> " + ("FLOWS while keyed" if n else "silent even keyed"))
+                # "flows" and "carries audio" are different claims. Tier 1 saw 0
+                # packets unkeyed; packets here confirm the stream is PTT-gated.
+                # A zero peak with mic_selection=PC and no PC audio present is
+                # expected and must not be reported as carrying mic audio.
+                if not n:
+                    print("  -> stream does NOT flow even while keyed")
+                elif pk_in < 1e-6:
+                    print("  -> stream FLOWS while keyed but is SILENT (peak 0).")
+                    print("     PTT-gated, confirming Tier 1's unkeyed result. Whether")
+                    print("     it carries usable mic audio is UNPROVEN — needs a live")
+                    print("     source on the selected mic input.")
+                else:
+                    print("  -> FLOWS and CARRIES AUDIO while keyed")
                 return sid
         else:
             print(f"  emit on {label}: no FWDPWR samples")
@@ -538,7 +562,7 @@ def test_a_and_d(sess, meters, sender, fwd_id, tx_in_id, tx_out_id):
     return None
 
 
-def test_b(sess, meters, sender, fwd_id, comp_ids):
+def test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids=None):
     print("\n=== B: ALC / compression linearity  [the one that matters] ===")
     print("  linear path => +6 dB power per doubling of amplitude")
     rows = []
@@ -553,26 +577,81 @@ def test_b(sess, meters, sender, fwd_id, comp_ids):
             comp = []
             for cid in (comp_ids or []):
                 comp += meters.sample(cid, secs=0.25)
+            # ALC is a SEPARATE meter from COMPPEAK. A previous run reported a
+            # non-linear transfer while COMPPEAK sat at 0.0, which says nothing
+            # about ALC — the likelier limiter of the two.
+            alc = []
+            for aid in (alc_ids or []):
+                alc += meters.sample(aid, secs=0.2)
             sender.enabled = False
         if not fwd:
             print(f"  amp={amp:.2f}: no samples")
             continue
         dbm = float(np.median(fwd))
-        rows.append((amp, dbm, dbm_to_w(dbm), max(comp) if comp else None))
+        rows.append((amp, dbm, dbm_to_w(dbm),
+                     max(comp) if comp else None,
+                     max(alc) if alc else None))
 
     if len(rows) < 2:
         return
-    print(f"\n  {'amp':>6} {'dBm':>8} {'watts':>8} {'Δ vs ideal':>11} {'COMPPEAK':>9}")
-    a0, d0, _, _ = rows[0]
-    for amp, dbm, w, comp in rows:
+    print(f"\n  {'amp':>6} {'dBm':>8} {'watts':>8} {'vs ideal':>11} "
+          f"{'COMPPEAK':>9} {'ALC':>7}")
+    a0, d0 = rows[0][0], rows[0][1]
+    for amp, dbm, w, comp, alcv in rows:
         ideal = d0 + 20.0 * math.log10(amp / a0)
         c = f"{comp:.1f}" if comp is not None else "n/a"
-        print(f"  {amp:6.2f} {dbm:8.1f} {w:8.3f} {dbm-ideal:+11.1f} {c:>9}")
-    dev = max(abs(dbm - (d0 + 20 * math.log10(amp / a0))) for amp, dbm, _, _ in rows)
-    print(f"\n  worst deviation from a linear transfer: {dev:.1f} dB")
-    print("  -> " + ("LINEAR — no compression in the path (OFDM-safe)" if dev < 2.0
-                     else "NON-LINEAR — something is compressing; OFDM will suffer"))
-    comps = [c for _, _, _, c in rows if c is not None]
+        al = f"{alcv:.1f}" if alcv is not None else "n/a"
+        print(f"  {amp:6.2f} {dbm:8.1f} {w:8.3f} {dbm-ideal:+11.1f} {c:>9} {al:>7}")
+    # Judge linearity on STEP-TO-STEP gain, and anchor to the TOP of the sweep.
+    #
+    # The first version anchored to rows[0] -- the lowest drive, and therefore
+    # the noisiest point -- and reported "NON-LINEAR, something is compressing"
+    # from a 12 dB deviation. That was backwards. Compression flattens the TOP
+    # of a transfer curve; what this radio shows is a floored BOTTOM, because
+    # the forward-power meter cannot resolve a few milliwatts. Anchoring to the
+    # noise floor projected that floor across the whole curve.
+    print("\n  step-to-step gain (no anchor assumption):")
+    print(f"  {'step':>12} {'expected':>9} {'observed':>9} {'error':>7}")
+    steps = []
+    for (a1, d1, *_), (a2, d2, *_) in zip(rows, rows[1:]):
+        exp = 20.0 * math.log10(a2 / a1)
+        obs = d2 - d1
+        steps.append((a1, a2, exp, obs))
+        print(f"  {a1:.2f}->{a2:.2f} {exp:+9.2f} {obs:+9.2f} {obs-exp:+7.2f}")
+
+    good = [s for s in steps if abs(s[3] - s[2]) < 1.0]
+    floor_dbm = None
+    if good:
+        lowest_good = min(s[0] for s in good)
+        below = [d for a, d, *_ in rows if a < lowest_good]
+        if below:
+            floor_dbm = max(below)
+            print(f"\n  meter floor: readings below amp {lowest_good:.2f} sit at "
+                  f"~{floor_dbm:.1f} dBm ({dbm_to_w(floor_dbm)*1000:.0f} mW) and stop "
+                  f"tracking drive.\n  Those points measure the INSTRUMENT, not the "
+                  f"transmitter, and are excluded.")
+        top = [s for s in steps if s[0] >= lowest_good]
+        worst = max(abs(o - e) for _, _, e, o in top) if top else 0.0
+        print(f"\n  worst step error above amp {lowest_good:.2f}: {worst:.2f} dB")
+        # Compression shows up as the LAST steps falling short. Test that.
+        tail = steps[-2:]
+        sag = max((e - o) for _, _, e, o in tail) if tail else 0.0
+        print(f"  top-end sag (compression signature): {sag:+.2f} dB")
+        if worst < 1.0 and sag < 1.0:
+            print("  -> LINEAR over the usable range — no ALC, no compression. "
+                  "OFDM-safe.")
+        elif sag >= 1.0:
+            print("  -> TOP-END COMPRESSION — the transfer flattens at high drive; "
+                  "OFDM will suffer.")
+        else:
+            print("  -> irregular transfer; inspect the table before trusting it.")
+    else:
+        print("\n  -> no linear region found; the sweep may sit entirely in the "
+              "meter's noise floor. Raise drive or power and repeat.")
+    alcs = [r[4] for r in rows if r[4] is not None]
+    if alcs:
+        print(f"  ALC max {max(alcs):.1f} dBFS")
+    comps = [r[3] for r in rows if r[3] is not None]
     if comps:
         print(f"  COMPPEAK max {max(comps):.1f} dB -> "
               + ("no speech processing" if max(comps) < 1.0 else "PROCESSING ACTIVE"))
@@ -664,6 +743,16 @@ NOT RUN — these need an off-air monitor receiver, and no telemetry substitutes
 
 
 def main():
+    # Windows consoles default to cp1252, which raises UnicodeEncodeError on the
+    # box-drawing and Greek characters used in the reports. That crash landed
+    # AFTER test B had already keyed the transmitter seven times, discarding a
+    # full sweep of hard-won data. Never let formatting cost RF time again.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", action="store_true",
                     help="actually key the transmitter (default: pre-flight only)")
@@ -845,7 +934,7 @@ def main():
             if used:
                 sender.stream_id = used
         if "B" in args.tests:
-            test_b(sess, meters, sender, fwd_id, comp_ids)
+            test_b(sess, meters, sender, fwd_id, comp_ids, alc_ids)
         if "C" in args.tests:
             test_c(sess, meters, sender, fwd_id, register, sid)
         if "E" in args.tests:
