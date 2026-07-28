@@ -951,6 +951,69 @@ numbers (including a −1500 ms "latency"). Probes now select via `Flex.my_slice
 slice. **Any probe in this series that picks a slice positionally is suspect whenever a second
 client is connected.**
 
+### 10.9 Tier 2 — live TX measurements, 2026-07-28 (FLEX-8400, 50.340 MHz, 1 W)
+
+First transmissions of this project. Probe: `tools/flex_waveform_tier2_probe.py`, run with
+`--arm`; ~76 s keyed total in bursts under 5 s, into a 6 m antenna at an indicated 1 W, operator
+supervising remotely with AetherSDR plus an external LP-100A, station identified in CW each
+session. Everything below is from the radio's own telemetry — no monitor receiver was available.
+
+**A — the waveform TX path works, and emits on the INBOUND stream id.** Keying with audio on
+`tx_stream_in_id` (`0x81000005`) produced RF; the interlock reported `TRANSMITTING` and forward
+power tracked drive. This matches §10.6's RX result and the shipped D-Star provider: **the `*_out`
+ids are not used in either direction.**
+
+**B — THE TX PATH IS LINEAR. No ALC, no compression. RADE V2's OFDM survives it.**
+Single 1500 Hz tone, drive swept 0.05 → 1.00:
+
+| step | expected | observed | | | amp | fwd dBm | watts |
+|---|---|---|---|---|---|---|---|
+| 0.05→0.10 | +6.02 | +0.50 | | | 0.05 | 11.3 | 0.013 |
+| 0.10→0.20 | +6.02 | +1.70 | | | 0.20 | 13.5 | 0.022 |
+| 0.20→0.35 | +4.86 | +2.90 | | | 0.35 | 16.4 | 0.044 |
+| **0.35→0.50** | **+3.10** | **+2.70** | | | 0.50 | 19.1 | 0.081 |
+| **0.50→0.70** | **+2.92** | **+2.90** | | | 0.70 | 22.0 | 0.160 |
+| **0.70→1.00** | **+3.10** | **+3.40** | | | 1.00 | 25.4 | 0.345 |
+
+Above drive 0.35 the transfer is linear to within **0.4 dB**, with **ALC pinned at −150.0 dBFS**
+and **COMPPEAK at 0.0** at every point. The soft bottom is the **forward-power meter's floor** at
+~11 dBm (13 mW) — a 100 W-capable coupler cannot resolve milliwatts — so those points measure the
+instrument, not the transmitter. Headroom is ample: drive 1.0 gave 0.345 W against a 1 W setting.
+
+> **The probe's own automatic verdict said "NON-LINEAR — something is compressing", and it was
+> wrong.** It anchored the ideal line to the lowest-drive point, the noisiest one, and projected
+> that error across the sweep. Compression flattens the *top* of a transfer curve; this curve has
+> a floored *bottom*. The analysis now judges step-to-step gain, excludes the detected meter
+> floor, and tests the top end specifically for the sag that compression actually produces.
+
+> **Caveat — antenna mismatch (operator-raised).** These runs were into a mismatched antenna
+> (2.4:1 on the LP-100A, 3:1 indicated) with the internal ATU **bypassed**. Rising SWR can trigger
+> drive foldback that would masquerade as compression. It does not explain this data: foldback's
+> signature is top-end sag, and the last step *over*-performed (+3.40 vs +3.10 expected) with no
+> sag anywhere. Note also that `FWDPWR` is **forward** power, not delivered power, so the absolute
+> watts above are not radiated watts — which does not affect the linearity conclusion. The probe
+> now records SWR and REFPWR per step so this is visible in the data rather than reconstructed
+> afterwards. **A confirmatory sweep with the ATU engaged is still worth doing.**
+
+**D — `tx_stream_in` is PTT-gated, and was silent.** 441 packets while keyed against **zero**
+unkeyed in §10.6 T3 — so the stream is confirmed gated by transmit. Peak sample was 0.0000, with
+`mic_selection=PC` and no PC audio present, so it *flows* but carried silence. Whether it can
+carry usable mic audio is **still unproven** and needs a live source on the selected input.
+
+**E — the radio HOLDS TX through an underrun.** Cutting the stream for 1.5 s while keyed left the
+interlock in `TRANSMITTING`; forward power sagged 22.0 → 15.3 dBm and recovered fully on resume.
+The carrier is not dropped. Favourable for the EOO tail — but it does **not** weaken §10.5 item 4:
+the tail still has to be *fed* to be emitted, and holding PTT alone emits nothing.
+
+**C — not run.** The budgeted keyed time was spent (partly to a crash that lost a completed sweep,
+see the probe's method notes). Given §10.1 now establishes `tx_filter` as the *only* suppression
+for V2's unshaped sidelobes, this deserves an unhurried run rather than a truncated one.
+
+**Still deferred to an off-air receiver**, with no telemetry substitute: transmitted spectrum,
+**sideband sense** (§10.5's stereo-not-I/Q inference remains unverified on air, and no power meter
+can see an inverted sideband — the single most important open item), IMD under real OFDM
+peak-to-average, and EVM.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -1090,10 +1153,16 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    (§10.6):** emit on the **inbound** stream id (the `*_out` ids are ignored); `tx_stream_in` does
    **not** flow before PTT, so the pump is both started and stopped by the radio and the
    synthesized-buffer tail flush is mandatory; `tx_filter` accepts everything including a negative
-   `low_cut`, with honouring unverifiable without transmitting. **Remaining — all Tier 2, dummy
-   load, operator-supervised:** the amplitude/ALC-linearity sweep (does the radio apply speech
-   processing OFDM would not survive), whether `tx_filter` is honoured, and whether `tx_stream_in`
-   carries usable mic audio while keyed.
+   `low_cut`, with honouring unverifiable without transmitting. **Tier 2 is now largely DONE
+   (§10.9), on air at 1 W:** the TX path keys and emits on the **inbound** stream id; the power
+   transfer is **linear to 0.4 dB with ALC and COMPPEAK at zero**, so RADE V2's OFDM passes
+   through intact — the question that could have forced a redesign is answered favourably; the
+   radio **holds TX through an underrun** rather than dropping the carrier; and `tx_stream_in` is
+   confirmed PTT-gated but carried silence with no mic source connected.
+   **Remaining:** (a) test C — is `tx_filter` honoured — which §10.1 makes *more* important, since
+   the V2 modulator does no shaping and that filter is the only sidelobe suppression;
+   (b) a confirmatory linearity sweep with the ATU engaged, to retire the mismatch caveat;
+   (c) everything needing an off-air receiver, above all **sideband sense**.
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
 
 ## 17. References
