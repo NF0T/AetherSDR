@@ -245,7 +245,7 @@ the emit path stops too, and the EOO tail is dropped no matter what PTT is doing
 synthesize buffers to flush the tail, the way the D-Star path already does for its own tail. Any TX
 design that treats "hold PTT ~120 ms" as the whole fix is wrong.
 
-### 9.1 RX audio output — REOPENED 2026-07-28 (the fidelity argument was refuted)
+### 9.1 RX audio output — DECIDED 2026-07-28: the waveform RETURN PATH (option B)
 
 > **Read this first.** Everything below the rule was written when the return path was believed
 > hard-capped at ~2.8 kHz. **§10.7 measured it flat to at least 8 kHz**, so the fidelity argument
@@ -268,7 +268,7 @@ design that treats "hold PTT ~120 ms" as the whole fix is wrong.
 > below actually rules out, and `audio_mute` cannot fix it (global, and it would silence the very
 > clients being fed).
 >
-> **Recommendation: B**, subject to the operator's call. Latency came in at ~22 ms (§10.8), which
+> **DECIDED: B**, by the operator, 2026-07-28. Latency came in at ~22 ms (§10.8), which
 > is negligible beside RADE's own framing and codec delay, and fidelity is equal. The decisive
 > argument is not either of those, though — it is §2:
 >
@@ -281,7 +281,9 @@ design that treats "hold PTT ~120 ms" as the whole fix is wrong.
 > every other mode's — the operator's slice volume and mute simply work, and other clients hear
 > the slice for free.
 >
-> **What would change the recommendation:** SmartLink operation being materially worse under Opus,
+> **Revisit trigger, as the operator stated it:** if on-air testing with the real waveform shows
+> audible quality problems, this reopens. Also worth watching: SmartLink operation being
+> materially worse under Opus,
 > or a use case where AetherSDR must produce RADE audio while the radio's monitor path is
 > unavailable. Note the 22 ms was measured **remote over a WireGuard VPN**, not on a bench — the
 > radio classifies that link as LAN, so it is uncompressed, and an on-site operator sees ~16 ms
@@ -1245,18 +1247,20 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
 
 ## 16. Open questions
 
-1. **RX audio output — REOPENED, and the premise it rested on was WRONG (see §9.1, §10.7).**
+1. **RX audio output — CLOSED 2026-07-28: option B, the waveform return path** (see §9.1, §6.3).
+   The premise this question originally rested on was wrong:
    The ~2.8 kHz cap does not exist; the return path is flat to at least 8 kHz and is not shaped by
    the registered `rx_filter`. So this is no longer "local render, with an optional degraded feed
    for other clients" — it is a straight choice between **A: local render only** and **B: return
    path only**, at equal fidelity. A+B together remains rejected (double-back, now measured).
    **Latency is now measured: ~22 ms remote over a WireGuard VPN, ~16 ms of which is the radio
    itself, so ~16 ms on-site (§10.8)** — negligible beside RADE's own framing and codec delay, and
-   measured under realistic remote conditions rather than on a bench. With fidelity equal and latency small, **the recommendation is B** (§9.1), on the
-   §2 grounds that option A *is* the "parallel audio side-channel" this design set out to remove.
-   **Still open before it is settled:** SmartLink behaviour under Opus (a VPN link is classified
-   LAN and stays uncompressed), and whether any use case needs RADE audio while the radio's
-   monitor path is unavailable. Operator's call.
+   measured under realistic remote conditions rather than on a bench. With fidelity equal and
+   latency small, **the decision went to B** (§9.1, §6.3), on the §2 grounds that option A *is*
+   the "parallel audio side-channel" this design set out to remove.
+   **Revisit trigger:** audible quality problems during on-air testing with the real codec.
+   Unmeasured and worth watching: SmartLink under Opus (a VPN link is classified LAN and stays
+   uncompressed), and whether any use case needs RADE audio while the monitor path is unavailable.
    *Superseded sub-question, retained for history:*
    Current expectation: **local-render-only** (baseline). Feeding real audio for other clients
    double-backs onto us (radio-mixed monitor can't be un-mixed) and the only fix (global
