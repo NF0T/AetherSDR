@@ -10,6 +10,7 @@
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
+#include "ModeFamily.h"
 #include "InteractionSettings.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -276,7 +277,7 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
     if (mode == "USB" || mode == "LSB")  return ssbSettings;
     if (mode == "AM"  || mode == "SAM")  return amSettings;
     if (isCwMode(mode))                  return cwSettings;
-    if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return digSettings;
+    if (ModeFamily::isDigital(mode))     return digSettings;
     if (mode == "RTTY")                  return rttySettings;
     if (mode == "FM" || mode == "NFM" || mode == "DFM") return fmSettings;
     if (mode.startsWith("FDV"))          return digSettings;  // FreeDV digital voice
@@ -2878,7 +2879,9 @@ void RxApplet::applyFilterPreset(int widthHz)
     int lo, hi;
     const QString& mode = m_slice->mode();
 
-    if (mode == "DIGU") {
+    if (ModeFamily::usesDiguOffsetPresets(mode)) {
+        // §10.4 G3 — RAD2 must land here. Falling through to the `else` below
+        // yields lo=95, hi=width, which clips the top half of the modem.
         if (widthHz < 3000) {
             int offset = m_slice->diguOffset();
             lo = offset - widthHz / 2;
@@ -3045,7 +3048,7 @@ bool RxApplet::squelchAvailableInMode(const QString& mode) const
     const bool allModeSquelch = m_radioModel && m_radioModel->isConnected()
         && m_radioModel->backendCapabilities().hasModeIndependentSquelch
         && !(m_slice && m_slice->externalReceiveReplacementActive());
-    return allModeSquelch || !(mode == "DIGU" || mode == "DIGL" || mode == "NT"
+    return allModeSquelch || !(ModeFamily::isDigital(mode)
                               || mode == "RTTY" || isCwMode(mode));
 }
 
@@ -3123,7 +3126,7 @@ void RxApplet::updateModeSettings(const QString& mode)
         // or the unpaired flag would fabricate a restore on the next mode change
         // (and most visibly across profile-load slice teardown — #3263).
         if ((m_slice->receiveSquelchOn() || m_sqlMode == SqlMode::Auto)
-            && (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY")) {
+            && (ModeFamily::isDigital(mode) || mode == "RTTY")) {
             m_savedSquelchOn = true;
             m_slice->setSquelch(false, m_slice->receiveSquelchLevel());
             setSqlMode(SqlMode::Off, /*propagateToRadio=*/false);

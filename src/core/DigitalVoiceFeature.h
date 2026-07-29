@@ -24,9 +24,15 @@ inline QStringList filterUnavailableDigitalVoiceModes(QStringList modes)
     modes = filteredModes;
 
     if constexpr (!kLocalDigitalVoiceWaveformAvailable) {
+        // Only the modes that actually NEED the helper. The test used to be
+        // "is it a digital-voice mode", which was the same thing while D-STAR
+        // was the only one — and would silently strip RAD2, whose codec is
+        // in-process, out of every mode list on a build without the helper.
         for (const DigitalVoiceModeDescriptor& mode
              : DigitalVoiceModeRegistry::supportedModes()) {
-            modes.removeAll(mode.radioMode);
+            if (mode.requiresLocalHelper) {
+                modes.removeAll(mode.radioMode);
+            }
         }
     }
     return modes;
