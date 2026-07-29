@@ -212,7 +212,7 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | # | Constraint | If violated | Evidence |
 |---|---|---|---|
 | X1 | `rx_stream_in` is **24 kHz Complex-float32, big-endian, 128 samples/packet** | — | §8, §10.3 |
-| X2 | 🔇 **Inbound is CONJUGATE I/Q — negate the imaginary component** (`A − jB`) | feeding `A + jB` **mirrors the spectrum and never decodes** | §10.3 |
+| X2 | 🔇 **Inbound is CONJUGATE I/Q — negate the imaginary component** (`A − jB`) | audio never decodes — but the receiver **still acquires and reports SYNC**; only the SNR estimate tells you (§7.1b) | §10.3, §7.1b |
 | X3 | Discard the ~1 s startup burst before measuring rate (it reads ~28 kHz) | wrong rate | §10.3 |
 | X4 | **No muting.** `audio_mute=0` with the slice in the waveform mode | — | §10.3 |
 | X5 | A waveform-mode slice contributes **exactly zero** to the monitor until we feed it | — | §10.6 |
@@ -338,6 +338,51 @@ normal, the panadapter looks right, our own stats show the tail emitted — and
 the far end simply never registers end-of-over. Exactly the shape of §7.1 T3
 itself, one layer further down, which is why a T3 test can pass while T9 is
 broken.
+
+## 7.1b X2 in full — a conjugation error does not look like one
+
+Measured during stage 6b on the bench (`rade_v2_engine_test`), by pushing the same
+`rade_tx()`-generated signal through `RADEV2Engine` three ways. No RF; a clean, noise-free
+analytic signal upsampled 8→24 kHz exactly as the radio delivers it.
+
+| Input to the engine | acquires? | feature frames | SNR estimate |
+|---|---|---|---|
+| `A − jB` — correct (§10.3 item 5) | yes | 128 | **+24.0 dB** |
+| `A + jB` — conjugated | **yes** | **165** | **−4.7 dB** |
+| `A + j0` — imaginary discarded | yes | 128 | +23.7 dB |
+
+**Three corrections to how X2 was written, none of them to the constraint itself.**
+
+**1. Sync is not a check on sideband sense.** X2 said the mirrored spectrum "never decodes",
+which is true of the *audio* and false of everything an operator can see. The receiver acquires
+on conjugated input and stays acquired — and produces *more* feature frames than correct input,
+not fewer. The mechanism is structural, not a fluke: V2 acquires on the **cyclic-prefix
+autocorrelation** (`rade_rx_v2.c:374`, `compute_autocorr` → `detect_signal`), whose detector is
+magnitude-based. Conjugating the input conjugates `Ry` and leaves `|Ry|` untouched; only the
+frequency-offset estimate flips sign, and the tracker absorbs that.
+
+> **Debugging consequence.** RAD2 silent, SYNC lit, frames counting up — that is *exactly* what
+> a sideband error looks like. Anyone who reasons "the modem is synced, so the front end is
+> fine" will look in the wrong half of the system. **The SNR estimate is the tell**, and it is a
+> ~29 dB tell. Any RAD2 diagnostic surface should show SNR next to sync, not sync alone.
+
+**2. The failure is the WRONG sign, not the absence of a sign.** Discarding the imaginary
+component entirely costs 0.3 dB here, while getting it backwards costs ~29 dB. Real-only input
+puts equal energy in both images and the receiver's own processing copes; conjugated input puts
+*all* of it in the wrong one. So "we must use I/Q" is a weaker claim than X2 implies — what is
+load-bearing is not inverting it.
+
+> The 0.3 dB is a **noise-free bench figure and should not be read as the on-air cost** of
+> dropping Q. Image rejection buys nothing when there is no interference to reject; under noise,
+> an adjacent signal, or QRM in the mirrored band the gap should widen. We use both components
+> because the radio hands them to us already separated (§10.3 item 5) — there is no work to save
+> by throwing one away.
+
+**3. It follows that this cannot be guarded by asserting sync.** `rade_v2_engine_test` compares
+the correct and conjugated inputs in one test and requires a ≥15 dB separation, which fails if
+the imaginary component is ever dropped or its sign inverted. Mutation-checked both ways: with
+`q = 0` forced in the RX chain the two inputs score identically (23.7 dB each) and the test
+fails, while every other test in the file still passes.
 
 ## 7.2 Ownership and wiring — `FlexBackend` is not modified
 
@@ -1403,6 +1448,22 @@ before the transport is written rather than after.
   and **mutation-checked**: flipping either sign in production fails the matching test and nothing
   else. `outboundRoundTripsThroughRxDecode` states the asymmetry as a property rather than as two
   independent assertions, so the pair cannot drift into agreement.
+- **The codec-core guards — LANDED (`rade_v2_engine_test`), all five mutation-checked.** The
+  engine's silent failures are the T9 pair plus one the design did not anticipate:
+  - *T9 (1)* the TX upsampler's transition band — mutated to the default, the queued tail grows
+    from 3087 to over 10 000 samples and the test fails on the upper bound.
+  - *T9 (2)* the missing `flush()` — mutated out, the tail is *exactly* the EOO (2880 samples)
+    and fails the lower bound. Note both bounds are expressed against
+    `Resampler::latencySamples()`, not constants, so the test states its reason.
+  - *T9 (3)* completion announced on generation rather than emission — mutated, PTT would drop
+    with the EOO still queued.
+  - **`flush()` is terminal, so `beginTx()` must `reset()`.** Not in the original T9 write-up.
+    Mutated out, the FIRST over transmits perfectly and every one after it is silent — so every
+    single-transmission test in the file still passes, and only `aSecondOverStillTransmits`
+    catches it. Worth naming as a shape: a resource that is correct to refuse reuse turns a
+    missing reset into a second-occurrence bug.
+  - *X2* the I/Q sign, guarded by SNR separation rather than by sync — see §7.1b for why sync
+    cannot do the job.
 - **§7.2 backend-boundary guard — LANDED (`rade_v2_backend_boundary_test`).** Nothing under
   `src/core/backends/` may reference RADE **in code**, and `FlexBackend` may not name the provider,
   the stream or the transport. Deliberately **not** gated on `ENABLE_RADE_V2`: a check that runs
