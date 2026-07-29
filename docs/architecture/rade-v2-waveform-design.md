@@ -238,7 +238,7 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | T6 | 🔇 **Band-limiting must happen in our own TX chain.** The V2 modulator does no shaping at all and `tx_filter` is ignored | unsuppressed sinc sidelobes | §10.1, §10.10 |
 | T7 | **Upper sideband is correct** — `DIGU` puts our audio above the dial | — | §10.11 |
 | T8 | `TX_FAULT` / `TIMEOUT` / `STUCK_INPUT` all → `CANCEL`; needs an explicit cancel path | no recovery | §10.5 |
-| T9 | 🔇 **The 8→24 kHz TX resampler's FIR memory holds the tail of the EOO.** Use V1's loosened `ReqTransBand=45` (~42 taps, ~5 ms) — **not** the default 2.0 (~950 taps, ~118 ms) — *and* keep the §7.1 T3 drain running long enough for the FIR to clear | far end never sees end-of-over; **nothing errors** | §7.1a below, `RADEEngine.cpp:113-118` |
+| T9 | 🔇 **The 8→24 kHz TX resampler's FIR memory holds the tail of the EOO.** Use `ReqTransBand=45` (**8.6 ms** measured) — **not** the default (**297 ms** measured) — *and* `flush()` the resampler at end of over, *and* keep the §7.1 T3 drain running at least `latencySamples()` longer | far end never sees end-of-over; **nothing errors** | §7.1a below, `resampler_flush_test` |
 
 ### Mode identity / GUI (Phase 3)
 
@@ -277,8 +277,20 @@ m_up8to24 = std::make_unique<Resampler>(8000, 24000, 4096, /*ReqTransBand=*/45.0
 ```
 
 Prong A measured that the default transition band drops `Dtmax12` below the
-detection threshold: a ~118 ms FIR cannot clear inside V1's 60 ms post-EOO
-silence, so the tail is still sitting in filter memory when transmission ends.
+detection threshold: the FIR cannot clear inside V1's 60 ms post-EOO silence,
+so the tail is still sitting in filter memory when transmission ends.
+
+**The comment's own numbers are optimistic.** Measured directly through the new
+`Resampler::latencySamples()` (`resampler_flush_test`):
+
+| 8000 → 24000 | latency (input samples) | |
+|---|---|---|
+| default band | **2376** | **297.0 ms** — not the ~118 ms estimated |
+| `ReqTransBand=45` | **69** | **8.6 ms** |
+
+A 297 ms filter against a **120 ms** EOO smears it across nearly three times its
+own duration. So the loosened band is not a tuning preference, it is the
+difference between a detectable end-of-over and a legend about one.
 
 **Why "we are pilotless" does not exempt V2.** The mechanism is FIR *latency*,
 not modulation structure. V2's EOO is a fixed precomputed waveform
@@ -303,11 +315,23 @@ carrying or not carrying pilots changes how much signal is stranded in a filter.
 1. Carry `ReqTransBand=45.0` onto the V2 TX chain. Cheap, proven, and V2's
    1000–1937.5 Hz occupancy is *narrower* than V1's 750–2200 Hz, so the wider
    transition band is at least as safe.
-2. Size the T3 drain as **EOO + FIR latency**, not EOO alone.
-3. `Resampler` has **no `flush()` method at all** — verified, not assumed — so
-   the tail cannot currently be pushed out even deliberately. Adding one is the
-   correct long-term fix (see the standing `research_rade_resampler_flush`
-   finding); until then, over-running the drain is what substitutes for it.
+2. **`flush()` the TX resampler at end of over.** This did not exist when T9 was
+   first written — `Resampler` had a `prewarm()` for the head of a stream and
+   nothing for the tail — and has since been added (`b7c22034`,
+   `resampler_flush_test`). It pushes `latencySamples()` zeros through so the
+   signal still in flight is carried out ahead of them, and it recovers 7128
+   samples that `process()` alone never emits for a 400-sample burst.
+   > `flush()` is **terminal**: afterwards the filter holds zeros, so
+   > `process()` refuses and warns until `reset()`. That is deliberate — audio
+   > spliced behind silence would be audible, wrong, and unexplained anywhere.
+3. Size the T3 drain as **EOO + `latencySamples()`**, not EOO alone. The number
+   no longer has to be guessed or padded: ask the resampler.
+
+> **`flush()` makes the loss recoverable; it does not make the long filter
+> advisable.** Both are required. With the default band the EOO is still
+> smeared across 297 ms of filter response before any of it can be flushed out,
+> and correlation detection cares about the shape, not merely the presence, of
+> the tail.
 
 **Why this is 🔇.** Every failure here is silent. The modem transmits, power is
 normal, the panadapter looks right, our own stats show the tail emitted — and
@@ -1365,6 +1389,13 @@ before the transport is written rather than after.
   the provider sets `rx_filter` *before* mode entry, and that the imaginary component of
   `rx_stream_in` is negated before reaching the codec. Both are silent-wrong-answer failures,
   not crashes.
+- **The T9 tail guard — LANDED (`resampler_flush_test`).** Asserts `flush()` recovers signal that
+  `process()` alone strands, by running two identical resamplers — one flushed, one not — so the
+  method cannot pass by being decorative. Also pins the latency figures the T3 drain is sized on.
+  > Its first version checked total output *length* and **passed trivially** (8327 samples against
+  > an ideal of 1200), because `flush()` emits latency-worth of output. Rewritten to assert *where
+  > the signal ends* — the last sample above 1% of peak must reach the theoretical output length.
+  > Worth recording as a caution: a length check on a flush is a test that cannot fail.
 - **The X2/E2 inversion guard — LANDED (`flex_waveform_stream_test`).** X2 and E2 are opposites:
   inbound I/Q must be conjugated, outbound stereo audio must **not** be. The receive path's `-b`
   looks like it should be symmetric on transmit, and reusing it there inverts the sideband — normal
