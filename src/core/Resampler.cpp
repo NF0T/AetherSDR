@@ -10,6 +10,7 @@ Resampler::Resampler(double srcRate, double dstRate, int maxBlockSamples, double
     : m_srcRate(srcRate)
     , m_dstRate(dstRate)
     , m_maxBlockSamples(maxBlockSamples)
+    , m_reqTransBand(reqTransBand)
     , m_resampler(std::make_unique<r8b::CDSPResampler24>(srcRate, dstRate, maxBlockSamples, reqTransBand))
     , m_groupDelayInputFrames(m_resampler->getInLenBeforeOutPos(0))
 {
@@ -18,6 +19,59 @@ Resampler::Resampler(double srcRate, double dstRate, int maxBlockSamples, double
 }
 
 Resampler::~Resampler() = default;
+
+int Resampler::latencySamples() const
+{
+    if (std::abs(m_srcRate - m_dstRate) < 0.001) return 0;
+    // Same quantity prewarm() consumes at the head of the stream: how many
+    // input samples the filter needs before it will emit anything.
+    return m_resampler->getInLenBeforeOutPos(0);
+}
+
+QByteArray Resampler::flush()
+{
+    if (m_flushed) return {};
+    m_flushed = true;
+
+    // A pass-through resampler holds nothing.
+    const int latency = latencySamples();
+    if (latency <= 0) return {};
+
+    // Push `latency` zeros so the samples still inside the FIR are carried out
+    // ahead of them. Chunked against m_maxBlockSamples for the same reason
+    // process() is: r8b does not bounds-check aMaxInLen and silently overflows
+    // its internal buffers past it.
+    QByteArray result;
+    int remaining = latency;
+    while (remaining > 0) {
+        const int len = std::min(remaining, m_maxBlockSamples);
+        remaining -= len;
+
+        m_inBuf.assign(static_cast<size_t>(len), 0.0);
+        double* outPtr = nullptr;
+        const int outLen = m_resampler->process(m_inBuf.data(), len, outPtr);
+        if (outLen <= 0 || !outPtr) continue;
+
+        const int base = result.size();
+        result.resize(base + outLen * static_cast<int>(sizeof(float)));
+        auto* dst = reinterpret_cast<float*>(result.data() + base);
+        for (int i = 0; i < outLen; ++i)
+            dst[i] = static_cast<float>(outPtr[i]);
+    }
+    return result;
+}
+
+void Resampler::reset()
+{
+    // r8b has no state-clearing call that also re-establishes the prewarmed
+    // condition, so rebuild. Cheap next to what it prevents, and it guarantees
+    // the new stream starts from exactly the constructor's state rather than
+    // from something that merely resembles it.
+    m_resampler = std::make_unique<r8b::CDSPResampler24>(
+        m_srcRate, m_dstRate, m_maxBlockSamples, m_reqTransBand);
+    m_flushed = false;
+    prewarm();
+}
 
 QByteArray Resampler::process(const float* in, int numSamples)
 {
@@ -30,6 +84,16 @@ int Resampler::process(const float* in, int numSamples, QByteArray& output)
 {
     output.resize(0);
     if (!in || numSamples <= 0) {
+        return 0;
+    }
+
+    // Refuse rather than glitch. After flush() the filter is full of zeros, so
+    // this audio would be spliced behind silence — audible, wrong, and with no
+    // error anywhere to explain it. A caller reusing a flushed instance has a
+    // lifecycle bug; say so instead of hiding it.
+    if (m_flushed) {
+        qWarning("Resampler: process() after flush() — call reset() first. "
+                 "%d samples dropped.", numSamples);
         return 0;
     }
 
