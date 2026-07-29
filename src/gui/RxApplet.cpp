@@ -16,6 +16,7 @@
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
+#include "ModeFamily.h"
 #include "InteractionSettings.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -276,7 +277,7 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
     if (mode == "USB" || mode == "LSB")  return ssbSettings;
     if (mode == "AM"  || mode == "SAM")  return amSettings;
     if (isCwMode(mode))                  return cwSettings;
-    if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return digSettings;
+    if (ModeFamily::isDigital(mode))     return digSettings;
     if (mode == "RTTY")                  return rttySettings;
     if (ModeFilters::isFmMode(mode) || mode == "DFM") {
         return fmSettings;
@@ -3425,8 +3426,10 @@ void RxApplet::updateModeSettings(const QString& mode)
         if (m_slice->displayAutoSquelch() || m_sqlMode == SqlMode::Auto) {
             m_slice->setRestoreManualSquelchAfterMode(true);
         }
+        // RAD2 lands in the digital family via ModeFamily::isDigital(), same
+        // reasoning as the ModeFilterPresets.cpp squelch/filter generalizations.
         if ((m_slice->receiveSquelchOn() || m_sqlMode == SqlMode::Auto)
-            && (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY"
+            && (ModeFamily::isDigital(mode) || mode == "RTTY"
                 || mode == "DFM")) {
             m_slice->setRestoreManualSquelchAfterMode(true);
             m_slice->setSquelch(false, m_slice->receiveSquelchLevel());
