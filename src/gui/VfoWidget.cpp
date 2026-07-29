@@ -10,7 +10,9 @@
 #include "ScopedChildWidget.h"
 #include "AgcModeAvailability.h"
 #include "FmTonePresentation.h"
+#include "core/CtcssTones.h"
 #include "gui/CtcssToneLabel.h"
+#include "ModeFamily.h"
 #include "PhaseKnob.h"
 #include "ModeFilterPresets.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -4793,7 +4795,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Categorize by mode family (supports future/unknown modes)
         bool isRtty = (mode == "RTTY");
         bool isCw   = isCwMode(mode);
-        bool isDig  = (mode == "DIGL" || mode == "DIGU" || mode == "NT");
+        bool isDig  = ModeFamily::isDigital(mode);
         bool isFm   = isFmRfMode(mode);
         bool hasToneControls = hasFmToneControls(mode);
         bool isFdv  = mode.startsWith("FDV");  // FDVU, FDVM, etc.
@@ -5165,7 +5167,7 @@ void VfoWidget::setSlice(SliceModel* slice)
             m_digOffsetLabel->setText(QString::number(hz));
     });
     connect(m_slice, &SliceModel::diguOffsetChanged, this, [this](int hz) {
-        if (m_slice && m_slice->mode() == "DIGU")
+        if (m_slice && ModeFamily::usesDiguOffsetPresets(m_slice->mode()))
             m_digOffsetLabel->setText(QString::number(hz));
     });
     // RTTY Mark/Shift
@@ -5431,7 +5433,7 @@ void VfoWidget::syncFromSlice()
     m_shiftLabel->setText(QString::number(m_slice->rttyShift()));
     m_rttyContainer->setVisible(isRtty);
     bool isCw = isCwMode(m_slice->mode());
-    bool isDig = (m_slice->mode() == "DIGL" || m_slice->mode() == "DIGU" || m_slice->mode() == "NT");
+    bool isDig = ModeFamily::isDigital(m_slice->mode());
     bool isFm = isFmRfMode(m_slice->mode());
     bool hasToneControls = hasFmToneControls(m_slice->mode());
     m_tabBtns[1]->setText(isFm ? "OPT" : "DSP");
@@ -5754,7 +5756,8 @@ void VfoWidget::refreshDspLevelTarget()
 //
 // The ladders and the width -> edges rule live in ModeFilterPresets now: the EQ
 // offers the same widths, and two copies of a rule this fiddly would have
-// drifted the first time one of them was corrected.
+// drifted the first time one of them was corrected. widthsForMode() there
+// already covers RAD2 via ModeFamily::isDigital().
 
 void VfoWidget::updateModeTab()
 {
