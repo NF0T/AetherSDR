@@ -4245,6 +4245,15 @@ if(RADE_V2_FOUND)
     add_test(NAME rade_v2_codec_test COMMAND rade_v2_codec_test)
 endif()
 
+# Resampler::flush() recovers the samples left inside the FIR at end of stream.
+# Unguarded by any feature flag: the class is shared, and the loss it fixes
+# (RFC §7.1 T9 — a truncated RADE end-of-over) is silent in every direction.
+add_executable(resampler_flush_test tests/resampler_flush_test.cpp)
+target_include_directories(resampler_flush_test PRIVATE src)
+target_link_libraries(resampler_flush_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(resampler_flush_test PROPERTIES AUTOMOC ON)
+add_test(NAME resampler_flush_test COMMAND resampler_flush_test)
+
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
 # Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
 # directly (rather than linking aethercore) needs the vendored SQLite engine.

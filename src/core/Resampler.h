@@ -32,6 +32,41 @@ public:
     // allocation-free for blocks no larger than maxBlockSamples.
     int process(const float* in, int numSamples, QByteArray& output);
 
+    // ─── End of stream ─────────────────────────────────────────────────────
+    //
+    // Push the filter's remaining memory out and return it.
+    //
+    // The constructor already calls prewarm() to absorb the startup latency at
+    // the HEAD of a stream. This is the symmetric operation at the TAIL: after
+    // the last real sample, roughly `latency` samples are still inside the FIR
+    // and will never appear unless zeros are pushed through behind them.
+    //
+    // For continuous audio that loss is inaudible and nobody noticed. For a
+    // signal whose LAST samples are the payload it is fatal — RADE's
+    // end-of-over frame is exactly that, and RFC §7.1 T9 records V1 having to
+    // loosen its TX resampler to ~42 taps to keep the EOO inside a 60 ms
+    // window. This is the direct fix for that class of loss.
+    //
+    // TERMINAL. Zeros are now inside the filter, so feeding more real audio
+    // would splice silence into the middle of the stream. After flush() the
+    // instance is unusable until reset(); process() will refuse and warn rather
+    // than quietly produce a glitch. That refusal is deliberate — "usable again
+    // but subtly wrong" is worse than a hard stop.
+    QByteArray flush();
+
+    // Return to a clean, prewarmed state. Discards all filter memory, so any
+    // un-flushed tail is lost by definition. Call between overs, or after
+    // flush() to reuse the instance.
+    void reset();
+
+    // True once flush() has been called and reset() has not.
+    bool isFlushed() const { return m_flushed; }
+
+    // Filter latency in INPUT samples — how much signal is in flight inside the
+    // FIR at any moment, and therefore how long a drain must over-run to let a
+    // tail escape (RFC §7.1 T9). 0 when source and destination rates match.
+    int latencySamples() const;
+
     // Convenience: stereo float32 → mono downsample → resampled mono float32
     QByteArray processStereoToMono(const float* stereoIn, int numStereoFrames);
 
@@ -59,9 +94,11 @@ private:
     double m_srcRate;
     double m_dstRate;
     int    m_maxBlockSamples;
+    double m_reqTransBand;         // retained so reset() can rebuild identically
     std::unique_ptr<r8b::CDSPResampler24> m_resampler;
     int m_groupDelayInputFrames{0};
     std::vector<double> m_inBuf;   // float32 → double conversion buffer
+    bool m_flushed = false;        // set by flush(), cleared by reset()
 };
 
 } // namespace AetherSDR
