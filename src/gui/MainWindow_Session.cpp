@@ -834,6 +834,21 @@ void MainWindow::wireRadioModel()
     // A Network Radio Name must not decide whether the TX audio route starts.
     connect(&m_radioModel, &RadioModel::capabilitiesChanged,
             this, &MainWindow::applyTxAudioCapabilities);
+#ifdef AETHER_ENABLE_RADE_V2
+    // Register the RAD2 waveform as soon as there is a radio to register it
+    // with. This is what makes `RAD2` appear in each slice's mode list, so it
+    // MUST NOT wait for the mode to be selected — that would be a deadlock,
+    // and was one until it was found by launching the app and looking at the
+    // dropdown. §7.1 R8: registration needs no slice and no panadapter, which
+    // is why connect time is early enough.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (connected)
+            ensureRadeV2Waveform();
+        else
+            teardownRadeV2Waveform();
+    });
+#endif
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
