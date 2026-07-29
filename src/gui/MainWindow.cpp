@@ -2781,6 +2781,10 @@ MainWindow::~MainWindow()
         m_cwxLocalKeyer.reset();
     }
 
+#ifdef AETHER_ENABLE_RADE_V2
+    if (m_radeV2SliceId >= 0)
+        deactivateRADEV2();
+#endif
 #ifdef HAVE_RADE
     if (m_radeSliceId >= 0)
         deactivateRADE();
@@ -4197,6 +4201,16 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     m_discovery.stopListening();
 
+#ifdef AETHER_ENABLE_RADE_V2
+    // Deactivate before disconnecting so `waveform remove` reaches the radio
+    // while the connection is still up. §7.1 N1 measured that teardown is
+    // clean even on an abrupt kill — the slice reverts and nothing is
+    // stranded — so unlike V1 this is tidiness rather than a rescue. Do it
+    // anyway: leaving a registration behind for the radio to garbage-collect
+    // is not a habit worth forming.
+    if (m_radeV2SliceId >= 0)
+        deactivateRADEV2();
+#endif
 #ifdef HAVE_RADE
     // Deactivate RADE before disconnecting so the mute-restore command
     // reaches the radio while the connection is still alive. Without this,
