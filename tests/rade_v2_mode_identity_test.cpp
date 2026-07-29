@@ -42,7 +42,56 @@ private slots:
     void rad2UsesDiguOffsetFilterPresets();    // §10.4 G3 + G4
     void dstarStaysOutOfTheDigitalFamily();    // the classification is not "any DV mode"
     void rad2SurvivesTheHelperAvailabilityFilter();
+    void aSliceCannotClaimRad2UntilTheModeIsRunning();
 };
+
+void RadeV2ModeIdentityTest::aSliceCannotClaimRad2UntilTheModeIsRunning() {
+    // ─────────────────────────────────────────────────────────────────────
+    // The gate that cost a live on-air session to find.
+    //
+    // Registering the waveform with the RADIO is only half of activation.
+    // `DigitalVoiceModeRegistry` separately gates slice claims on the mode
+    // being *running*, and SliceModel::setMode() RETURNS EARLY when the claim
+    // is refused — so `m_mode` is never assigned, no `slice set mode=` reaches
+    // the radio, and modeChanged() never fires.
+    //
+    // What that looks like on air is the confusing part, and the reason this
+    // is worth a test rather than a comment: the mode combo displays RAD2
+    // (it holds its own selection independently), while the slice is still in
+    // USB. The buttons beside the combo say USB, the audio is USB, and keying
+    // produces no waveform. The only evidence is one warning line.
+    // ─────────────────────────────────────────────────────────────────────
+    DigitalVoiceModeRegistry& registry = DigitalVoiceModeRegistry::instance();
+    registry.deactivateMode(DigitalVoiceModeId::RadeV2);
+
+    QString error;
+    QVERIFY2(!registry.claimSlice(DigitalVoiceModeId::RadeV2, 0, &error),
+             "a slice claimed RAD2 while the mode was not running — this test "
+             "no longer describes the gate it exists to guard");
+    QVERIFY(!error.isEmpty());
+
+    // Registration is what makes it claimable, which is why activateMode() is
+    // called from the transport's ready() handler and not from the mode-change
+    // path that depends on it.
+    QVERIFY2(registry.activateMode(DigitalVoiceModeId::RadeV2, &error),
+             qPrintable(error));
+    QVERIFY2(registry.claimSlice(DigitalVoiceModeId::RadeV2, 0, &error),
+             qPrintable(QStringLiteral("slice could not claim RAD2 even with the "
+                                       "mode running: %1").arg(error)));
+
+    // One digital-voice mode at a time — D-STAR must be refused while RAD2
+    // holds the registry, which is also why activateMode() failing on
+    // registration is warned about rather than ignored.
+    QVERIFY(!registry.activateMode(DigitalVoiceModeId::DStar, &error));
+    QVERIFY2(!error.contains(QLatin1String("ThumbDV")),
+             "the exclusion message still blames the ThumbDV, which RADE V2 "
+             "does not use");
+
+    registry.deactivateMode(DigitalVoiceModeId::RadeV2);
+    QVERIFY2(!registry.claimSlice(DigitalVoiceModeId::RadeV2, 0, &error),
+             "RAD2 was still claimable after deactivation — the registry claim "
+             "leaks across sessions and blocks every other digital-voice mode");
+}
 
 void RadeV2ModeIdentityTest::rad2IsRegisteredOnDigu() {
     const std::optional<DigitalVoiceModeId> id =
