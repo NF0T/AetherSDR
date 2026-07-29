@@ -929,6 +929,17 @@ than only in the phase plan because they are *evidence about the design* — spe
 bounding how much the waveform approach gives us for free. The answer is: the mode identity and the
 mute, yes; the mode *family* semantics, no.
 
+> **STATUS — G1, G2, G3 RESOLVED (stage 6c).** `RAD2` is registered in
+> `DigitalVoiceModeRegistry` (`radioMode "RAD2"`, `underlyingMode "DIGU"`), and the ten inline
+> classification sites now route through `src/gui/ModeFamily.h`, whose digital-voice half reads
+> the descriptor's `underlyingMode` rather than a literal list. Guarded by
+> `rade_v2_mode_identity_test` (§13), mutation-checked four ways.
+>
+> **G4 (`rfGain` reset) remains OPEN and un-diagnosed**, exactly as this table says: it is
+> pan-scoped, not slice-mode-keyed, so it does **not** share the root cause the other three had
+> and is not fixed by the classification work. **Re-observe on air before designing anything** —
+> it would be easy, and wrong, to assume the 6c change addressed it.
+
 ### 10.5 The TX contract — desk-derived (§16 Q4, "Tier 0")
 
 Phase 0 was RX-only, leaving the transmit half of the provider unspecified. Most of it turns out
@@ -1490,11 +1501,27 @@ before the transport is written rather than after.
   > EOO is a decode problem, a stuck carrier is an interference problem.
 - Automation-bridge assertions for the `RAD2` mode lifecycle (activate/deactivate, no mute strand,
   status sub-state).
-- **Mode-family classification guard (Phase 3, from §10.4):** assert that `RAD2` lands in the
-  squelch-disabled family (both sites), is excluded from `isVoice` so auto-notch stays hidden, and
-  appears in the DIGU-offset family. All three are *silent* misbehaviours — squelch gating decode
-  and a notch eating OFDM carriers look like codec failures, not GUI bugs, which is exactly why
-  they are worth a regression test rather than a code review.
+- **Mode-family classification guard — LANDED (`rade_v2_mode_identity_test`), four mutations.**
+  G1–G4 are all *silent*: squelch gating decode and a notch eating OFDM carriers look like codec
+  failures, not GUI bugs. They are also invisible to code review — a reviewer reading
+  `mode == "DIGU" || mode == "DIGL" || mode == "NT"` has no way to see which mode is missing.
+  > **The decisions moved before they could be tested.** The classification was duplicated across
+  > **ten** inline sites (four in `RxApplet`, six in `VfoWidget`), so a guard could only have
+  > asserted a predicate nothing used. They now route through `src/gui/ModeFamily.h`
+  > (`isDigital()`, `usesDiguOffsetPresets()`), which is what makes the test meaningful — and the
+  > digital-voice half is **data-driven off the registry's `underlyingMode`**, so RAD2 joins the
+  > DIG family because it registered on DIGU, and D-STAR stays out because it registered on DFM.
+  > A future mode joins once instead of ten times.
+  >
+  > **Stated limit:** the test does not instantiate either widget, so it cannot prove a *future*
+  > site was wired to the shared functions. It guards the classification, not its adoption.
+- **A trap found while doing it, with nothing to do with RADE.**
+  `filterUnavailableDigitalVoiceModes()` stripped **every registered digital-voice mode** from
+  every mode list on a build without `AETHER_ENABLE_DIGITAL_VOICE_HELPER`. That test was
+  indistinguishable from "does it need the helper" while D-STAR was the only entry — and RAD2's
+  codec is in-process. RAD2 would have vanished from every mode combo, unselectable, with no
+  error anywhere. Fixed with a `requiresLocalHelper` flag on the descriptor and guarded in both
+  directions (D-STAR's own gating is asserted unchanged).
 - OTA A/B on the FLEX-8400: local-render fidelity vs. the container; PTT release timing; the inline
   callsign channel.
 - **EOO tail guard (from §10.5 item 4):** assert the full 120 ms pilot-only EOO actually reaches
