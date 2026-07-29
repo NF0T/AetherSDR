@@ -1461,6 +1461,60 @@ Guarded by `rade_v2_mode_identity_test::aSliceCannotClaimRad2UntilTheModeIsRunni
 > (R9) nor sufficient once it happened (G5). The radio-side protocol — the part this document
 > spent eleven probe sessions measuring — was correct on the first attempt in both cases.
 
+### 10.13 TX validated off-air — 2026-07-29 (websdr recording, 14.192 MHz)
+
+**Two AetherSDR RAD2 transmissions, recorded by a third-party websdr and decoded offline. Both
+decode. Both end-of-over frames are detected.** This is the first evidence for the transmit chain
+that does not come from our own code: a different receiver, a different antenna, a real HF path,
+and a decoder run from a file with nothing of ours in the loop but the modem samples themselves.
+
+Recordings are 8 kHz mono — already the modem rate, so no resampling stands between the file and
+`rade_rx()`. Neither transmission carried speech; each was a key, a pause, and an unkey.
+
+| | recording A | recording B |
+|---|---|---|
+| Duration | 14.02 s | 12.91 s |
+| First sync | 3.04 s | 2.80 s |
+| Synced blocks | 394 | 354 |
+| Feature frames decoded | 200 | 178 |
+| **End-of-over detected** | **1, at 11.12 s** | **1, at 9.98 s** |
+| SNR peak / mean | 17.7 / 12.3 dB | 17.7 / 12.0 dB |
+| Frequency offset | +9.8 Hz | +9.7 Hz |
+
+**§7.1 T9 is confirmed on air, which no bench test could do.** The EOO detector correlates against
+a known template (`rade_rx_v2.c:311`), so a tail that had been smeared by a long resampler or
+truncated by a missing `flush()` would simply not be found. It is found in both recordings, exactly
+once, at the end of each over — after passing through our 8→24 kHz upsampler at `ReqTransBand=45`,
+the terminal `flush()`, the transport's synthesized drain clock, the radio's transmit chain, an HF
+path, and a websdr's own receive chain. The bench measured 3087 samples of tail; this is what
+happened to it.
+
+**Frame recovery is essentially total while synced.** 200 frames × 40 ms = 8.0 s against a sync
+window of 3.04–11.12 s = 8.08 s. Whatever the receiver was locked to, it decoded nearly all of it.
+
+**The ~9.8 Hz offset costs nothing and is not ours.** It is the websdr's tuning against our dial,
+comfortably inside V2's ±31.25 Hz acquisition window. Shifting the input +10 Hz nulls the residual
+to −0.2 Hz and leaves peak SNR unchanged (17.7 → 17.6 dB), so there is no hidden penalty being paid
+for it.
+
+**Sync dropped and re-acquired 2–3 times per over**, at a mean SNR around 12 dB. **Not diagnosed.**
+Both recordings share one path, one receiver and one transmitter, so nothing here separates a
+propagation or websdr-AGC explanation from something in our transmit chain. Worth reproducing on a
+second path before drawing any conclusion — and worth noting that an over carrying no speech gives
+the vocoder nothing to work with, which may itself be part of it.
+
+**A field corroboration of §7.1b, from the sweep.** Shifting the input far off frequency (−140 to
+−30 Hz) still produced *more* synced blocks than the correct offset — 489 against 394 — while mean
+SNR collapsed from 12.3 dB to ~7 dB and the EOO detection mostly vanished. Exactly the §7.1b
+pattern, now seen on real off-air audio rather than a bench signal: **a high sync count is not
+evidence of anything.** The EOO detector held up better than sync as a validity indicator, which is
+a useful second opinion for anyone debugging a marginal decode.
+
+**Tooling:** `tools/rade_v2_decode_wav.cpp` → `rade_v2_decode_wav`, the V2 analogue of V1's
+`rade_demod_wav` and the basis for the Phase 5 OTA validation campaign. `--sweep` exists because
+"did not decode" is ambiguous on a third-party recording — it separates a bad transmission from a
+receiver tuned outside the acquisition window.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
