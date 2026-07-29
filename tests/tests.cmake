@@ -4281,6 +4281,15 @@ if(RADE_V2_FOUND)
     add_test(NAME rade_v2_seam_test COMMAND rade_v2_seam_test)
     set_tests_properties(rade_v2_seam_test PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # Offline decoder for RADE V2 recordings — the V2 analogue of V1's
+    # rade_demod_wav, and the only way to check a transmission that was
+    # received somewhere else (a websdr, a second station, an old recording).
+    # Not a test: it takes a file and reports, so it is built but never run by
+    # ctest.
+    add_executable(rade_v2_decode_wav tools/rade_v2_decode_wav.cpp)
+    target_include_directories(rade_v2_decode_wav PRIVATE src ${RADE_V2_DIR}/src)
+    target_link_libraries(rade_v2_decode_wav PRIVATE aethercore Qt6::Core)
 endif()
 
 # Resampler::flush() recovers the samples left inside the FIR at end of stream.
