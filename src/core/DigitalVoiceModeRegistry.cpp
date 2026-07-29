@@ -13,8 +13,26 @@ const QList<DigitalVoiceModeDescriptor> kSupportedModes {
         QStringLiteral("D-STAR"),
         QStringLiteral("DSTR"),
         QStringLiteral("DFM"),
-        QStringLiteral("AetherDStar")
-    }
+        QStringLiteral("AetherDStar"),
+        /*requiresLocalHelper=*/true      // the ThumbDV vocoder helper
+    },
+#ifdef AETHER_ENABLE_RADE_V2
+    {
+        DigitalVoiceModeId::RadeV2,
+        QStringLiteral("RadeV2"),
+        QStringLiteral("RADE V2"),
+        QStringLiteral("RAD2"),
+        // DIGU, not USB (RFC §10.1, corrected 2026-07-26): DIGU on every band,
+        // and there is deliberately no DIGL variant — the modem is not
+        // sideband-symmetric and §10.11 established upper sideband is correct.
+        QStringLiteral("DIGU"),
+        QStringLiteral("AetherRADEV2"),
+        // In-process codec — no helper. See the field's comment: this is the
+        // difference between RAD2 appearing in the mode list and vanishing from
+        // it silently on a build without the D-STAR helper.
+        /*requiresLocalHelper=*/false
+    },
+#endif
 };
 
 } // namespace
@@ -57,7 +75,12 @@ bool DigitalVoiceModeRegistry::activateMode(DigitalVoiceModeId id, QString* erro
     QMutexLocker locker(&m_mutex);
     if (m_activeMode.has_value() && m_activeMode.value() != id) {
         if (error) {
-            *error = QStringLiteral("Another digital-voice mode already owns the ThumbDV");
+            // Was "already owns the ThumbDV". Only one digital-voice mode may
+            // hold a slice at a time, and with RAD2 registered that reason is
+            // no longer about the ThumbDV — RADE V2 does not use one.
+            *error = QStringLiteral("%1 is already active; only one digital-voice "
+                                    "mode can hold a slice at a time")
+                         .arg(descriptor(m_activeMode.value()).displayName);
         }
         return false;
     }
