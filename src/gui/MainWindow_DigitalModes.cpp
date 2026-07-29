@@ -344,6 +344,35 @@ void MainWindow::ensureRadeV2Waveform()
                           << reason << "— RAD2 will not be offered";
     });
     connect(m_radeV2Transport, &FlexWaveformTransport::ready, this, [this]() {
+        // ─── Registering with the RADIO is only half of it ─────────────────
+        //
+        // `DigitalVoiceModeRegistry` gates slice claims on the mode being
+        // *running*: SliceModel::setMode() resolves RAD2 through the registry
+        // and calls transferSlice(), which refuses with "The requested
+        // digital-voice mode is not running" unless activateMode() has been
+        // called. On that refusal setMode() RETURNS EARLY — so `m_mode` is
+        // never assigned, no `slice set mode=` is sent, and modeChanged()
+        // never fires.
+        //
+        // The result is a uniquely confusing failure, seen on air: the mode
+        // combo shows RAD2 (it holds its own selection), while the slice is
+        // still in USB — the buttons beside it say USB, the audio is USB, and
+        // keying produces no waveform. Nothing looks broken except that
+        // nothing happened.
+        //
+        // D-STAR satisfies this gate when its helper process starts
+        // (DigitalVoiceWaveformProcess.cpp:271). The exact analogue for RAD2
+        // is HERE: the waveform now exists on the radio, so the mode is
+        // genuinely available to be claimed.
+        QString ownershipError;
+        if (!DigitalVoiceModeRegistry::instance().activateMode(
+                DigitalVoiceModeId::RadeV2, &ownershipError)) {
+            // Expected when D-STAR already holds the registry — one
+            // digital-voice mode at a time, by design.
+            qCWarning(lcRade) << "MainWindow: RAD2 registered with the radio but"
+                              << "cannot claim a slice —" << ownershipError;
+            return;
+        }
         qCInfo(lcRade) << "MainWindow: RAD2 waveform registered — the radio now"
                           " offers it in each slice's mode list";
     });
@@ -365,6 +394,9 @@ void MainWindow::teardownRadeV2Waveform()
         m_radeV2Transport->deleteLater();
         m_radeV2Transport = nullptr;
     }
+    // Release the registry claim taken on registration, or the next session —
+    // and any other digital-voice mode — finds RAD2 still holding it.
+    DigitalVoiceModeRegistry::instance().deactivateMode(DigitalVoiceModeId::RadeV2);
 }
 
 void MainWindow::activateRADEV2(int sliceId)

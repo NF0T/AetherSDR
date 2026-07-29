@@ -189,7 +189,7 @@ because §10 discovered them across eleven separate probe sessions and an implem
 have to reconstruct the list by reading all of it.
 
 **🔇 marks a SILENT failure** — no error, no non-zero reply, no crash. The command is accepted, or
-the code compiles and runs, and the result is simply wrong. **15 of the 32 rows are silent**, and
+the code compiles and runs, and the result is simply wrong. **17 of the 34 rows are silent**, and
 several would present during Phase 4 as *"the codec doesn't work"*, which is the most expensive
 possible time to find them. **Every 🔇 row wants a regression test**, because code review cannot
 catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
@@ -206,6 +206,7 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | R6 | 🔇 Stream IDs are **recycled** across create/remove — never use one as session identity | stale-ID bugs after a re-register | §10.2 |
 | R7 | `waveform create` returns **six** streams (incl. the `byte_stream` pair). The vendored D-Star parser reads only four | miss the data channel | §8 |
 | R8 | Registration needs **no slice and no panadapter** | — | §10.2 |
+| R9 | 🔇 **Register on CONNECT, never on mode-select.** The radio advertises `RAD2` in a slice's `mode_list` only once the waveform is registered | registering from the mode-change path is a **deadlock** — the mode never appears, so it can never be picked, so registration never runs. Nothing logs, nothing fails | §10.12 |
 
 ### RX data plane
 
@@ -248,6 +249,7 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | G2 | Exclude `RAD2` from `isVoice` so auto-notch stays hidden | adaptive notch **chews OFDM carriers** | §10.4 |
 | G3 | 🔇 Add `RAD2` to the DIGU-offset family | a width preset falls through to `lo=95; hi=width`, **clipping the top half of the modem** | §10.3, §10.4 |
 | G4 | `digu_offset` is the **centre a width-specified filter is built around** — not a passband shift, and measured not to shift RF placement either | — | §10.3, §10.11 |
+| G5 | 🔇 **`DigitalVoiceModeRegistry::activateMode()` must be called when the waveform registers.** Registering with the radio is only half of it — the registry separately gates slice claims on the mode being *running* | `SliceModel::setMode()` **returns early**: the combo shows `RAD2` while the slice stays in USB, with USB audio and no waveform on key-up. One warning line is the only evidence | §10.12 |
 
 ### Environment
 
@@ -1401,6 +1403,64 @@ software against the samples we generate, since we author them), IMD (a linear t
 nowhere near compression), and EVM (needs the codec, and is subsumed by "a real RADE V2 station
 decodes us"). **None of it blocks Phase 2.**
 
+### 10.12 First bring-up on air — 2026-07-29 (FLEX-8400, fw 4.2.20.41343)
+
+The first time the wired-up client was launched against the radio. Two defects, both in the
+*activation path* rather than in the waveform protocol, and one open question closed.
+
+**CLOSED: `mode_list` refreshes immediately on an already-open slice.** §10.12 was expected to
+need a new slice or a reconnect before `RAD2` could appear. It does not — with the waveform
+registered at connect time, `RAD2` was present in the mode dropdown of a slice that already
+existed, immediately, with no slice churn. **Provider consequence:** registration alone is
+sufficient to publish the mode; nothing has to nudge the radio and no slice lifecycle has to be
+managed to make it visible.
+
+**Defect 1 — registration on mode-select is a deadlock (now R9).** The first wiring registered
+the waveform inside the RAD2 activation path, which is triggered by the slice mode *becoming*
+`RAD2`. But the radio only advertises `RAD2` once the waveform is registered. So the mode could
+not appear, could not be selected, and the registration could not run. The dropdown simply had no
+`RAD2` in it — no error, no warning, nothing to grep for.
+
+> Registration is a property of the **connection**, not of a slice, which R8 already said and
+> §10.2 already demonstrated: that probe registered a waveform with no slice in existence at all.
+> The evidence was in this document before the code was written.
+
+**Defect 2 — the registry gate (now G5).** With the mode visible and selectable, selecting it
+still did nothing. The single logged line:
+
+```
+WRN default: SliceModel: digital-voice mode rejected: The requested digital-voice mode is not running
+```
+
+`SliceModel::setMode()` resolves `RAD2` through `DigitalVoiceModeRegistry` and calls
+`transferSlice()`, which refuses unless `activateMode()` has been called for that mode. On refusal
+**`setMode()` returns early** — `m_mode` is never assigned, no `slice set mode=` is sent, and
+`modeChanged()` never fires.
+
+The presentation is worth recording, because it points at the wrong subsystem:
+
+| Surface | What it showed |
+|---|---|
+| Mode dropdown | **`RAD2`** — the combo holds its own selection independently of the model |
+| Mode buttons beside it | `USB` |
+| Audio | ordinary USB |
+| Key-up | no waveform |
+
+So the client looks like it is in RAD2 and behaves like it is in USB, and the natural conclusion —
+"the waveform registered but the modem is not running" — is wrong in an expensive direction. The
+mode change never happened at all.
+
+D-STAR satisfies the same gate when its helper process starts
+(`DigitalVoiceWaveformProcess.cpp:271`). The analogue for RAD2 is the transport's `ready()`
+handler: the waveform now exists on the radio, so the mode is genuinely available to be claimed.
+Guarded by `rade_v2_mode_identity_test::aSliceCannotClaimRad2UntilTheModeIsRunning`.
+
+> **Both defects are the same shape, and it is worth naming.** Each is a *second* precondition
+> hiding behind a first one that looked sufficient. "The waveform is registered with the radio"
+> feels like the whole of activation; it is neither necessary at the moment we first tried it
+> (R9) nor sufficient once it happened (G5). The radio-side protocol — the part this document
+> spent eleven probe sessions measuring — was correct on the first attempt in both cases.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
@@ -1537,6 +1597,15 @@ before the transport is written rather than after.
   >
   > **Stated limit:** the test does not instantiate either widget, so it cannot prove a *future*
   > site was wired to the shared functions. It guards the classification, not its adoption.
+- **The registry-gate guard — LANDED (`rade_v2_mode_identity_test`, §10.12 G5).** A slice cannot
+  claim `RAD2` until `activateMode()` has been called, and `SliceModel::setMode()` returns early
+  when the claim is refused — so the combo reads RAD2 while the slice stays in USB. Asserted in
+  both directions, including that deactivation releases the claim (it is a global singleton: a
+  leaked RAD2 claim blocks every other digital-voice mode for the rest of the session).
+  > **Stated limit, same shape as the mode-family guard above:** this asserts the registry's
+  > contract, not that `MainWindow` honours it. Nothing here can prove `activateMode()` is still
+  > called from the transport's `ready()` handler. The on-air symptom is what found it the first
+  > time, and would be what finds it again.
 - **A trap found while doing it, with nothing to do with RADE.**
   `filterUnavailableDigitalVoiceModes()` stripped **every registered digital-voice mode** from
   every mode list on a build without `AETHER_ENABLE_DIGITAL_VOICE_HELPER`. That test was
