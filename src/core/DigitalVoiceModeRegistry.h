@@ -10,7 +10,14 @@
 namespace AetherSDR {
 
 enum class DigitalVoiceModeId {
-    DStar
+    DStar,
+#ifdef AETHER_ENABLE_RADE_V2
+    // Gated with the descriptor rather than left permanently visible: with the
+    // feature off there is no RAD2 entry to resolve, and descriptor() would
+    // silently hand back D-STAR's. A compile error at the call site is the
+    // better failure.
+    RadeV2,
+#endif
 };
 
 struct DigitalVoiceModeDescriptor {
@@ -20,6 +27,16 @@ struct DigitalVoiceModeDescriptor {
     QString radioMode;
     QString underlyingMode;
     QString waveformName;
+
+    // Does this mode need the out-of-process digital-voice waveform helper
+    // (AETHER_ENABLE_DIGITAL_VOICE_HELPER) to work?
+    //
+    // D-STAR does: the ThumbDV vocoder lives behind that helper, so without it
+    // the mode is offered and cannot function. RADE V2 does not — its codec is
+    // in-process. Before this field existed the availability test was "is it a
+    // digital-voice mode", which would have stripped RAD2 out of every mode
+    // list on any build without the helper, with no error anywhere.
+    bool requiresLocalHelper = true;
 };
 
 struct DigitalVoiceSliceClaim {

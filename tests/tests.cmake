@@ -4254,6 +4254,19 @@ if(RADE_V2_FOUND)
     target_link_libraries(rade_v2_engine_test PRIVATE aethercore Qt6::Core Qt6::Test)
     set_target_properties(rade_v2_engine_test PROPERTIES AUTOMOC ON)
     add_test(NAME rade_v2_engine_test COMMAND rade_v2_engine_test)
+
+    # RAD2's mode identity and the four §10.4 GUI classifications. Found OTA
+    # against a stock client before any RAD2 code existed: squelch auto-arms and
+    # gates decode, the adaptive notch chews OFDM carriers, and a width preset
+    # clips half the modem. All three present as "the codec doesn't work", and a
+    # code reviewer reading a list of mode strings cannot see what is missing
+    # from it. Does not link the GUI — the classifiers are header-only.
+    add_executable(rade_v2_mode_identity_test tests/rade_v2_mode_identity_test.cpp)
+    target_include_directories(rade_v2_mode_identity_test PRIVATE src)
+    target_link_libraries(rade_v2_mode_identity_test PRIVATE
+        aethercore Qt6::Core Qt6::Test)
+    set_target_properties(rade_v2_mode_identity_test PROPERTIES AUTOMOC ON)
+    add_test(NAME rade_v2_mode_identity_test COMMAND rade_v2_mode_identity_test)
 endif()
 
 # Resampler::flush() recovers the samples left inside the FIR at end of stream.

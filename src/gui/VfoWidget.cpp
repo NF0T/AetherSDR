@@ -1,6 +1,7 @@
 #include "VfoWidget.h"
 #include "FmTonePresentation.h"
 #include "core/CtcssTones.h"
+#include "ModeFamily.h"
 #include "PhaseKnob.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
@@ -4473,7 +4474,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         // Categorize by mode family (supports future/unknown modes)
         bool isRtty = (mode == "RTTY");
         bool isCw   = isCwMode(mode);
-        bool isDig  = (mode == "DIGL" || mode == "DIGU" || mode == "NT");
+        bool isDig  = ModeFamily::isDigital(mode);
         bool isFm   = isFmRfMode(mode);
         bool hasToneControls = hasFmToneControls(mode);
         bool isFdv  = mode.startsWith("FDV");  // FDVU, FDVM, etc.
@@ -4833,7 +4834,7 @@ void VfoWidget::setSlice(SliceModel* slice)
             m_digOffsetLabel->setText(QString::number(hz));
     });
     connect(m_slice, &SliceModel::diguOffsetChanged, this, [this](int hz) {
-        if (m_slice && m_slice->mode() == "DIGU")
+        if (m_slice && ModeFamily::usesDiguOffsetPresets(m_slice->mode()))
             m_digOffsetLabel->setText(QString::number(hz));
     });
     // RTTY Mark/Shift
@@ -5097,7 +5098,7 @@ void VfoWidget::syncFromSlice()
     m_shiftLabel->setText(QString::number(m_slice->rttyShift()));
     m_rttyContainer->setVisible(isRtty);
     bool isCw = isCwMode(m_slice->mode());
-    bool isDig = (m_slice->mode() == "DIGL" || m_slice->mode() == "DIGU" || m_slice->mode() == "NT");
+    bool isDig = ModeFamily::isDigital(m_slice->mode());
     bool isFm = isFmRfMode(m_slice->mode());
     bool hasToneControls = hasFmToneControls(m_slice->mode());
     m_tabBtns[1]->setText(isFm ? "OPT" : "DSP");
@@ -5391,7 +5392,7 @@ static const ModeFilterPresets& filterPresetsFor(const QString& mode)
     if (mode == "USB" || mode == "LSB") return usb;
     if (mode == "AM" || mode == "SAM") return am;
     if (isCwMode(mode)) return cw;
-    if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return dig;
+    if (ModeFamily::isDigital(mode)) return dig;
     if (mode == "RTTY") return rtty;
     if (mode == "DFM") return dfm;
     if (mode == "FM" || mode == "NFM") return fm;
@@ -5810,7 +5811,8 @@ void VfoWidget::applyFilterPreset(int widthHz)
     int lo, hi;
     const QString& mode = m_slice->mode();
 
-    if (mode == "DIGU") {
+    if (ModeFamily::usesDiguOffsetPresets(mode)) {
+        // §10.4 G3 — RAD2 must land here too, for the same reason as RxApplet.
         // For widths < 3000 Hz, center the filter on the stored digu_offset.
         // SmartSDR behavior (fw v1.4.0.0): offset is the audio center frequency;
         // filter spans [offset - width/2, offset + width/2], clamped so lo >= 95.
