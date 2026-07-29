@@ -2638,8 +2638,7 @@ MainWindow::~MainWindow()
     }
 
 #ifdef AETHER_ENABLE_RADE_V2
-    if (m_radeV2SliceId >= 0)
-        deactivateRADEV2();
+    teardownRadeV2Waveform();
 #endif
 #ifdef HAVE_RADE
     if (m_radeSliceId >= 0)
@@ -3927,8 +3926,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // stranded — so unlike V1 this is tidiness rather than a rescue. Do it
     // anyway: leaving a registration behind for the radio to garbage-collect
     // is not a habit worth forming.
-    if (m_radeV2SliceId >= 0)
-        deactivateRADEV2();
+    teardownRadeV2Waveform();
 #endif
 #ifdef HAVE_RADE
     // Deactivate RADE before disconnecting so the mute-restore command

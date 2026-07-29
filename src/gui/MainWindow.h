@@ -1774,6 +1774,14 @@ private:
     bool m_radeV2UnkeyPending{false};
     QMetaObject::Connection m_radeV2MoxConn;
     QMetaObject::Connection m_radeV2ModeConn;
+    // Registration is SEPARATE from activation, and the order is forced: the
+    // radio only offers `RAD2` in a slice's mode_list once the waveform is
+    // registered, so registering on mode-select would be a deadlock — the mode
+    // could never be picked. Registration happens on connect (§7.1 R8: it
+    // needs no slice and no panadapter); selecting RAD2 then only starts the
+    // codec.
+    void ensureRadeV2Waveform();
+    void teardownRadeV2Waveform();
     void activateRADEV2(int sliceId);
     void deactivateRADEV2();
     void onRadeV2SliceModeChanged(const QString& mode);

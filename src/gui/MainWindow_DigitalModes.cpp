@@ -287,6 +287,86 @@ void MainWindow::refreshRttyDecodeState()
 //
 // What replaces all of it is a registration handshake (§7.1 R1) and a pair of
 // UDP streams, both owned by FlexWaveformTransport.
+// Register the waveform with the radio. THIS is what puts `RAD2` in the mode
+// dropdown, and it has to happen before anyone can select it.
+//
+// ─── The deadlock this exists to avoid ─────────────────────────────────────
+// A slice's mode list comes from the RADIO (`mode_list` in slice status), and
+// the radio only advertises `RAD2` once a waveform by that name is registered
+// on our connection. The first cut of this code registered inside
+// activateRADEV2(), which is triggered by the slice mode BECOMING RAD2 — so
+// the mode could never appear, could never be selected, and the registration
+// could never run. The dropdown simply had no RAD2 in it, with nothing logged,
+// nothing failing, and nothing to grep for.
+//
+// §7.1 R8 is what makes the fix trivial: registration needs no slice and no
+// panadapter. It is a property of the CONNECTION, not of a slice — which is
+// also exactly how the §10.4 experiment was run, with a script registering the
+// waveform first and a slice being put into it afterwards.
+void MainWindow::ensureRadeV2Waveform()
+{
+    if (m_radeV2Transport) return;
+    if (!m_radioModel.isConnected()) return;
+
+    // The Flex Waveform API is a Flex protocol. AetherSDR carries three
+    // backends behind IRadioBackend (flex / hl2 / sim) and will carry more; on
+    // the others `sendCmd` reaches nothing at all, so the registration would be
+    // written into a void and the reply callback carrying the six stream ids
+    // would never fire. No error, no timeout, no audio — the exact silent-hang
+    // shape §7.1 is full of. Refuse up front instead.
+    if (!m_radioModel.usesFlexCommandPlane())
+        return;
+
+    // §7.2 — the transport is HANDED its way onto the wire. `FlexBackend` is
+    // not modified and does not know RADE exists; the dependency points one way
+    // and rade_v2_backend_boundary_test enforces it.
+    //
+    // The sink is RadioModel::sendCmdPublic rather than
+    // IRadioBackend::invokeExtension for a measured reason, recorded here
+    // because the wrong choice compiles and half-works: invokeExtension CANNOT
+    // CARRY A REPLY BODY. It answers extensionResult(requestId, true), which
+    // acknowledges *dispatch*, not the radio's response. `waveform create`
+    // returns the six stream ids in its reply body (§7.1 R7) and there is no
+    // other way to learn them.
+    m_radeV2Transport = new FlexWaveformTransport(this);
+    m_radeV2Transport->setCommandSink(
+        [this](const QString& cmd, FlexWaveformProvider::ReplyFn onReply) {
+            m_radioModel.sendCmdPublic(cmd, onReply);
+        });
+    m_radeV2Transport->setRadioAddress(m_radioModel.radioAddress());
+
+    connect(m_radeV2Transport, &FlexWaveformTransport::failed, this,
+            [this](const QString& reason) {
+        // Warned rather than swallowed: the visible symptom of a failed
+        // registration is a mode that never appears, which looks like nothing
+        // at all happening.
+        qCWarning(lcRade) << "MainWindow: RAD2 waveform registration failed —"
+                          << reason << "— RAD2 will not be offered";
+    });
+    connect(m_radeV2Transport, &FlexWaveformTransport::ready, this, [this]() {
+        qCInfo(lcRade) << "MainWindow: RAD2 waveform registered — the radio now"
+                          " offers it in each slice's mode list";
+    });
+
+    // Binds the UDP port, then registers — in that order, because §7.1 R1 sends
+    // `udpport` last and the number has to exist first.
+    if (!m_radeV2Transport->start()) {
+        qCWarning(lcRade) << "MainWindow: RAD2 transport failed to bind a UDP port";
+        m_radeV2Transport->deleteLater();
+        m_radeV2Transport = nullptr;
+    }
+}
+
+void MainWindow::teardownRadeV2Waveform()
+{
+    deactivateRADEV2();
+    if (m_radeV2Transport) {
+        m_radeV2Transport->stop();          // `waveform remove`
+        m_radeV2Transport->deleteLater();
+        m_radeV2Transport = nullptr;
+    }
+}
+
 void MainWindow::activateRADEV2(int sliceId)
 {
     if (m_radeV2SliceId == sliceId && m_radeV2Engine)
@@ -297,15 +377,13 @@ void MainWindow::activateRADEV2(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
-    // The Flex Waveform API is a Flex protocol. AetherSDR now carries three
-    // backends behind IRadioBackend (flex / hl2 / sim) and will carry more, and
-    // on the others `sendCmd` reaches nothing at all — so the registration
-    // would be written into a void and the reply callback that carries the six
-    // stream ids would simply never fire. No error, no timeout, no audio: the
-    // exact silent-hang shape §7.1 is full of. Refuse up front instead.
-    if (!m_radioModel.usesFlexCommandPlane()) {
-        qCWarning(lcRade) << "MainWindow: RAD2 needs the Flex command plane;"
-                          << "backend family is" << m_radioModel.family();
+    // Normally already registered — the slice could not be in RAD2 otherwise,
+    // because the mode would never have been offered. Kept for the path where
+    // the radio restores the mode across a reconnect.
+    ensureRadeV2Waveform();
+    if (!m_radeV2Transport) {
+        qCWarning(lcRade) << "MainWindow: slice" << sliceId
+                          << "is in RAD2 but no waveform is registered";
         return;
     }
 
@@ -317,25 +395,6 @@ void MainWindow::activateRADEV2(int sliceId)
         s->setTxSlice(true);
 
     m_radeV2SliceId = sliceId;
-
-    // ─── Transport: main thread, because it owns the socket ────────────────
-    //
-    // §7.2 — the transport is HANDED its way onto the wire. `FlexBackend` is
-    // not modified and does not know RADE exists; the dependency points one
-    // way and rade_v2_backend_boundary_test enforces it.
-    //
-    // The sink is RadioModel::sendCmd rather than IRadioBackend::invokeExtension
-    // for a measured reason, recorded here because the wrong choice compiles
-    // and half-works: invokeExtension CANNOT CARRY A REPLY BODY. It answers
-    // extensionResult(requestId, true), which acknowledges *dispatch*, not the
-    // radio's response. `waveform create` returns the six stream ids in its
-    // reply body (§7.1 R7) and there is no other way to learn them.
-    m_radeV2Transport = new FlexWaveformTransport(this);
-    m_radeV2Transport->setCommandSink(
-        [this](const QString& cmd, FlexWaveformProvider::ReplyFn onReply) {
-            m_radioModel.sendCmdPublic(cmd, onReply);
-        });
-    m_radeV2Transport->setRadioAddress(m_radioModel.radioAddress());
 
     // ─── Engine: worker thread ─────────────────────────────────────────────
     m_radeV2Engine = new RADEV2Engine;   // no parent — moved to the worker
@@ -491,24 +550,7 @@ void MainWindow::activateRADEV2(int sliceId)
                                this, &MainWindow::onRadeV2SliceModeChanged,
                                Qt::UniqueConnection);
 
-    connect(m_radeV2Transport, &FlexWaveformTransport::failed, this,
-            [this](const QString& reason) {
-        qCWarning(lcRade) << "MainWindow: RADE V2 waveform registration failed:" << reason;
-        deactivateRADEV2();
-    });
-    connect(m_radeV2Transport, &FlexWaveformTransport::ready, this, [this]() {
-        qCInfo(lcRade) << "MainWindow: RADE V2 waveform registered and streaming";
-    });
-
-    // Binds the UDP port, then registers — in that order, because §7.1 R1
-    // sends `udpport` last and the number has to exist first.
-    if (!m_radeV2Transport->start()) {
-        qCWarning(lcRade) << "MainWindow: RADE V2 transport failed to bind";
-        deactivateRADEV2();
-        return;
-    }
-
-    qCInfo(lcRade) << "MainWindow: RADE V2 activated on slice" << sliceId;
+    qCInfo(lcRade) << "MainWindow: RADE V2 codec running on slice" << sliceId;
 }
 
 void MainWindow::deactivateRADEV2()
@@ -535,14 +577,14 @@ void MainWindow::deactivateRADEV2()
             disconnect(m_audio, &AudioEngine::txRawPcmReady, m_radeV2Engine, nullptr);
     }
 
-    // Transport first: it holds the registration, and `waveform remove` should
-    // go out while the engine can still be told to stop cleanly. §7.1 N1 —
-    // teardown is clean on remove, on disconnect, and on an abrupt kill, so
-    // this ordering is a courtesy rather than a correctness requirement.
-    if (m_radeV2Transport) {
-        m_radeV2Transport->stop();
-        m_radeV2Transport->deleteLater();
-        m_radeV2Transport = nullptr;
+    // The transport deliberately SURVIVES this. Deactivation means the slice
+    // left RAD2, not that the mode should stop being offered — tearing the
+    // registration down here would remove RAD2 from the dropdown the moment
+    // the operator switched away from it, and they could never switch back.
+    // Only a disconnect (teardownRadeV2Waveform) unregisters.
+    if (m_radeV2Transport && m_radeV2Engine) {
+        disconnect(m_radeV2Transport, nullptr, m_radeV2Engine, nullptr);
+        disconnect(m_radeV2Engine, nullptr, m_radeV2Transport, nullptr);
     }
 
     if (m_radeV2Engine) {

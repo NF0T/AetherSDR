@@ -735,6 +735,21 @@ void MainWindow::wireRadioModel()
         if (!connected)
             failSafeMomentaryKeyingToRx("radio-disconnect");
     });
+#ifdef AETHER_ENABLE_RADE_V2
+    // Register the RAD2 waveform as soon as there is a radio to register it
+    // with. This is what makes `RAD2` appear in each slice's mode list, so it
+    // MUST NOT wait for the mode to be selected — that would be a deadlock,
+    // and was one until it was found by launching the app and looking at the
+    // dropdown. §7.1 R8: registration needs no slice and no panadapter, which
+    // is why connect time is early enough.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (connected)
+            ensureRadeV2Waveform();
+        else
+            teardownRadeV2Waveform();
+    });
+#endif
     // Local microphone capture for a backend that MODULATES ON THE HOST.
     //
     // Capture is otherwise started only from the Flex DAX signals
