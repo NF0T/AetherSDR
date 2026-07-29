@@ -442,6 +442,10 @@ void RADEV2Engine::endTx() {
     if (!m_rade || !m_txActive || m_tailQueued) {
         if (!m_tailDone) {
             m_tailDone = true;
+            // Both, and in this order. The transport has to be told to drain
+            // even when there is nothing to drain, or a caller holding PTT
+            // until readyToUnkey() waits for a signal that never comes.
+            emit txTailQueued();
             emit txTailComplete();
         }
         return;
@@ -489,6 +493,12 @@ void RADEV2Engine::endTx() {
     qCDebug(lcRadeV2Codec) << "tx end — tail queued:" << m_stats.txTailSamples
                       << "samples ≈" << msAt24k(int(m_stats.txTailSamples)) << "ms";
 
+    // Starts the transport's synthesized clock (§7.1 T3) — without which the
+    // tail is never transmitted and nothing ever releases PTT. After the queue
+    // is filled rather than before, which closes a (microsecond-wide) window
+    // for free; see the signal's declaration for how little that buys.
+    emit txTailQueued();
+
     // An over with nothing queued at all still has to answer.
     if (m_txOut24k.empty()) {
         m_tailDone = true;
@@ -508,6 +518,11 @@ void RADEV2Engine::cancelTx() {
     m_tailQueued = false;
     if (!m_tailDone) {
         m_tailDone = true;
+        // Same pair, same order, as every other exit. A cancel that skipped
+        // txTailQueued() would leave a transport still in Voice with nothing
+        // able to move it, and the caller holding PTT until the tail timeout
+        // rescued it 500 ms later.
+        emit txTailQueued();
         emit txTailComplete();
     }
 }
@@ -554,8 +569,8 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>&) {}
 void RADEV2Engine::onTxClockTick(int, bool) {}
 void RADEV2Engine::feedTxAudio(const QByteArray&) {}
 void RADEV2Engine::beginTx() {}
-void RADEV2Engine::endTx() { emit txTailComplete(); }
-void RADEV2Engine::cancelTx() { emit txTailComplete(); }
+void RADEV2Engine::endTx() { emit txTailQueued(); emit txTailComplete(); }
+void RADEV2Engine::cancelTx() { emit txTailQueued(); emit txTailComplete(); }
 void RADEV2Engine::setTxCallsign(const QString&) {}
 void RADEV2Engine::encodePendingFeatures(bool) {}
 void RADEV2Engine::queueModem(const float*, int) {}
