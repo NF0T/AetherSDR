@@ -171,8 +171,34 @@ signals:
     // → FlexWaveformTransport::submitModulatedAudio. Mono 24 kHz.
     void modulatedAudioReady(const std::vector<float>& mono24k);
 
+    // → FlexWaveformTransport::requestEndTx. The tail — EOO plus the flushed
+    // filter memory — is now IN the queue and needs a clock to carry it out.
+    //
+    // **Something has to start the drain, and only the codec knows the over is
+    // actually over.** §7.1 T3: at unkey the radio stops driving the pump, so
+    // the ~120 ms tail goes out only on the transport's synthesized clock —
+    // and that clock does not start by itself. If nothing emits this, the tail
+    // is never transmitted AND the transport never reaches a state where
+    // notifyTxTailComplete() means anything, so a caller holding PTT until
+    // readyToUnkey() is never released. Verified by mutation: delete this one
+    // emission and two seam tests hang out to their timeouts.
+    //
+    // Emitted on EVERY end-of-over path, including the degenerate one where
+    // there was nothing to send, so that guarantee has no gaps.
+    //
+    // It is emitted after the queue is filled rather than before, which costs
+    // nothing and closes the window where a drain tick could be served from an
+    // empty queue. To be accurate about how much that buys: the queue is
+    // filled synchronously a few microseconds earlier, and the drain timer
+    // ticks every 2 ms, so this ordering is cheap insurance rather than a
+    // demonstrated defect — do not read more into it than that.
+    void txTailQueued();
+
     // → FlexWaveformTransport::notifyTxTailComplete. The EOO and the flushed
     // filter memory are out; only now is it safe to release PTT.
+    //
+    // Always follows txTailQueued(), never precedes it — both are emitted from
+    // the same thread, so a queued connection delivers them in that order.
     void txTailComplete();
 
     void syncChanged(bool synced);

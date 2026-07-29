@@ -4267,6 +4267,20 @@ if(RADE_V2_FOUND)
         aethercore Qt6::Core Qt6::Test)
     set_target_properties(rade_v2_mode_identity_test PROPERTIES AUTOMOC ON)
     add_test(NAME rade_v2_mode_identity_test COMMAND rade_v2_mode_identity_test)
+
+    # The codec↔transport seam, wired as MainWindow wires it, with the engine
+    # on a REAL worker thread. The seam carries std::vector<float> across a
+    # queued connection: if the metatype is unresolvable, Qt drops the call at
+    # runtime with a warning and the slot is never invoked — no audio, no
+    # error. A same-thread test uses direct connections and cannot see that.
+    add_executable(rade_v2_seam_test tests/rade_v2_seam_test.cpp)
+    target_include_directories(rade_v2_seam_test PRIVATE src ${RADE_V2_DIR}/src)
+    target_link_libraries(rade_v2_seam_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::Test)
+    set_target_properties(rade_v2_seam_test PROPERTIES AUTOMOC ON)
+    add_test(NAME rade_v2_seam_test COMMAND rade_v2_seam_test)
+    set_tests_properties(rade_v2_seam_test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 # Resampler::flush() recovers the samples left inside the FIR at end of stream.

@@ -2107,6 +2107,19 @@ void MainWindow::onSliceAdded(SliceModel* s)
         else if (m_fdvDisplaySliceId == s->sliceId())
             deactivateFdvDisplay();
 #endif
+#ifdef AETHER_ENABLE_RADE_V2
+        // RAD2 activates from the MODE, not from a button — which is the
+        // whole difference from V1. V1 needs a `radeActivated` toggle on the
+        // VFO and the RX applet because the slice's real mode is DIGU and
+        // something has to say "and also run the modem". Here the mode IS the
+        // statement, so selecting RAD2 from any surface — our combos, a remote
+        // SmartSDR client, a profile load, TCI — starts the waveform, and
+        // there is no second control to keep in sync with it.
+        if (mode.compare(QLatin1String("RAD2"), Qt::CaseInsensitive) == 0)
+            activateRADEV2(s->sliceId());
+        else if (m_radeV2SliceId == s->sliceId())
+            deactivateRADEV2();
+#endif
     });
 
     // Update RTTY mark/space lines on spectrum when mark/shift changes;
@@ -2373,6 +2386,11 @@ void MainWindow::onSliceRemoved(int id)
     if (m_adaptiveFilterEngine)
         m_adaptiveFilterEngine->resetSlice(id);
 
+#ifdef AETHER_ENABLE_RADE_V2
+    // The RAD2 slice was closed out from under us.
+    if (id == m_radeV2SliceId)
+        deactivateRADEV2();
+#endif
 #ifdef HAVE_RADE
     // If the RADE slice was closed, deactivate RADE
     if (id == m_radeSliceId)

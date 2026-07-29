@@ -34,6 +34,10 @@
 #include "RadeApplet.h"
 #include "core/RADEEngine.h"
 #endif
+#ifdef AETHER_ENABLE_RADE_V2
+#include "core/RADEV2Engine.h"
+#include "core/backends/flex/FlexWaveformTransport.h"
+#endif
 #if defined(Q_OS_MAC)
 #include "core/VirtualAudioBridge.h"
 #elif defined(HAVE_PIPEWIRE)
@@ -263,6 +267,309 @@ void MainWindow::refreshRttyDecodeState()
     if (!m_rttyDecoder.isRunning()) m_rttyDecoder.start();
 }
 
+
+#ifdef AETHER_ENABLE_RADE_V2
+// ─── RADE V2 ───────────────────────────────────────────────────────────────
+//
+// Read activateRADE() below for the contrast; that is the point of keeping the
+// two side by side rather than generalising one into the other.
+//
+// V1 activation rewrites the slice's mode to DIGU/DIGL, forces `audio_mute=1`,
+// remembers the previous mute so it can be put back, acquires a DAX channel
+// with reference counting, and grafts a parallel "RADE" badge onto a slice the
+// radio believes is in a plain digital mode. Every one of those is a
+// consequence of the radio not knowing what RADE is.
+//
+// Here the radio does know. `RAD2` is a registered waveform mode, so the slice
+// is genuinely in it, the radio routes its audio through us natively, and none
+// of the above exists: no mute, no DAX, no mode rewrite, no badge, nothing to
+// strand if activation fails halfway.
+//
+// What replaces all of it is a registration handshake (§7.1 R1) and a pair of
+// UDP streams, both owned by FlexWaveformTransport.
+void MainWindow::activateRADEV2(int sliceId)
+{
+    if (m_radeV2SliceId == sliceId && m_radeV2Engine)
+        return;
+    if (m_radeV2SliceId >= 0 && m_radeV2SliceId != sliceId)
+        deactivateRADEV2();
+
+    auto* s = m_radioModel.slice(sliceId);
+    if (!s) return;
+
+    // The Flex Waveform API is a Flex protocol. AetherSDR now carries three
+    // backends behind IRadioBackend (flex / hl2 / sim) and will carry more, and
+    // on the others `sendCmd` reaches nothing at all — so the registration
+    // would be written into a void and the reply callback that carries the six
+    // stream ids would simply never fire. No error, no timeout, no audio: the
+    // exact silent-hang shape §7.1 is full of. Refuse up front instead.
+    if (!m_radioModel.usesFlexCommandPlane()) {
+        qCWarning(lcRade) << "MainWindow: RAD2 needs the Flex command plane;"
+                          << "backend family is" << m_radioModel.family();
+        return;
+    }
+
+    // The waveform's TX pump is driven by the radio's `tx_stream_in` for THIS
+    // slice, so it has to be the TX slice to transmit at all. Unlike V1 there
+    // is no failure path that needs the previous owner restored — nothing else
+    // has been mutated yet at this point.
+    if (!s->isTxSlice())
+        s->setTxSlice(true);
+
+    m_radeV2SliceId = sliceId;
+
+    // ─── Transport: main thread, because it owns the socket ────────────────
+    //
+    // §7.2 — the transport is HANDED its way onto the wire. `FlexBackend` is
+    // not modified and does not know RADE exists; the dependency points one
+    // way and rade_v2_backend_boundary_test enforces it.
+    //
+    // The sink is RadioModel::sendCmd rather than IRadioBackend::invokeExtension
+    // for a measured reason, recorded here because the wrong choice compiles
+    // and half-works: invokeExtension CANNOT CARRY A REPLY BODY. It answers
+    // extensionResult(requestId, true), which acknowledges *dispatch*, not the
+    // radio's response. `waveform create` returns the six stream ids in its
+    // reply body (§7.1 R7) and there is no other way to learn them.
+    m_radeV2Transport = new FlexWaveformTransport(this);
+    m_radeV2Transport->setCommandSink(
+        [this](const QString& cmd, FlexWaveformProvider::ReplyFn onReply) {
+            m_radioModel.sendCmdPublic(cmd, onReply);
+        });
+    m_radeV2Transport->setRadioAddress(m_radioModel.radioAddress());
+
+    // ─── Engine: worker thread ─────────────────────────────────────────────
+    m_radeV2Engine = new RADEV2Engine;   // no parent — moved to the worker
+    m_radeV2Thread = new QThread(this);
+    m_radeV2Thread->setObjectName("RADEV2Engine");
+    m_radeV2Engine->moveToThread(m_radeV2Thread);
+    connect(m_radeV2Thread, &QThread::finished, m_radeV2Engine, &QObject::deleteLater);
+    m_radeV2Thread->start();
+
+    bool ok = false;
+    QMetaObject::invokeMethod(m_radeV2Engine, [this, &ok]() {
+        ok = m_radeV2Engine->start();
+    }, Qt::BlockingQueuedConnection);
+    if (!ok) {
+        qCWarning(lcRade) << "MainWindow: RADE V2 engine failed to start";
+        deactivateRADEV2();
+        return;
+    }
+
+    // ─── The seam ──────────────────────────────────────────────────────────
+    //
+    // Signals, not an interface pointer, precisely so these cross-thread hops
+    // are the compiler's problem and not the caller's. Every one of them is
+    // between the main thread and the worker, so they auto-queue; they are
+    // spelled Qt::QueuedConnection anyway, because a reader should not have to
+    // deduce the threading from where the objects happen to live.
+    connect(m_radeV2Transport, &FlexWaveformTransport::rxPassband,
+            m_radeV2Engine, &RADEV2Engine::onRxPassband, Qt::QueuedConnection);
+    connect(m_radeV2Transport, &FlexWaveformTransport::txClockTick,
+            m_radeV2Engine, &RADEV2Engine::onTxClockTick, Qt::QueuedConnection);
+
+    connect(m_radeV2Engine, &RADEV2Engine::decodedAudioReady,
+            m_radeV2Transport, &FlexWaveformTransport::submitDecodedAudio,
+            Qt::QueuedConnection);
+    connect(m_radeV2Engine, &RADEV2Engine::modulatedAudioReady,
+            m_radeV2Transport, &FlexWaveformTransport::submitModulatedAudio,
+            Qt::QueuedConnection);
+
+    // §7.1 T3, and the reason the drain is started BY THE CODEC rather than
+    // from the PTT hook directly: only the codec knows when the over is really
+    // over, and the transport's synthesized clock does not start by itself. If
+    // nothing starts it the tail is never transmitted and readyToUnkey() never
+    // arrives, so the carrier is held until something else rescues it.
+    // See RADEV2Engine::txTailQueued().
+    connect(m_radeV2Engine, &RADEV2Engine::txTailQueued,
+            m_radeV2Transport, &FlexWaveformTransport::requestEndTx,
+            Qt::QueuedConnection);
+    connect(m_radeV2Engine, &RADEV2Engine::txTailComplete,
+            m_radeV2Transport, &FlexWaveformTransport::notifyTxTailComplete,
+            Qt::QueuedConnection);
+
+    // ─── Mic ───────────────────────────────────────────────────────────────
+    //
+    // §9 — the transmit CLOCK comes from `tx_stream_in` (§7.1 T1) and the
+    // AUDIO comes from AudioEngine. Keeping those separate is what makes
+    // "can tx_stream_in carry usable mic audio" (§10.9 D: flowing, but silent)
+    // an open question rather than a blocker.
+    //
+    // setRadeMode() is the raw-mic tap: onTxAudioReady() emits txRawPcmReady
+    // and returns before the Opus voice path. V2 wants exactly that and
+    // nothing else — the modulated audio goes out our own waveform stream, so
+    // sendModemTxAudio()/dax_tx is never involved.
+    m_audio->setRadeMode(true);
+    connect(m_audio, &AudioEngine::txRawPcmReady,
+            m_radeV2Engine, &RADEV2Engine::feedTxAudio, Qt::QueuedConnection);
+
+    // ─── PTT ───────────────────────────────────────────────────────────────
+    //
+    // The contract from §7.1 T3: after the operator unkeys, the ~120 ms EOO
+    // tail still has to go out, and it cannot ride the normal pump because the
+    // radio has stopped asking. So the unkey is INTERCEPTED, the tail is
+    // clocked out on a synthesized clock, and only readyToUnkey() releases the
+    // transmitter.
+    //
+    // Layer 1 — PttOffHook fires BEFORE setMox(false), so the carrier is still
+    // up while the tail drains.
+    m_radioModel.transmitModel().setPttOffHook([this]() {
+        if (m_radeV2UnkeyPending) return;
+        m_radeV2UnkeyPending = true;
+        QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
+            m_radeV2Engine->endTx();
+        }, Qt::QueuedConnection);
+    });
+
+    // Layer 2 — the transport has clocked the whole tail out. THIS, and only
+    // this, is when the carrier may drop. It fires on every exit path the
+    // transport has (complete / timeout / cancel / never-keyed), so a stuck
+    // codec cannot hold the transmitter keyed indefinitely: a truncated EOO is
+    // a decode problem, a stuck carrier is an interference problem.
+    connect(m_radeV2Transport, &FlexWaveformTransport::readyToUnkey, this, [this]() {
+        if (!m_radeV2UnkeyPending) return;
+        m_radeV2UnkeyPending = false;
+        m_radeV2TxActive = false;
+        m_radioModel.setTransmit(false);
+    });
+
+    // Layer 3 — MOX edges. Key: reset the codec for a new over (§7.1 T9's
+    // fourth obligation lives inside beginTx() — flush() is terminal, so the
+    // resampler must be reset or the SECOND over is silent). Unkey without an
+    // interception (hardware PTT, interlock) still has to drain the tail.
+    m_radeV2MoxConn = connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+                              this, [this](bool tx) {
+        if (!m_radeV2Engine || !m_radeV2Transport) return;
+        if (tx) {
+            m_radeV2TxActive = true;
+            m_radeV2UnkeyPending = false;
+            m_radeV2Transport->beginTx();
+            QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
+                m_radeV2Engine->beginTx();
+            }, Qt::QueuedConnection);
+        } else if (!m_radeV2UnkeyPending && m_radeV2TxActive) {
+            m_radeV2UnkeyPending = true;
+            QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
+                m_radeV2Engine->endTx();
+            }, Qt::QueuedConnection);
+        }
+    });
+
+    // ─── Callsign (§9.2, framing provisional) ──────────────────────────────
+    {
+        auto& cs = AppSettings::instance();
+        QString callsign;
+        if (cs.value("FreeDvUseRadioCallsign", "True").toString() == "True"
+                && !m_radioModel.callsign().isEmpty()) {
+            callsign = m_radioModel.callsign();
+        } else {
+            callsign = cs.value("FreeDvMyCallsign", "").toString().trimmed().toUpper();
+        }
+        if (!callsign.isEmpty()) {
+            QMetaObject::invokeMethod(m_radeV2Engine, [this, callsign]() {
+                m_radeV2Engine->setTxCallsign(callsign);
+            }, Qt::QueuedConnection);
+        }
+    }
+
+    // ─── Diagnostics ───────────────────────────────────────────────────────
+    //
+    // §7.1b — SYNC IS NOT A CHECK ON ANYTHING. A conjugation error still
+    // acquires, stays acquired, and emits MORE frames than correct input; the
+    // SNR estimate is the only tell, and it is a ~29 dB one. So the two are
+    // always logged together, and any future RAD2 display must show them
+    // together for the same reason.
+    connect(m_radeV2Engine, &RADEV2Engine::syncChanged, this, [this](bool synced) {
+        qCInfo(lcRade) << "RADE V2: sync" << synced
+                       << "snr" << (m_radeV2Engine ? m_radeV2Engine->snrDb() : 0.0f) << "dB";
+    }, Qt::QueuedConnection);
+
+    // Deactivate if the slice leaves RAD2 by any path — another client, a
+    // profile load, TCI. §7.1 N1 says the radio reverts the slice cleanly on
+    // its own, so this is about tearing down OUR side, not about rescuing the
+    // radio's.
+    m_radeV2ModeConn = connect(s, &SliceModel::modeChanged,
+                               this, &MainWindow::onRadeV2SliceModeChanged,
+                               Qt::UniqueConnection);
+
+    connect(m_radeV2Transport, &FlexWaveformTransport::failed, this,
+            [this](const QString& reason) {
+        qCWarning(lcRade) << "MainWindow: RADE V2 waveform registration failed:" << reason;
+        deactivateRADEV2();
+    });
+    connect(m_radeV2Transport, &FlexWaveformTransport::ready, this, [this]() {
+        qCInfo(lcRade) << "MainWindow: RADE V2 waveform registered and streaming";
+    });
+
+    // Binds the UDP port, then registers — in that order, because §7.1 R1
+    // sends `udpport` last and the number has to exist first.
+    if (!m_radeV2Transport->start()) {
+        qCWarning(lcRade) << "MainWindow: RADE V2 transport failed to bind";
+        deactivateRADEV2();
+        return;
+    }
+
+    qCInfo(lcRade) << "MainWindow: RADE V2 activated on slice" << sliceId;
+}
+
+void MainWindow::deactivateRADEV2()
+{
+    if (m_radeV2SliceId < 0 && !m_radeV2Engine && !m_radeV2Transport)
+        return;
+
+    if (m_radeV2SliceId >= 0) {
+        if (auto* s = m_radioModel.slice(m_radeV2SliceId))
+            disconnect(s, &SliceModel::modeChanged,
+                       this, &MainWindow::onRadeV2SliceModeChanged);
+        m_radeV2SliceId = -1;
+    }
+
+    m_radioModel.transmitModel().clearPttOffHook();
+    disconnect(m_radeV2MoxConn);
+    disconnect(m_radeV2ModeConn);
+    m_radeV2UnkeyPending = false;
+    m_radeV2TxActive = false;
+
+    if (m_audio) {
+        m_audio->setRadeMode(false);
+        if (m_radeV2Engine)
+            disconnect(m_audio, &AudioEngine::txRawPcmReady, m_radeV2Engine, nullptr);
+    }
+
+    // Transport first: it holds the registration, and `waveform remove` should
+    // go out while the engine can still be told to stop cleanly. §7.1 N1 —
+    // teardown is clean on remove, on disconnect, and on an abrupt kill, so
+    // this ordering is a courtesy rather than a correctness requirement.
+    if (m_radeV2Transport) {
+        m_radeV2Transport->stop();
+        m_radeV2Transport->deleteLater();
+        m_radeV2Transport = nullptr;
+    }
+
+    if (m_radeV2Engine) {
+        QMetaObject::invokeMethod(m_radeV2Engine, &RADEV2Engine::stop,
+                                  Qt::BlockingQueuedConnection);
+        if (m_radeV2Thread) {
+            m_radeV2Thread->quit();
+            m_radeV2Thread->wait(2000);
+            m_radeV2Thread->deleteLater();
+            m_radeV2Thread = nullptr;
+        }
+        m_radeV2Engine = nullptr;   // deleteLater on thread finish owns it
+    }
+
+    qCInfo(lcRade) << "MainWindow: RADE V2 deactivated";
+}
+
+void MainWindow::onRadeV2SliceModeChanged(const QString& mode)
+{
+    // RAD2 is the mode — so leaving it IS the deactivation. Contrast V1, whose
+    // equivalent watches for the slice leaving DIGU/DIGL because its real mode
+    // was never RADE in the first place, and whose job is to make sure a
+    // stranded `audio_mute=1` gets cleared. There is no mute here to strand.
+    if (mode.compare(QLatin1String("RAD2"), Qt::CaseInsensitive) != 0)
+        deactivateRADEV2();
+}
+#endif  // AETHER_ENABLE_RADE_V2
 
 #ifdef HAVE_RADE
 void MainWindow::activateRADE(int sliceId)

@@ -183,6 +183,10 @@ class DvkPanel;
 #ifdef HAVE_RADE
 class RADEEngine;
 #endif
+#ifdef AETHER_ENABLE_RADE_V2
+class RADEV2Engine;
+class FlexWaveformTransport;
+#endif
 #if defined(Q_OS_MAC)
 class VirtualAudioBridge;
 using DaxBridge = VirtualAudioBridge;
@@ -1752,6 +1756,28 @@ private:
     QMetaObject::Connection m_clockDaxConn;  // daxAudioReady feed — live only while the engine runs
     QMetaObject::Connection m_clockSliceAudioConn;  // seam per-slice audio feed — same lifetime
     void setupAetherClock();
+
+#ifdef AETHER_ENABLE_RADE_V2
+    // ─── RADE V2 (RFC docs/architecture/rade-v2-waveform-design.md) ────────
+    //
+    // Deliberately a PARALLEL block, not a generalisation of V1's below. V1 is
+    // never touched; it is deleted wholesale later. Note how much smaller this
+    // is, and that the difference is the point: no mute to remember and
+    // restore, no DAX channel to acquire and reference-count, no mode to
+    // rewrite and put back. RAD2 *is* the slice's mode, and the radio routes
+    // its audio natively.
+    RADEV2Engine*         m_radeV2Engine{nullptr};
+    QThread*              m_radeV2Thread{nullptr};
+    FlexWaveformTransport* m_radeV2Transport{nullptr};
+    int  m_radeV2SliceId{-1};
+    bool m_radeV2TxActive{false};
+    bool m_radeV2UnkeyPending{false};
+    QMetaObject::Connection m_radeV2MoxConn;
+    QMetaObject::Connection m_radeV2ModeConn;
+    void activateRADEV2(int sliceId);
+    void deactivateRADEV2();
+    void onRadeV2SliceModeChanged(const QString& mode);
+#endif
 
 #ifdef HAVE_RADE
     RADEEngine* m_radeEngine{nullptr};
