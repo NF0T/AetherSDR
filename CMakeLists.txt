@@ -876,6 +876,7 @@ set(CORE_SOURCES
     src/core/NvidiaAfxPack.cpp
     src/core/DeepFilterFilter.cpp
     src/core/RADEEngine.cpp
+    src/core/RADEV2Engine.cpp                # RADE V2 codec core (ENABLE_RADE_V2)
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
     src/core/ShortcutManager.cpp

@@ -4243,6 +4243,17 @@ if(RADE_V2_FOUND)
     target_link_libraries(rade_v2_codec_test PRIVATE aethercore Qt6::Core Qt6::Test)
     set_target_properties(rade_v2_codec_test PROPERTIES AUTOMOC ON)
     add_test(NAME rade_v2_codec_test COMMAND rade_v2_codec_test)
+
+    # RADEV2Engine — the codec core (RFC §7.1 T9). Three silent failures live
+    # here: the TX upsampler's transition band (default = 297 ms of filter
+    # memory against a 120 ms EOO), the missing flush() that strands the last
+    # 8.6 ms of it, and flush()'s terminality — skip the reset() in beginTx()
+    # and the FIRST over is perfect while every one after it is silent.
+    add_executable(rade_v2_engine_test tests/rade_v2_engine_test.cpp)
+    target_include_directories(rade_v2_engine_test PRIVATE src ${RADE_V2_DIR}/src)
+    target_link_libraries(rade_v2_engine_test PRIVATE aethercore Qt6::Core Qt6::Test)
+    set_target_properties(rade_v2_engine_test PROPERTIES AUTOMOC ON)
+    add_test(NAME rade_v2_engine_test COMMAND rade_v2_engine_test)
 endif()
 
 # Resampler::flush() recovers the samples left inside the FIR at end of stream.
