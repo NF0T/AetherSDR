@@ -47,6 +47,10 @@ side-channel), working across **all** Flex models, and positioning the codec abo
 - On-radio Docker packaging (FreeDV is expected to ship that; out of scope here).
 - Non-Flex backend support today (no other backend can transmit voice yet — see §12).
 - Changing or refactoring the RADE V1 implementation.
+- **FreeDV Reporter integration — deliberately deferred, not forgotten (§9.3).** V1 reports to the
+  public map; V2 must not until its callsign framing and mode string are settled with the
+  ecosystem, because the failure mode is publishing wrong data to a network other operators
+  trust.
 
 ## 3. Background
 
@@ -601,6 +605,73 @@ incompatible one; until it stabilizes our framing is provisional.
 needed** for the baseline: `RADEV2Engine` surfaces the decoded callsign to our own UI directly via
 Qt signals. It is a candidate for a *future* nicety (publish decoded text to SmartSDR / other
 clients for display, or accept text from SmartSDR to transmit) and is deferred out of baseline scope.
+
+### 9.3 FreeDV Reporter — what V1 does, and why V2 must not do it yet
+
+RADE V1 reports to the public FreeDV Reporter map (`FreeDvClient`, shipped in v0.9.3, PR #2173).
+V2 does not, and **should not until two upstream conventions exist**. This section records the
+shape of the eventual work and, more importantly, the reason for the delay — because "V1 has it
+and V2 doesn't" reads like an oversight, and it is a decision.
+
+**What V1 sends today:**
+
+| Event | Payload | Trigger |
+|---|---|---|
+| station presence | callsign, grid, message, software version, frequency | RADE activation |
+| `freq_change` | frequency | QSY |
+| `tx_report` | `mode: "RADEV1"`, transmitting | MOX edge, guarded against tune/ATU (#2173) |
+| `rx_report` | far-end callsign, `mode: "RADEV1"`, SNR | 1 s timer while synced, **and** immediately on EOO callsign decode |
+
+**Why V2 cannot simply reuse it.** Four things differ, and three of them are correctness issues
+rather than plumbing:
+
+**1. The far-end callsign is no longer trustworthy.** V1 decodes it from the EOO frame's
+LDPC-coded text channel, with a CRC — if it decodes, it is right. V2 has no `rade_text` at all
+(upstream dropped the subsystem). The callsign rides the inline BPSK data channel described in
+§9.2: **raw, with no sync, no CRC and no FEC**, and our application framing is explicitly
+provisional until the ecosystem settles it. A V2 `rx_report` built on that would publish
+**bit-error garbage as station callsigns** onto a shared public map. That is worse than silence:
+it invents spots for stations that were never there, and it does so under our name.
+
+**2. `mode` is an ecosystem string, not ours to coin.** V1 sends the literal `"RADEV1"`. The V2
+equivalent has to be whatever FreeDV Reporter and FreeDV-GUI agree on — the same dependency, on the
+same upstream, as §9.2's framing. Inventing one now means either being alone on the map under a
+mode nobody recognises, or colliding with the real one later.
+
+**3. Sync is not a sufficient gate for reporting.** V1 gates `rx_report` on sync. §7.1b measured
+that a conjugated or mistuned V2 signal **still acquires and stays acquired**, and §10.13 saw it in
+the field: shifted 30–140 Hz off frequency the receiver produced *more* synced blocks than at the
+correct offset (489 vs 394) while mean SNR collapsed to ~7 dB. Ported unchanged, that gate would
+emit confident spots for signals we are not actually decoding. Any V2 reporting must gate on **SNR
+as well as sync**, and the threshold wants deriving from real decodes rather than picking a number.
+
+**4. The EOO trigger does not port.** V1 sends an immediate `rx_report` the moment the EOO callsign
+decodes, because sync drops 100–500 ms later and would otherwise clear the callsign before the
+timer fires. V2's EOO is **pilot-only** and carries no data, so that trigger does not exist. The
+inline channel is continuous instead, which is a better fit for periodic reporting — but it means
+the timing logic is V1-shaped and should be rewritten rather than adapted.
+
+**What it does inherit.** The station-presence, `freq_change` and `tx_report` paths are
+mode-agnostic and largely reusable, including the tune/ATU guard (#2173) — a tune cycle must never
+be reported as a transmission. So is the refusal to enable with an empty callsign or grid, which
+exists for exactly the reason this whole section does: **not broadcasting placeholder data to a
+public map.** V2 extends that principle from "no placeholder station data" to "no unvalidated
+decode data".
+
+**Gates on doing the work** — all three, not any:
+
+1. The RADE V2 **callsign framing convention** is published by the ecosystem (§9.2, §16 Q2).
+2. The **FreeDV Reporter mode string** for V2 is agreed.
+3. A **decode-confidence gate** is defined from real on-air decodes, so `rx_report` cannot fire on
+   a false acquisition (§7.1b, §10.13).
+
+Sequencing: this is **Phase 5** work, after interop with a real V2 station is possible. It is not
+on the critical path for anything, and doing it early has negative value — the earliest useful
+moment is the one where there is a second station to be right about.
+
+> **Slice selection, when it happens.** There is an existing plan for priority-ordered slice
+> selection when several could report (RADE > Docker FreeDV > active slice) plus a union band
+> filter. `RAD2` joins that ordering rather than getting a parallel path of its own.
 
 ## 10. The waveform provider protocol (clean-room, from public spec + Phase 0 observation)
 
@@ -1713,6 +1784,8 @@ Phase 0 spike (done) → **Phase 1 this RFC (draft → harden → post when bull
 clean-room provider in `backends/flex` (gated, provable with a loopback/V1 codec) → Phase 3 engine +
 seam + `RAD2` registry mode → Phase 4 vendor V2 + thin codec glue (vendor **last**) → Phase 5
 convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a separate later PR.
+**FreeDV Reporter integration is Phase 5 as well, and is gated on ecosystem conventions rather
+than on us (§9.3).**
 
 ## 15. Alternatives considered
 
@@ -1801,6 +1874,13 @@ convergence + flip `ENABLE_RADE_V2` at upstream V2 release. V1 deletion is a sep
    TX design. **Q4 is effectively closed**; what is left (sidelobe level, IMD, EVM) is low-value
    and does not block Phase 2.
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
+6. **FreeDV Reporter integration — OPEN, deliberately deferred to Phase 5 (see §9.3).** V1 reports
+   to the public map; V2 must not until (a) the callsign framing convention is published (Q2), (b)
+   the Reporter `mode` string for V2 is agreed, and (c) a decode-confidence gate stronger than
+   `sync` is defined (§7.1b, §10.13). The blocking concern is not effort but **data quality on a
+   shared network**: V2's callsign channel is raw and unframed, so reporting it today would publish
+   bit errors as other people's callsigns. Station presence, `freq_change` and `tx_report` are
+   mode-agnostic and reusable; `rx_report` is the part that must wait.
 
 ## 17. References
 
