@@ -125,10 +125,15 @@ int main(int argc, char** argv)
            !migratedSettings.contains(QStringLiteral("ExecutablePath")));
 
     DigitalVoiceModeRegistry& modeRegistry = DigitalVoiceModeRegistry::instance();
-    report("mode registry: exposes only the complete D-STAR engine",
-           DigitalVoiceModeRegistry::supportedModes().size() == 1
-               && DigitalVoiceModeRegistry::supportedModes().first().radioMode
-                   == QStringLiteral("DSTR"));
+    // D-STAR is the first entry and the only one that needs the ThumbDV
+    // helper. The count is no longer 1: RAD2 joins the registry when
+    // ENABLE_RADE_V2 is on (RFC §10.1), so assert D-STAR's own properties
+    // rather than the size of the list, which is not what this test is about.
+    report("mode registry: exposes the complete D-STAR engine",
+           DigitalVoiceModeRegistry::supportedModes().first().radioMode
+                   == QStringLiteral("DSTR")
+               && DigitalVoiceModeRegistry::descriptor(DigitalVoiceModeId::DStar)
+                      .requiresLocalHelper);
     report("mode registry: activates D-STAR ThumbDV ownership",
            modeRegistry.activateMode(DigitalVoiceModeId::DStar));
     report("mode registry: first slice obtains exclusive ownership",
