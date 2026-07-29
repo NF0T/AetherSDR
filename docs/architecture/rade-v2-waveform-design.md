@@ -1459,6 +1459,28 @@ before the transport is written rather than after.
   and **mutation-checked**: flipping either sign in production fails the matching test and nothing
   else. `outboundRoundTripsThroughRxDecode` states the asymmetry as a property rather than as two
   independent assertions, so the pair cannot drift into agreement.
+- **The seam guard — LANDED (`rade_v2_seam_test`).** The engine and the transport each had their
+  own passing tests while the thing between them did not exist. This wires them exactly as
+  `MainWindow::activateRADEV2()` does, **with the engine on a real QThread**, and runs an over
+  end to end: key → mic audio → the radio's clock → unkey → tail → release.
+  > **The thread is not incidental.** The seam carries `std::vector<float>` across a queued
+  > connection; if the metatype is unresolvable Qt drops the call at runtime with a warning and
+  > the slot is never invoked — no audio, no error. A same-thread test uses direct connections
+  > and cannot see that at all.
+  >
+  > **Two assertions do the work.** Every tick that carried the tail must be flagged
+  > `synthesized` (otherwise the test is measuring the radio, not the drain — §7.1 T3's trap),
+  > and the release must land well inside the transport's 500 ms backstop. Without the second,
+  > a broken handshake still *looks* like a completed one, because the safety net releases the
+  > transmitter too.
+  >
+  > **Mutation-checked, and one mutation usefully failed to fire.** Deleting the codec's
+  > `txTailQueued()` hangs two tests out to their timeouts — the tail is never clocked out and
+  > nothing ever grants permission to unkey. But swapping the queued/complete announcement order
+  > did *not* fail, and the reason is worth keeping: the queue is filled synchronously
+  > microseconds earlier and the drain timer ticks every 2 ms, so that ordering is cheap
+  > insurance rather than a load-bearing constraint. The comments were corrected to say so
+  > rather than left claiming a guarantee the test does not demonstrate.
 - **The codec-core guards — LANDED (`rade_v2_engine_test`), all five mutation-checked.** The
   engine's silent failures are the T9 pair plus one the design did not anticipate:
   - *T9 (1)* the TX upsampler's transition band — mutated to the default, the queued tail grows
