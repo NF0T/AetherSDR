@@ -427,6 +427,50 @@ a RADE header, and `FlexBackend.{h,cpp}` may not name the provider, the stream, 
 That is a grep. **It has landed** as `rade_v2_backend_boundary_test` (§13), deliberately outside the
 `ENABLE_RADE_V2` gate, and both rules were mutation-checked before being trusted.
 
+### 7.2a Gating: a declared capability, not a family test
+
+**Added 2026-07-30, after `RadioCapabilities` landed upstream (#4508).** It changes the
+recommended shape of one thing this design does, so it is recorded here rather than left for a
+reviewer to find.
+
+The Flex Waveform API is a Flex protocol, so RAD2 has to be gated on the radio actually speaking
+it — on a backend without the SmartSDR text-command plane the registration is written into a void
+and the reply that carries the six stream ids never arrives. A silent hang, exactly the §7.1 shape.
+
+The **wrong way to express that**, which is what the first implementation did, is to ask whether
+the radio is a Flex. `src/core/backends/RadioCapabilities.h` is now the canonical answer to that
+class of question, and its rule is normative:
+
+> *"Clients render against what the radio **reports**. No call site asks 'is this a Flex' — no
+> `caps.family` test, no `dynamic_cast<FlexBackend*>`. This is the structural replacement for the
+> model-impersonation anti-pattern."*
+
+**So the gate should be a declared capability**: a backend states whether it accepts runtime
+waveform registration, `FlexBackend` sets it true, `Hl2Backend` and `SimBackend` set it false, and
+the field is recorded in `docs/architecture/radio-capabilities-map.md` — where the table exists
+precisely because *"a capability no consumer reads looks identical, from the backend side, to one
+that works."*
+
+Two traps worth naming, both of which the map doc calls out:
+
+- **It is NOT `hasWaveforms`.** That field already exists and means the radio accepts *installable*
+  waveform packages, driving the File ▸ Waveforms management menu. Runtime `waveform create` is a
+  different thing — transient, connection-scoped, nothing installed. Reusing the flag would make
+  one menu and one modem disagree about what it meant.
+- **Fields default to `false`**, so a backend that omits one silently declares the feature absent.
+  Set it explicitly in all three backends.
+
+**Where the call goes matters too.** `MainWindow::applyCapabilitiesToUi()` is the single fan-out
+for capability-driven surfaces, bound to `capabilitiesChanged` — which fires on both connection
+edges *and* on mid-session revisions. Registration should hang off that rather than off its own
+connect-time lambda; scattered connect lambdas are how two callers end up driving one piece of
+state and last-writer-wins.
+
+> **Status: not yet done.** The current implementation gates on
+> `RadioModel::usesFlexCommandPlane()` from a connect-time lambda. It is functionally correct on
+> every backend today and all tests pass — this is a **merge-readiness** item, not a defect, and it
+> is the one piece of this design that is knowingly out of step with the architecture around it.
+
 ## 8. Phase 0 evidence (hardened by coding, live FLEX-8400 fw 4.2.20.41343)
 
 The spike drove the risky unknowns to ground before committing to this design. Every claim below
@@ -1496,6 +1540,14 @@ not appear, could not be selected, and the registration could not run. The dropd
 > §10.2 already demonstrated: that probe registered a waveform with no slice in existence at all.
 > The evidence was in this document before the code was written.
 
+**A refinement on R9, measured while verifying an upstream rebase (2026-07-30).** The connect
+edge we register on — `RadioModel::connectionStateChanged(true)` — fires **before** the `client
+gui` registration handshake completes, not after. Registration works anyway, and did on air. This
+is recorded because it looks like a bug to anyone who reads the sequence, and "fixing" it by
+deferring registration to a later edge would reintroduce the deadlock R9 exists to prevent. If a
+slow or strict link ever *does* reject the early `waveform create`, the answer is to retry on the
+capability edge (§7.2a), not to move it back behind mode selection.
+
 **Defect 2 — the registry gate (now G5).** With the mode visible and selectable, selecting it
 still did nothing. The single logged line:
 
@@ -1525,6 +1577,13 @@ D-STAR satisfies the same gate when its helper process starts
 (`DigitalVoiceWaveformProcess.cpp:271`). The analogue for RAD2 is the transport's `ready()`
 handler: the waveform now exists on the radio, so the mode is genuinely available to be claimed.
 Guarded by `rade_v2_mode_identity_test::aSliceCannotClaimRad2UntilTheModeIsRunning`.
+
+> **A second route into G5, from a feature that shipped upstream afterwards.** The host-side
+> memory bank (#4590) stores and recalls a slice's **mode**. Recalling a saved `RAD2` channel
+> before the waveform has registered lands in exactly the path above — `setMode()` returns early,
+> the combo reads RAD2, the slice does not move. The G5 fix covers it once registration has
+> happened, but the ordering is now reachable from an operator action that has nothing to do with
+> the mode dropdown, and it deserves a test.
 
 > **Both defects are the same shape, and it is worth naming.** Each is a *second* precondition
 > hiding behind a first one that looked sufficient. "The waveform is registered with the radio"
@@ -1751,6 +1810,12 @@ before the transport is written rather than after.
   injected amplitude to test **power-transfer linearity**, since any ALC/compression in the path
   would wreck OFDM. Tier 2 keys the transmitter and is operator-supervised, never agent-initiated
   (the automation bridge already refuses TX-keying actions, `AutomationServer.cpp:5488`).
+- **§7.1 T6 band-limiting — NOT YET IMPLEMENTED.** Recorded explicitly because everything around
+  it in this section is marked LANDED, and a reader would reasonably assume it too. The V2
+  modulator does no shaping and `tx_filter` is accepted-and-ignored (§10.10, measured), so our own
+  TX chain is the only place sidelobes can be suppressed — and nothing in it does. The 8→24 kHz
+  upsampler suppresses *some* incidentally, which is what makes the gap easy to miss. The
+  verification method is the panadapter capture immediately below.
 - **TX spectrum via the radio's own panadapter (Phase 2/3) — the only integration check available
   for §10.10.** §10.10 concluded the provider must band-limit in its own TX chain, because the V2
   modulator does no shaping (§10.1) and the waveform `tx_filter` is ignored. Without a measurement,
@@ -1874,7 +1939,40 @@ than on us (§9.3).**
    TX design. **Q4 is effectively closed**; what is left (sidelobe level, IMD, EVM) is low-value
    and does not block Phase 2.
 5. Per-slice audio port on `IRadioBackend` for future non-Flex hosting — tracked, maintainer-gated.
-6. **FreeDV Reporter integration — OPEN, deliberately deferred to Phase 5 (see §9.3).** V1 reports
+6. **Two clients on one radio — OPEN, and it applies to shipped D-STAR too.** The waveform
+   namespace is radio-level: §10.4 saw a *different* client render a slice in a mode registered by
+   a script, and §10.12 saw an already-open slice's `mode_list` refresh the moment we registered.
+   Registration *lifetime*, though, is connection-scoped — §7.1 N1 measured the radio reaping a
+   registration on disconnect and on abrupt kill. A radio-level name with connection-scoped
+   ownership is exactly the shape that has a collision question, and **nothing we have measured
+   answers it**: no probe has ever run two connections, FlexLib enumerates no duplicate-registration
+   error, and the radio publishes no list of *created* waveforms (`waveform` status carries
+   `installed_list`, `container` and `wfp_status` — installed packages, not runtime registrations).
+   Three possible behaviours:
+
+   | Radio behaviour | Consequence |
+   |---|---|
+   | rejects the duplicate `create` | client 2 has no RAD2; client 1 unaffected — benign, and already handled |
+   | **accepts and replaces** | `udpport` is set per waveform NAME, so client 1's audio is silently rerouted to client 2 |
+   | accepts as a distinct instance | both work; `mode_list` may show RAD2 twice |
+
+   The middle one is the §7.1 "code 0 means accepted, never applied" hazard again, and it is
+   undetectable from the victim's side. **Our name and mode are compile-time constants and
+   registration now fires automatically on every connect**, so two AetherSDR instances on one radio
+   both attempt it with no coordination. We also do **not** `waveform remove` before `create`,
+   unlike FlexRadio's own reference SDK (`digital_voice_mode_registry.c:170`, *"removing an absent
+   registration is harmless"*) and unlike all ten of our probes.
+
+   > **This is not RADE-specific.** D-STAR registers the fixed name `AetherDStar` from a per-PC
+   > helper, so two PCs against one radio is the identical collision, live in shipped code today.
+   > Whatever is learned here applies there.
+
+   **Settle it with a two-connection experiment before choosing a mitigation** — the probe library
+   already exists. Note the obvious fix points the wrong way: adopting the SDK's remove-before-create
+   makes *last writer win* deterministically, which is right for clearing our own stale registration
+   after an abrupt reconnect and actively wrong for coexisting with another client. `RadioCapabilities`
+   now declares `hasMultiClientSessions` (Flex ✅), which is a usable input to that decision.
+7. **FreeDV Reporter integration — OPEN, deliberately deferred to Phase 5 (see §9.3).** V1 reports
    to the public map; V2 must not until (a) the callsign framing convention is published (Q2), (b)
    the Reporter `mode` string for V2 is agreed, and (c) a decode-confidence gate stronger than
    `sync` is defined (§7.1b, §10.13). The blocking concern is not effort but **data quality on a
