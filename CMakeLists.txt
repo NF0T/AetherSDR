@@ -3583,7 +3583,9 @@ add_executable(aetherhf_settings_test
     tests/aetherhf_settings_test.cpp
     src/core/AetherHfSettings.cpp
     src/core/VaraProtocol.cpp
-    src/core/AppSettings.cpp
+    # AppSettings gained SettingsDatabase/SettingsPaths collaborators; take the
+    # whole bundle rather than tracking its internals from a test target.
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(aetherhf_settings_test PRIVATE src tests)
 target_link_libraries(aetherhf_settings_test PRIVATE Qt6::Core)
@@ -3595,7 +3597,7 @@ add_executable(vara_client_inhibit_test
     src/core/VaraProtocol.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(vara_client_inhibit_test PRIVATE src)
 target_link_libraries(vara_client_inhibit_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -5080,6 +5082,8 @@ endif()
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    aetherhf_settings_test
+    vara_client_inhibit_test
     slice_label_test
     theme_manager_test
     panadapter_message_overlay_test
