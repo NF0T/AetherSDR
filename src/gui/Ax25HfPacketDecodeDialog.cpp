@@ -21,6 +21,7 @@
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
+#include "gui/VaraModemPage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -854,11 +855,13 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_terminalTab = tabButton(QStringLiteral("Terminal"), false, tabsFrame);
     m_mailboxTab = tabButton(QStringLiteral("Mailbox"), false, tabsFrame);
     m_dstarTab = tabButton(QStringLiteral("D-STAR"), false, tabsFrame);
+    m_varaTab = tabButton(QStringLiteral("VARA HF"), false, tabsFrame);
     m_ax25Tab->setEnabled(true);
     m_kissTab->setEnabled(true);
     m_terminalTab->setEnabled(true);
     m_mailboxTab->setEnabled(true);
     m_dstarTab->setEnabled(true);
+    m_varaTab->setEnabled(true);
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
@@ -866,11 +869,13 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     tabGroup->addButton(m_terminalTab, 2);
     tabGroup->addButton(m_mailboxTab, 3);
     tabGroup->addButton(m_dstarTab, 4);
+    tabGroup->addButton(m_varaTab, 5);
     tabs->addWidget(m_ax25Tab, 1);
     tabs->addWidget(m_kissTab, 1);
     tabs->addWidget(m_terminalTab, 1);
     tabs->addWidget(m_mailboxTab, 1);
     tabs->addWidget(m_dstarTab, 1);
+    tabs->addWidget(m_varaTab, 1);
     root->addWidget(tabsFrame);
 
     m_tabStack = new QStackedWidget(bodyWidget());
@@ -966,6 +971,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_tabStack->addWidget(buildMailboxPage());
     m_dstarPage = new DStarModemPage(m_radio, m_tabStack);
     m_tabStack->addWidget(m_dstarPage);
+
+    // VARA HF. Like D-STAR this page owns its whole surface, so the shared
+    // decode log, raw TX row and status bar are hidden while it is showing.
+    m_varaPage = new VaraModemPage(m_radio, m_tabStack);
+    m_tabStack->addWidget(m_varaPage);
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     m_logFrame = logFrame;
@@ -2814,15 +2824,16 @@ void Ax25HfPacketDecodeDialog::updateTabChrome(int index)
     QWidget* page = m_tabStack ? m_tabStack->widget(index) : nullptr;
     const bool terminal = page == m_terminalPage;
     const bool dstar = page == m_dstarPage;
+    const bool vara = page == m_varaPage;
     const bool aprs = page == m_aprsPage;
-    const bool logVisible = !terminal && !dstar
+    const bool logVisible = !terminal && !dstar && !vara
         && (!aprs || m_diagnosticsDebugEnabled);
     if (m_logFrame)
         m_logFrame->setVisible(logVisible);
     if (m_txFrame)
-        m_txFrame->setVisible(!dstar && m_diagnosticsDebugEnabled);
+        m_txFrame->setVisible(!dstar && !vara && m_diagnosticsDebugEnabled);
     if (m_statusBar)
-        m_statusBar->setVisible(!dstar);
+        m_statusBar->setVisible(!dstar && !vara);
     if (auto* root = qobject_cast<QVBoxLayout*>(bodyWidget()->layout())) {
         root->setStretchFactor(m_tabStack, !logVisible ? 1 : (aprs ? 3 : 0));
         if (m_logFrame)
