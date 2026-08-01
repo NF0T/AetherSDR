@@ -193,7 +193,7 @@ because §10 discovered them across eleven separate probe sessions and an implem
 have to reconstruct the list by reading all of it.
 
 **🔇 marks a SILENT failure** — no error, no non-zero reply, no crash. The command is accepted, or
-the code compiles and runs, and the result is simply wrong. **17 of the 34 rows are silent**, and
+the code compiles and runs, and the result is simply wrong. **21 of the 38 rows are silent**, and
 several would present during Phase 4 as *"the codec doesn't work"*, which is the most expensive
 possible time to find them. **Every 🔇 row wants a regression test**, because code review cannot
 catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
@@ -254,6 +254,18 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | G3 | 🔇 Add `RAD2` to the DIGU-offset family | a width preset falls through to `lo=95; hi=width`, **clipping the top half of the modem** | §10.3, §10.4 |
 | G4 | `digu_offset` is the **centre a width-specified filter is built around** — not a passband shift, and measured not to shift RF placement either | — | §10.3, §10.11 |
 | G5 | 🔇 **`DigitalVoiceModeRegistry::activateMode()` must be called when the waveform registers.** Registering with the radio is only half of it — the registry separately gates slice claims on the mode being *running* | `SliceModel::setMode()` **returns early**: the combo shows `RAD2` while the slice stays in USB, with USB audio and no waveform on key-up. One warning line is the only evidence | §10.12 |
+
+### Persistence / settings store (RFC #4603)
+
+Not measured on hardware like the rows above — these are **derived from the shipped settings-store
+design** (upstream `e1d19ea9`, 2026-07-31) and from the G5 failure that was measured. They are
+here because all three produce the G5 dead state or its shape, and none of them announces itself.
+
+| # | Constraint | If violated | Evidence |
+|---|---|---|---|
+| S1 | 🔇 **Restored operating state must never carry `RAD2` as a mode.** `RestoredRadioState::mode` is gated by the `Tuning` domain and is handed to the backend *before* `connectRadio()` — necessarily before any waveform is registered (R9) | lands in the **G5 dead state**: combo reads `RAD2`, slice stays put. Restore the underlying mode (`DIGU`) and let mode-select re-derive `RAD2`, or defer the mode half until registration completes | §9.5, G5 |
+| S2 | 🔇 **A recalled memory carrying `RAD2` must be re-derived through the registry**, not written at the slice. The host-side bank stores a mode string, at `radio_settings (local, '', MemoryBank)` since #4603 PR 6 | same G5 shape by a second route — recall before registration and the slice never moves | §9.5, G5 |
+| S3 | 🔇 Any future RAD2 persistence is a **versioned `radio_settings` document with a checked `setFeature()` result** — never a flat `AppSettings` key | a refused write (read-only store, reset in progress) that the UI repaints over: the state looks saved and is not | §9.4 |
 
 ### Environment
 
@@ -470,6 +482,16 @@ state and last-writer-wins.
 > `RadioModel::usesFlexCommandPlane()` from a connect-time lambda. It is functionally correct on
 > every backend today and all tests pass — this is a **merge-readiness** item, not a defect, and it
 > is the one piece of this design that is knowingly out of step with the architecture around it.
+
+**A worked precedent now exists (added 2026-07-31).** RFC #4603 shipped
+`RadioCapabilities::clientSettingsDomains`, which is this exact pattern carried through end to
+end, and it is worth copying rather than re-deriving: it is **typed** (a `Q_DECLARE_FLAGS` set,
+not a boolean, because authority is per-domain), **declared explicitly by all three backends**,
+**guarded by a CI test** that pins the empty declarations so a future edit cannot quietly grant a
+domain, and **recorded in `radio-capabilities-map.md`** with the consumer named. It also models
+the naming rule the header states repeatedly — *"Named for the CONCEPT, not the brand"* — which
+rules out anything Flex-flavoured for the waveform-registration flag. The CI guard is the part
+most worth imitating: the failure it prevents, like ours, is silent.
 
 ## 8. Phase 0 evidence (hardened by coding, live FLEX-8400 fw 4.2.20.41343)
 
@@ -716,6 +738,86 @@ moment is the one where there is a second station to be right about.
 > **Slice selection, when it happens.** There is an existing plan for priority-ordered slice
 > selection when several could report (RADE > Docker FreeDV > active slice) plus a union band
 > filter. `RAD2` joins that ordering rather than getting a parallel path of its own.
+
+### 9.4 Client-side persistence — RAD2 stores nothing, deliberately
+
+**Added 2026-07-31, after the client settings store moved from XML to SQLite upstream
+(RFC #4603 phase 1, `e1d19ea9`).** Like §7.2a, it changes what a reviewer will expect of this
+design rather than what it does, so it is recorded here rather than left to be discovered.
+
+RADE V2 holds **no persistent client-side state**. Verified across every file this design
+introduces — `RADEV2Engine`, `FlexWaveformProvider`, `FlexWaveformStream`,
+`FlexWaveformTransport`, `ModeFamily.h`: no `AppSettings`, no `QSettings`, no `settingsScope()`,
+no `sqlite3.h`. The mode is re-registered from scratch on every connect (R9) and the codec is
+reconstructed per activation, so there is nothing that would survive a restart to be worth
+storing.
+
+Before RFC #4603 that needed no justification: there was one flat key–value store, and not
+persisting was simply the default. It needs stating now, because the store has a *right* way to
+hold radio-scoped state and the absence of any RAD2 state is otherwise indistinguishable from an
+oversight.
+
+**If RAD2 ever does need persistent state**, it takes the radio-scoped path, not flat keys:
+
+- One **versioned JSON feature document** in `radio_settings`, addressed via
+  `RadioModel::settingsScope()` — the shape AGENTS.md "Radio-Scoped Feature Documents" requires,
+  and the one the `BandStack`, `Identity` and HL2 `OperatingState` documents already use.
+- Writers read the **exact** row (`featureExact()`), never the family-wide fallback, so a
+  per-radio write cannot clone the family default into a new row.
+- **Check the `setFeature()` return** (constraint S3). A refused write that the UI repaints over
+  is the same silent-failure class as the 🔇 rows in §7.1 — the state looks saved and is not.
+- Never a flat `AppSettings` key. RAD2 state is per-radio by construction: the waveform is
+  registered against one radio's command plane.
+
+**The one settings dependency is a read.** RAD2's TX callsign is resolved from the shared FreeDV
+keys, identically to V1 and to FreeDV Reporter (`MainWindow_DigitalModes.cpp`):
+
+```
+FreeDvUseRadioCallsign == "True" && radio callsign non-empty
+    ? radio callsign            // radio-authoritative, Constitution II/III
+    : FreeDvMyCallsign          // operator's saved fallback
+```
+
+Correct placement under the new rules, and unaffected by the migration: it is an app-scoped
+operator preference, **not a credential** — so the `SettingsCredentialPolicy.h` ban and the
+QtKeychain-only rule do not apply — and **not radio-scoped**, since the operator's callsign does
+not change per radio. Reads need no `save()`.
+
+> **RAD2 must not grow its own callsign key.** Sharing V1's is deliberate. A second source of
+> truth for the same value is exactly how the modem and the Reporter would come to disagree about
+> who is transmitting — and §9.3 already defers Reporter integration on *data-quality* grounds.
+
+### 9.5 Settings authority — RAD2 and `clientSettingsDomains`
+
+RFC #4603 also made settings authority a **declared capability** rather than a family assumption.
+`RadioCapabilities::clientSettingsDomains` is a typed per-domain flag set: empty for Flex and Sim
+(guarded by a CI test, because a non-empty Flex declaration would re-introduce the
+#2465/#4126/#4261 re-assert-stale-state bug class), six domains declared by HL2, which persists
+nothing itself and so relies on the client as its memory.
+
+**RAD2 is unaffected today.** It is Flex-only; Flex declares empty; `RadioStateMemory::shouldEngage()`
+is therefore false and nothing about a RAD2 session is captured or restored. Two constraints
+follow for whoever changes that, and both would fail silently — they are S1 and S2 in §7.1:
+
+- **S1 — restored state must not carry a waveform mode string.** `RestoredRadioState::mode` is
+  gated by the `Tuning` domain, and `RadioModel` hands restored state to the backend **before**
+  `connectRadio()` — necessarily before any waveform is registered (R9). A restored `"RAD2"`
+  therefore lands in precisely the §10.12 G5 state: `SliceModel::setMode()` returns early, the
+  combo reads `RAD2`, and the slice never moves. A backend that later declares both `Tuning` *and*
+  runtime waveform registration must restore the **underlying** mode (`DIGU`) and let mode-select
+  re-derive `RAD2`, or defer the mode half of the restore until registration completes.
+- **S2 — the memory bank stores a mode string, and now stores it in the settings store.** Since
+  #4603 PR 6 the host-side bank is one shared document at `radio_settings (local, '', MemoryBank)`,
+  engaging on `persistsMemories`, with `Memories` as a declared domain. Recalling a memory saved
+  while RAD2 was active reproduces G5 if the waveform has not registered yet.
+
+S2 is the same risk this design already carried informally, but its storage is now **known and
+inspectable** — through the Settings Browser and `AetherSDR --config` — which makes it a
+regression test rather than a caveat. §13 gains that case.
+
+> **The `sqlite3.h` single-consumer rule needs nothing from us.** No RADE V2 file includes it and
+> none should; `third_party/sqlite/README.md` owns that rule. Deliberately **not** added to
+> `verify_rade_v2_backend_boundary.cmake` (§7.2) — duplicating a guard is how two guards drift.
 
 ## 10. The waveform provider protocol (clean-room, from public spec + Phase 0 observation)
 
@@ -1689,6 +1791,15 @@ before the transport is written rather than after.
   the provider sets `rx_filter` *before* mode entry, and that the imaginary component of
   `rx_stream_in` is negated before reaching the codec. Both are silent-wrong-answer failures,
   not crashes.
+- **The stored-`RAD2` guard (§9.5, constraints S1/S2) — NOT YET WRITTEN.** A mode string reaching
+  a slice before the waveform has registered produces the G5 dead state, and there are two stored
+  sources that can do it: a recalled memory-bank entry, and a restored `Tuning` domain. Assert
+  that recalling a memory whose mode is `RAD2` **before registration** either re-derives the mode
+  through `DigitalVoiceModeRegistry` or leaves the slice on the underlying mode — and never leaves
+  the combo reading `RAD2` over a slice that did not move.
+  > Worth writing now that #4603 made it cheap: the bank's storage is a known, inspectable
+  > document (`radio_settings (local, '', MemoryBank)`) rather than an opaque side file, so the
+  > test can seed the precondition directly instead of driving the UI to create it.
 - **The T9 tail guard — LANDED (`resampler_flush_test`).** Asserts `flush()` recovers signal that
   `process()` alone strands, by running two identical resamplers — one flushed, one not — so the
   method cannot pass by being decorative. Also pins the latency figures the T3 drain is sized on.
