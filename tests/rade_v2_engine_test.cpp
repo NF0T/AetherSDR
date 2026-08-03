@@ -30,6 +30,7 @@
 #include <QtTest>
 
 #include "core/RADEV2Engine.h"
+#include "core/RadeV2TextChannel.h"
 #include "core/Resampler.h"
 
 extern "C" {
@@ -84,6 +85,7 @@ private slots:
     void cancelAnswersAndDropsTheTail();                 // §7.1 T8
     void rxDecodesTheAnalyticSignalTheRadioSends();
     void conjugatedInputWrecksSnrWithoutLosingSync();    // §7.1 X2 + a correction
+    void rxRecoversTheInlineCallsign();                  // §9.2 end-to-end
 
 private:
     // The modem signal the radio would hand us: rade_tx() output, upsampled to
@@ -91,6 +93,10 @@ private:
     // vocoder output and the cost is not the thing under test.
     const std::vector<std::complex<float>>& probe();
     std::vector<std::complex<float>> m_probe;
+
+    // The same, but with the inline data channel carrying a framed callsign.
+    // Not cached: each call uses different text.
+    std::vector<std::complex<float>> probeWithText(const QString& text);
 };
 
 const std::vector<std::complex<float>>& RadeV2EngineTest::probe() {
@@ -375,6 +381,96 @@ void RadeV2EngineTest::rxDecodesTheAnalyticSignalTheRadioSends() {
     QVERIFY2(e.stats().rxFramesDecoded > 0, "synced but produced no features");
     QVERIFY2(speechSamples > 0, "features decoded but no speech reached the transport");
     QVERIFY2(speechEnergy > 0.0, "the vocoder produced only silence");
+}
+
+std::vector<std::complex<float>> RadeV2EngineTest::probeWithText(const QString& text) {
+    // Same construction as probe(), with one addition: the framed bits are
+    // cycled onto the inline data channel, one per step, exactly where
+    // RADEV2Engine puts them. Longer than probe() because the receiver spends
+    // its first steps acquiring, and those produce no symbols at all — a
+    // 60-bit frame needs 60 SUCCESSFUL steps after that.
+    const std::vector<bool> bits = AetherSDR::RadeV2TextChannel::encode(text);
+    size_t bitPos = 0;
+
+    struct rade* tx = rade_open(const_cast<char*>("dummy"), kV2Flags);
+    Q_ASSERT(tx);
+    const int nFeat  = rade_n_features_in_out(tx);
+    const int nTxOut = rade_n_tx_out(tx);
+
+    std::vector<float> features(static_cast<size_t>(nFeat));
+    std::vector<RADE_COMP> out(static_cast<size_t>(nTxOut));
+    std::vector<float> i8k, q8k;
+
+    for (int f = 0; f < 300; ++f) {          // 300 × 40 ms = 12 s ≈ 5 copies
+        for (int k = 0; k < nFeat; ++k)
+            features[size_t(k)] = 0.35f * std::sin(0.05f * float(k + f * 7));
+        rade_tx_set_data_symbol(tx, bits[bitPos] ? 1.0f : -1.0f);
+        bitPos = (bitPos + 1) % bits.size();
+        const int n = rade_tx(tx, out.data(), features.data());
+        for (int k = 0; k < n; ++k) {
+            i8k.push_back(out[size_t(k)].real);
+            q8k.push_back(out[size_t(k)].imag);
+        }
+    }
+    rade_close(tx);
+
+    Resampler upI(RADEV2Engine::kModemRateHz, RADEV2Engine::kWaveformRateHz);
+    Resampler upQ(RADEV2Engine::kModemRateHz, RADEV2Engine::kWaveformRateHz);
+    const QByteArray bi = upI.process(i8k.data(), int(i8k.size()));
+    const QByteArray bq = upQ.process(q8k.data(), int(q8k.size()));
+    const auto* pi = reinterpret_cast<const float*>(bi.constData());
+    const auto* pq = reinterpret_cast<const float*>(bq.constData());
+    const int n = int(std::min(bi.size(), bq.size()) / qsizetype(sizeof(float)));
+
+    std::vector<std::complex<float>> sig;
+    sig.reserve(size_t(n));
+    for (int k = 0; k < n; ++k) sig.emplace_back(pi[k], pq[k]);
+    return sig;
+}
+
+void RadeV2EngineTest::rxRecoversTheInlineCallsign() {
+    // ─────────────────────────────────────────────────────────────────────
+    // §9.2 end-to-end, and the only test that exercises the whole chain:
+    // encode → rade_tx_set_data_symbol → the neural encoder → OFDM → 8→24 kHz
+    // → the engine's 24→8 kHz front end → rade_rx → rade_rx_get_data_symbol
+    // → RadeV2TextChannel → textDecoded.
+    //
+    // rade_v2_text_channel_test proves the FRAMING against ideal ±1 symbols.
+    // This proves the framing survives the CODEC — which is not a given: the
+    // symbol is not a separate carrier, it rides as the 21st input feature
+    // through the autoencoder's learned latent (rade_tx_v2.c:79), so what
+    // comes back is a reconstruction rather than the bit that went in.
+    //
+    // That coupling is exactly why the channel's robustness is expected to
+    // track voice quality, and why the framing leans on repetition plus a
+    // cheap integrity check rather than layered FEC.
+    // ─────────────────────────────────────────────────────────────────────
+    RADEV2Engine e;
+    QVERIFY(e.start());
+
+    QSignalSpy textSpy(&e, &RADEV2Engine::textDecoded);
+    int rawSymbols = 0;
+    connect(&e, &RADEV2Engine::dataSymbolReceived, &e, [&](float) { ++rawSymbols; });
+
+    const auto sig = probeWithText(QStringLiteral("NF0T"));
+    for (size_t pos = 0; pos + 128 <= sig.size(); pos += 128)
+        e.onRxPassband(std::vector<std::complex<float>>(sig.begin() + qsizetype(pos),
+                                                        sig.begin() + qsizetype(pos) + 128));
+
+    qInfo("inline data: %d raw symbols, %d frames decoded, SNR %.1f dB",
+          rawSymbols, textSpy.count(), double(e.snrDb()));
+
+    QVERIFY2(rawSymbols > 0, "no data symbols reached the framer at all — the "
+                             "rade_rx() > 0 gate or the signal wiring is wrong");
+    QVERIFY2(!textSpy.isEmpty(),
+             "symbols arrived but no frame validated: the callsign does not "
+             "survive the autoencoder, or TX and RX disagree about the framing");
+    QCOMPARE(textSpy.first().at(0).toString(), QStringLiteral("NF0T"));
+
+    // Every reported frame must be the one transmitted. A wrong callsign is a
+    // worse outcome than no callsign — it is somebody else's identity.
+    for (const auto& call : textSpy)
+        QCOMPARE(call.at(0).toString(), QStringLiteral("NF0T"));
 }
 
 void RadeV2EngineTest::conjugatedInputWrecksSnrWithoutLosingSync() {
