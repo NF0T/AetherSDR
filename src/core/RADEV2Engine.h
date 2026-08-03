@@ -56,6 +56,7 @@
 #include <QString>
 
 #include "core/RadeV2TextChannel.h"
+#include "core/RadeV2Tap.h"
 
 // Opaque here on purpose — the codec headers are C, and pulling opus/lpcnet
 // into every translation unit that merely wants to connect a signal is how a
@@ -271,6 +272,10 @@ private:
     float m_snrDb  = 0.0f;
 
     Stats m_stats;
+
+    // Bench WAV taps along the chain; compiles to nothing without
+    // -DRADE_V2_WAV_TAP (see RadeV2Tap.h).
+    RADE_V2_TAP_MEMBER
 };
 
 }  // namespace AetherSDR
