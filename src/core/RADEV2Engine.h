@@ -275,7 +275,7 @@ private:
 
     // Bench WAV taps along the chain; compiles to nothing without
     // -DRADE_V2_WAV_TAP (see RadeV2Tap.h).
-    RADE_V2_TAP_MEMBER
+    RADE_V2_TAP_MEMBERS
 };
 
 }  // namespace AetherSDR
