@@ -42,6 +42,14 @@ option(ENABLE_DSTAR "Build the local D-STAR waveform helper (vendored smartsdr-d
 # RADE V2 as an in-process Flex waveform (docs/architecture/rade-v2-waveform-design.md).
 # OFF until the release phase (RFC §7) — RADE V1 is untouched and unaffected either way.
 option(ENABLE_RADE_V2 "Build the in-process RADE V2 Flex waveform provider (in development)" OFF)
+# Bench WAV taps along the RAD2 chain (src/core/RadeV2Tap.h). Options rather
+# than raw -D flags because a hand-passed compile definition is easy to miss and
+# fails SILENTLY: you get a perfectly normal binary that taps nothing, and the
+# only symptom is an empty output directory after a transmission you cannot
+# repeat. That happened once already.
+option(ENABLE_RADE_V2_TAP    "Bench WAV taps on the RAD2 TRANSMIT chain (tx1-tx5)" OFF)
+option(ENABLE_RADE_V2_TAP_RX "Bench WAV taps on the RAD2 RECEIVE chain (rx1-rx4). Separate from the TX set: V1 has no RX tap, and RX is the direction that accumulates without a natural end" OFF)
+set(RADE_V2_TAP_DIR "" CACHE STRING "Where RAD2 tap WAVs are written (default: the process working directory; also overridable at run time with AETHER_RADE_V2_TAP_DIR)")
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
@@ -2639,6 +2647,27 @@ endif()
 # untouched by this flag in either state.
 if(ENABLE_RADE_V2)
     target_compile_definitions(aethercore PUBLIC AETHER_ENABLE_RADE_V2)
+
+    # Bench taps. PUBLIC so the definition reaches every target that compiles
+    # RADEV2Engine.cpp or includes RadeV2Tap.h — a tap enabled for the library
+    # but not for a tool would write half a chain and look like a broken stage.
+    if(ENABLE_RADE_V2_TAP)
+        target_compile_definitions(aethercore PUBLIC RADE_V2_WAV_TAP)
+    endif()
+    if(ENABLE_RADE_V2_TAP_RX)
+        target_compile_definitions(aethercore PUBLIC RADE_V2_WAV_TAP_RX)
+    endif()
+    if(RADE_V2_TAP_DIR)
+        target_compile_definitions(aethercore PUBLIC RADE_V2_TAP_DIR="${RADE_V2_TAP_DIR}")
+    endif()
+
+    # Say out loud what was actually enabled. The whole point of these options
+    # is that a silent no-op is expensive here: the cost of getting it wrong is
+    # an on-air transmission that cannot be repeated, discovered only by finding
+    # an empty directory afterwards.
+    if(ENABLE_RADE_V2_TAP OR ENABLE_RADE_V2_TAP_RX)
+        message(STATUS "RADE V2 bench taps: TX=${ENABLE_RADE_V2_TAP} RX=${ENABLE_RADE_V2_TAP_RX} dir=${RADE_V2_TAP_DIR}")
+    endif()
     message(STATUS "RADE V2 in-process waveform provider ENABLED (in development)")
 endif()
 
