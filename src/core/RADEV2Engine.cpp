@@ -101,6 +101,28 @@ bool RADEV2Engine::start() {
     // bit stream, and a frame straddling the two would be pure fabrication.
     m_textChannel.reset();
 
+    // AETHER_RADE_V2_TX_PEAK_DBFS: target peak level for the transmitted modem
+    // audio, in dBFS. Unset or 0 = unity, i.e. exactly what shipped before this
+    // knob existed. -10 is the usual digital-mode target.
+    //
+    // A bench knob deliberately, not a stored setting: RFC §9.4 says RAD2
+    // persists nothing, and this exists to answer whether the radio's ALC is
+    // acting on us. If the answer is yes it becomes a real control with a real
+    // default; if no, it costs 10 dB of output for nothing and should go.
+    m_txGain = 1.0f;
+    if (qEnvironmentVariableIsSet("AETHER_RADE_V2_TX_PEAK_DBFS")) {
+        bool ok = false;
+        const double dbfs = qEnvironmentVariable("AETHER_RADE_V2_TX_PEAK_DBFS").toDouble(&ok);
+        if (ok && dbfs < 0.0) {
+            // rade_tx() output peaks at ~1.0, so the target IS the gain.
+            m_txGain = float(std::pow(10.0, dbfs / 20.0));
+            qCInfo(lcRadeV2Codec) << "tx level" << dbfs << "dBFS -> gain" << m_txGain;
+        } else if (!ok) {
+            qCWarning(lcRadeV2Codec) << "AETHER_RADE_V2_TX_PEAK_DBFS is not a number —"
+                                     << "ignoring, transmitting at unity";
+        }
+    }
+
     m_rxAccumI.clear();
     m_rxAccumQ.clear();
     m_rxFeatAccum.clear();
@@ -446,7 +468,21 @@ void RADEV2Engine::queueModem(const float* modem8k, int count) {
     // imaginary component here is the analytic partner, not a second channel.
     const QByteArray up = m_txUp8to24->process(modem8k, count);
     const auto* p = reinterpret_cast<const float*>(up.constData());
-    const int n = int(up.size() / qsizetype(sizeof(float)));
+    int n = int(up.size() / qsizetype(sizeof(float)));
+
+    // Operator TX level. V1 never needed one in code because its modem audio
+    // goes out through DAX, where the operator sets the level exactly as they
+    // do for WSJT-X. V2 bypasses DAX entirely and hands audio straight to the
+    // waveform stream, so without this there is NO level control anywhere in
+    // the path and we transmit whatever rade_tx() produces — measured at
+    // -0.1 dBFS peak, about 10 dB hotter than the digital-mode convention.
+    //
+    // Applied AFTER the upsampler so the tx5 tap reports the level actually
+    // transmitted rather than a pre-gain figure that would quietly lie.
+    if (m_txGain != 1.0f) {
+        auto* w = reinterpret_cast<float*>(const_cast<char*>(up.constData()));
+        for (int k = 0; k < n; ++k) w[k] *= m_txGain;
+    }
 
     // TX5 — what actually goes to the radio, after the 8->24 kHz upsampler
     // (§7.1 T9). THE tap for a level question: peak/rms here is the amplitude
