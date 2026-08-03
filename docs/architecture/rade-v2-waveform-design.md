@@ -193,7 +193,7 @@ because §10 discovered them across eleven separate probe sessions and an implem
 have to reconstruct the list by reading all of it.
 
 **🔇 marks a SILENT failure** — no error, no non-zero reply, no crash. The command is accepted, or
-the code compiles and runs, and the result is simply wrong. **21 of the 38 rows are silent**, and
+the code compiles and runs, and the result is simply wrong. **23 of the 42 rows are silent**, and
 several would present during Phase 4 as *"the codec doesn't work"*, which is the most expensive
 possible time to find them. **Every 🔇 row wants a regression test**, because code review cannot
 catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
@@ -266,6 +266,31 @@ here because all three produce the G5 dead state or its shape, and none of them 
 | S1 | 🔇 **Restored operating state must never carry `RAD2` as a mode.** `RestoredRadioState::mode` is gated by the `Tuning` domain and is handed to the backend *before* `connectRadio()` — necessarily before any waveform is registered (R9) | lands in the **G5 dead state**: combo reads `RAD2`, slice stays put. Restore the underlying mode (`DIGU`) and let mode-select re-derive `RAD2`, or defer the mode half until registration completes | §9.5, G5 |
 | S2 | 🔇 **A recalled memory carrying `RAD2` must be re-derived through the registry**, not written at the slice. The host-side bank stores a mode string, at `radio_settings (local, '', MemoryBank)` since #4603 PR 6 | same G5 shape by a second route — recall before registration and the slice never moves | §9.5, G5 |
 | S3 | 🔇 Any future RAD2 persistence is a **versioned `radio_settings` document with a checked `setFeature()` result** — never a flat `AppSettings` key | a refused write (read-only store, reset in progress) that the UI repaints over: the state looks saved and is not | §9.4 |
+
+### Inline data channel (§9.2)
+
+Read from the vendored C rather than measured on air, and re-verified independently before being
+written down. They are here because two of them produce a channel that looks alive from every angle
+and carries nothing.
+
+| # | Constraint | If violated | Evidence |
+|---|---|---|---|
+| D1 | 🔇 **The TX data symbol is STICKY, not a queue.** `tx->data_symbol` is one float, initialised to `-1.0f`, re-read on every step until changed | never calling the setter transmits a continuous run of `-1`. **There is no queue to starve and no underrun to report**, so nothing anywhere indicates the channel is empty | `rade_tx_v2.c:48,79` |
+| D2 | 🔇 Read `rade_rx_get_data_symbol()` **only when `rade_rx()` returned > 0**, exactly once per successful step | sampling it unconditionally feeds the framer stale repeats and desynchronises our bit stream from the sender's — which presents as "the framing is wrong" | `rade_api.h:173` |
+| D3 | The channel is **not a separate carrier**: the symbol rides as the **21st input feature** through the autoencoder's learned latent, and RX recovers it from the *decoder's* output as a **soft** value | — | `rade_tx_v2.c:79`, `rade_rx_v2.c:297` |
+| D4 | Exactly **25 bit/s** — one symbol per step, `RADE_V2_FRAMES_PER_STEP` (4) × 10 ms | — | `rade_v2_constants.h:10` |
+
+> **D3 is the one with design consequences.** Because the data rides inside the same learned
+> representation as the voice, **the data channel's robustness is coupled to the voice channel's** —
+> a callsign is unlikely to survive conditions where the audio is already breaking up. That argues
+> *against* elaborate FEC layered on top and *for* repetition plus a cheap integrity check, which is
+> what §9.2's interim framing does. It also means the soft decision comes free, and it is worth
+> using: magnitude is a per-bit confidence measure for correlation and for soft combining.
+>
+> **Still unmeasured on air**, and the two websdr recordings cannot answer it — neither carried
+> speech and no callsign was configured. Bench measurement (`rade_v2_engine_test`): the callsign
+> survives the autoencoder at confidence 1.0 on a clean signal, with **3 of ~4 available copies
+> validating**, so the channel is not lossless even at 20 dB SNR on a noise-free bench.
 
 ### Environment
 
@@ -658,6 +683,52 @@ must not assume it.
 internally, but the public wrapper `rade_tx_eoo()` in `rade_api.h:134` is marked *"V1 only"*. Whether
 the vendored public surface exposes a V2 EOO path — and if not, whether we need one or the modem
 emits it internally — must be settled when we vendor.
+
+#### The interim framing — IMPLEMENTED, and built to be deleted
+
+`src/core/RadeV2TextChannel.{h,cpp}` (`rade_v2_text_channel_test`). Provisional in the strict sense:
+it exists so the channel can be exercised end to end before the ecosystem convention lands, and the
+whole protocol is confined to one file so replacing it is a deletion rather than an excavation.
+
+```
+┌────────────┬─────┬─────┬──────────────┬─────────┐
+│  Barker-13 │ ver │ len │  N × 6 bits  │ CRC-16  │
+│    sync    │  3  │  4  │   payload    │         │
+└────────────┴─────┴─────┴──────────────┴─────────┘
+     13        3     4        6N            16      = 36 + 6N bits
+```
+
+**2.4 s** per copy for `NF0T`, **4.8 s** for a 14-character worst case, repeating back-to-back so a
+receiver joining mid-over catches the next one. Alphabet is 39 values (`A–Z 0–9 / -` and space);
+codes 39–63 are unused and therefore **invalid on receive**, a free integrity check beneath the CRC.
+
+Five decisions, each of which a reviewer would otherwise reasonably question:
+
+1. **CRC-16, not CRC-8, and the 0.32 s it costs is the point.** CRC-8 admits ~1/256 of corrupted
+   frames that clear the sync gate. This field gets *displayed*, and publishing a bit error as
+   somebody else's callsign is the precise harm §9.3 defers FreeDV Reporter over.
+2. **The CRC is computed bitwise over the field bit-string, not over bytes.** The frame is 3+4+6N
+   bits and is not byte-aligned, so a byte-oriented CRC needs a padding convention — and an
+   undocumented padding convention is what makes a second implementation disagree with the first.
+3. **Detection normalises by the stream's mean magnitude; confidence deliberately does not.** Per D3
+   the RX value is a learned *reconstruction*, not a ±1 signal, so a fixed correlation threshold
+   would track the decoder's output level rather than sync quality. But the *transmitted* symbol is
+   exactly ±1.0, so raw magnitude is an absolute quality measure — normalising it too would report
+   ~1.0 for every frame and say nothing.
+4. **The sign of the Barker correlation is data, not noise.** BPSK carries a 180° ambiguity;
+   `|corr|` detects and `sign(corr)` corrects, so an inverted stream decodes rather than producing
+   garbage the CRC then rejects.
+5. **Nothing is consumed on a failed candidate.** Every frame length that could end at the current
+   symbol is tried, and the length field must agree with the length assumed. A "sync, then take the
+   next N bits" reader desynchronises permanently on a false Barker inside payload data.
+
+**The correlation threshold is a placeholder** (0.70) and must be re-derived from real captures —
+it depends on how the decoder reconstructs the 21st feature under real channel conditions, which
+nothing has measured. `rade_v2_decode_wav --dump-symbols` exists to supply that evidence.
+
+The `version` field is what keeps our frames and upstream's eventual ones **distinguishable rather
+than mutually corrupting**: a version we do not implement is rejected outright, never best-effort
+parsed.
 
 **Interop dependency (flag).** For callsigns to interoperate with other RADE V2 stations
 (FreeDV-GUI, the container), our app-level framing on this channel **must match the RADE V2
@@ -1852,6 +1923,30 @@ before the transport is written rather than after.
     missing reset into a second-occurrence bug.
   - *X2* the I/Q sign, guarded by SNR separation rather than by sync — see §7.1b for why sync
     cannot do the job.
+- **The inline-data framing — LANDED (`rade_v2_text_channel_test`, 18 tests), five
+  mutation-checked.** Dropping the CRC check, dropping `sign(corr)`, dropping the version check,
+  dropping the alphabet range check, and removing the magnitude normalisation each break exactly
+  one test and nothing else.
+  - The corruption test asserts **no *wrong* text**, not merely no output. Those are different
+    claims, and the second is the one that matters: every payload bit is flipped in turn across
+    47 runs and the assertion is that zero frames decode to anything other than the transmitted
+    callsign.
+  - **Deliberately outside the `ENABLE_RADE_V2` gate**, like the class itself. It is pure bit
+    manipulation with no codec, no Flex protocol and no platform dependency, so it is compiled and
+    run by the existing cross-platform CI jobs — none of which set `ENABLE_RADE_V2`. That makes it
+    the one piece of this work with macOS/Linux evidence today.
+  - **Honest gap:** the "non-consuming rescan" property (§9.2 decision 5) has behavioural coverage
+    (`joinsMidStream`, `joinsAfterArbitraryNoise`, `survivesAFalseSyncWord`) but **no mutation
+    proof**, because the property is structural — the scan method is `const` and mutates nothing on
+    failure, so there is no line to break. Unlike the other five, those three are not known to be
+    capable of failing.
+- **End-to-end through the codec — LANDED (`rade_v2_engine_test::rxRecoversTheInlineCallsign`).**
+  The framing test proves the protocol against ideal ±1 symbols; this proves it survives the
+  *autoencoder*, which is not a given — per D3 the symbol is not a separate carrier, so what comes
+  back is a reconstruction rather than the bit that went in. Measured: 278 raw symbols, **3 frames
+  validated at confidence 1.0**, all matching. Note **3 of roughly 4 available copies** validated on
+  a clean, noise-free bench signal, so the channel is already not lossless — direct support for
+  repetition-plus-integrity-check over layered FEC, and a number worth re-measuring on air.
 - **§7.2 backend-boundary guard — LANDED (`rade_v2_backend_boundary_test`).** Nothing under
   `src/core/backends/` may reference RADE **in code**, and `FlexBackend` may not name the provider,
   the stream or the transport. Deliberately **not** gated on `ENABLE_RADE_V2`: a check that runs

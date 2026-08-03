@@ -559,6 +559,16 @@ void MainWindow::activateRADEV2(int sliceId)
             QMetaObject::invokeMethod(m_radeV2Engine, [this, callsign]() {
                 m_radeV2Engine->setTxCallsign(callsign);
             }, Qt::QueuedConnection);
+        } else {
+            // V1 warns here and V2 did not, which made an unconfigured callsign
+            // indistinguishable from a working one. The data symbol is STICKY
+            // (rade_tx_v2.c:48): never setting it transmits a continuous run of
+            // -1 with no queue to starve and no underrun to report, so the
+            // channel looks alive from every angle and carries nothing. On air
+            // that costs a whole transmission before anyone notices.
+            qCWarning(lcRade) << "MainWindow: RAD2 TX callsign not set — the "
+                                 "inline data channel will transmit nothing; "
+                                 "configure callsign in SpotHub FreeDV tab";
         }
     }
 

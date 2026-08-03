@@ -96,6 +96,10 @@ bool RADEV2Engine::start() {
     m_txUp8to24 = std::make_unique<Resampler>(kModemRateHz, kWaveformRateHz,
                                               4096, kTxUpsampleTransBand);
 
+    // Symbols buffered from a previous session cannot align with this one's
+    // bit stream, and a frame straddling the two would be pure fabrication.
+    m_textChannel.reset();
+
     m_rxAccumI.clear();
     m_rxAccumQ.clear();
     m_rxFeatAccum.clear();
@@ -142,6 +146,7 @@ void RADEV2Engine::stop() {
     m_tailDone = false;
     m_farganWarmedUp = false;
     m_synced = false;
+    m_textChannel.reset();
 
     qCDebug(lcRadeV2Codec) << "stopped";
 }
@@ -227,7 +232,18 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
             m_stats.rxFramesDecoded++;
             m_rxFeatAccum.insert(m_rxFeatAccum.end(),
                                  featOut.begin(), featOut.begin() + nOut);
-            emit dataSymbolReceived(rade_rx_get_data_symbol(m_rade));
+            // One symbol per successful step, and ONLY on a successful step —
+            // rade_api.h documents the value as valid after rade_rx() returns
+            // > 0. Sampling it unconditionally would feed the framer stale
+            // repeats and desynchronise the bit stream against the sender's.
+            const float symbol = rade_rx_get_data_symbol(m_rade);
+            emit dataSymbolReceived(symbol);
+            if (const auto decoded = m_textChannel.pushSymbol(symbol)) {
+                qCDebug(lcRadeV2Codec) << "rx text" << decoded->text
+                                  << "confidence" << decoded->confidence
+                                  << (decoded->inverted ? "(inverted)" : "");
+                emit textDecoded(decoded->text, decoded->confidence);
+            }
         }
 
         while (int(m_rxFeatAccum.size()) >= kFeaturesPerFrame) {
@@ -528,17 +544,16 @@ void RADEV2Engine::cancelTx() {
 }
 
 void RADEV2Engine::setTxCallsign(const QString& callsign) {
-    m_txDataBits.clear();
     m_txDataBitPos = 0;
+    m_txDataBits   = RadeV2TextChannel::encode(callsign);
 
-    const QByteArray cs = callsign.toUpper().trimmed().toLatin1();
-    m_txDataBits.reserve(size_t(cs.size()) * 8);
-    for (char c : cs)
-        for (int bit = 7; bit >= 0; --bit)          // MSB first
-            m_txDataBits.push_back(((uchar(c) >> bit) & 1) != 0);
-
-    qCDebug(lcRadeV2Codec) << "tx callsign" << cs << "—" << m_txDataBits.size()
-                      << "bits at ~25 bit/s (framing provisional, §9.2)";
+    // The cycling in encodePendingFeatures() is unchanged: it walks these bits
+    // and wraps, so consecutive copies are back-to-back with no gap, which is
+    // what lets a receiver joining mid-over pick up the next one.
+    qCDebug(lcRadeV2Codec) << "tx text" << RadeV2TextChannel::sanitise(callsign)
+                      << "—" << m_txDataBits.size() << "bits ="
+                      << double(m_txDataBits.size()) / 25.0
+                      << "s per copy at 25 bit/s (framing provisional, §9.2)";
 }
 
 #else   // !HAVE_RADE_V2 — feature enabled, codec not vendored
