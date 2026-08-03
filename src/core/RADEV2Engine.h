@@ -55,6 +55,8 @@
 #include <QObject>
 #include <QString>
 
+#include "core/RadeV2TextChannel.h"
+
 // Opaque here on purpose — the codec headers are C, and pulling opus/lpcnet
 // into every translation unit that merely wants to connect a signal is how a
 // vendored dependency leaks into the whole tree. Mirrors RADEEngine.h.
@@ -207,7 +209,22 @@ signals:
 
     // One raw inline-data symbol per decoded step (§9.2). Emitted undecoded and
     // unframed deliberately — see setTxCallsign().
+    //
+    // **Kept alongside textDecoded(), not replaced by it.** When the framing
+    // misbehaves the raw soft symbols are the only thing that can tell a
+    // transmit-side fault from a receive-side one, and re-deriving them means
+    // another trip to the radio.
     void dataSymbolReceived(float symbol);
+
+    // A complete, CRC-validated frame off the inline channel (§9.2), via
+    // RadeV2TextChannel. `confidence` is the mean soft magnitude over the
+    // frame — an absolute measure, since the transmitted symbol is exactly
+    // ±1.0.
+    //
+    // Fires on EVERY valid copy, including repeats of a callsign already seen.
+    // De-duplication is a display policy, and a second copy is corroboration
+    // rather than noise.
+    void textDecoded(const QString& text, float confidence);
 
 private:
     void encodePendingFeatures(bool drain);
@@ -243,8 +260,12 @@ private:
     bool m_tailQueued = false;   // EOO + flush appended; queue is now finite
     bool m_tailDone   = false;   // txTailComplete() already emitted
 
+    // TX carries a whole framed copy and cycles it; RX reassembles frames from
+    // the soft symbol stream. Same protocol, opposite directions — see
+    // RadeV2TextChannel, which owns all of it.
     std::vector<bool> m_txDataBits;
     size_t            m_txDataBitPos = 0;
+    RadeV2TextChannel m_textChannel;
 
     bool  m_synced = false;
     float m_snrDb  = 0.0f;
