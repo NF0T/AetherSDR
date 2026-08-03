@@ -287,10 +287,16 @@ and carries nothing.
 > what §9.2's interim framing does. It also means the soft decision comes free, and it is worth
 > using: magnitude is a per-bit confidence measure for correlation and for soft combining.
 >
-> **Still unmeasured on air**, and the two websdr recordings cannot answer it — neither carried
-> speech and no callsign was configured. Bench measurement (`rade_v2_engine_test`): the callsign
-> survives the autoencoder at confidence 1.0 on a clean signal, with **3 of ~4 available copies
-> validating**, so the channel is not lossless even at 20 dB SNR on a noise-free bench.
+> Bench measurement (`rade_v2_engine_test`): the callsign survives the autoencoder at confidence
+> 1.0 on a clean signal, with **3 of ~4 available copies validating**, so the channel is not
+> lossless even at 20 dB SNR on a noise-free bench.
+>
+> **⚠ ON AIR IT IS FAR WORSE — measured 2026-08-02, and this invalidates a planning assumption.**
+> See §10.14. The raw symbol error rate on a real HF path is **~15–16 %**, at which a 60-bit
+> uncoded frame passes CRC roughly **3 × 10⁻⁵** of the time. **The §9.2 framing as built will
+> essentially never decode over a path like that.** The "repetition plus a cheap integrity check"
+> argument was reasoning from the coupling in D3, not from a measurement; the measurement now
+> exists and disagrees.
 
 ### Environment
 
@@ -1817,6 +1823,66 @@ a useful second opinion for anyone debugging a marginal decode.
 `rade_demod_wav` and the basis for the Phase 5 OTA validation campaign. `--sweep` exists because
 "did not decode" is ambiguous on a third-party recording — it separates a bad transmission from a
 receiver tuned outside the acquisition window.
+
+### 10.14 The inline data channel on a real path — 2026-08-02 (reanalysis of the §10.13 recordings)
+
+**The single most consequential measurement for §9.2, and it did not need a new transmission.** The
+two websdr recordings from §10.13 were re-run through `rade_v2_decode_wav --dump-symbols`, which
+now records every soft symbol the decoder produces.
+
+Both recordings predate the framing, so they were sent by the *old* code: MSB-first ASCII, cycled,
+no sync word. A four-character callsign under that scheme is exactly **32 bits**, and that is what
+the symbol stream shows.
+
+| lag | recording A | recording B |
+|---|---|---|
+| 28 | 65.1 % | 60.7 % |
+| 30 | 68.2 % | 62.8 % |
+| **32** | **72.6 %** | **74.0 %** |
+| 34 | 64.5 % | 70.1 % |
+| 64 | 65.2 % | — |
+
+Sign agreement at lag 32 peaks in **both** recordings independently, with its harmonic at 64 also
+raised. So the inline channel **was carrying data over a real HF path** — this is the first
+evidence that it works at all off-air, and it is a positive result.
+
+**The error rate is the problem.** For a repeating pattern, agreement at the period is
+`(1−p)² + p²`, so `p = (1 − √(1 − 2(1−a)))/2`:
+
+| | agreement | implied symbol error rate |
+|---|---|---|
+| recording A | 0.726 | **16.4 %** |
+| recording B | 0.740 | **15.4 %** |
+
+At 16 % per symbol, an uncoded 60-bit frame survives with probability `0.84⁶⁰ ≈ 3 × 10⁻⁵`. **The
+§9.2 framing will essentially never decode on a path like this**, and neither would any comparable
+uncoded frame — this is a property of the channel, not of the frame layout.
+
+**Caveats, two of which cut in the favourable direction:**
+
+- The 32-bit period is *inferred* from the sender's old encoding, not known from a log. Two
+  independent recordings peaking at exactly 32 is strong, but it is an inference.
+- **The figure is an upper bound.** Symbols exist only for steps where `rade_rx()` returned > 0
+  (§7.1 D2) — 200 of 394 synced blocks in recording A. Any step the receiver skipped shifts the
+  stream against the sender's and registers as extra disagreement, so the true per-symbol error
+  rate is at most this and probably lower.
+- **Neither recording carried speech.** Per D3 the symbol rides through the autoencoder alongside
+  the voice features, so a latent asked to carry data *and* silence is not the operating point that
+  matters. Whether speech helps or hurts is genuinely unknown and is the next thing to measure.
+
+**Also measured: the soft values are weak.** Mean |soft| is **0.489** against the ±1.0 transmitted,
+with 18 % of symbols below 0.15. On the bench the same figure is ~1.0. This vindicates normalising
+detection by the stream's mean magnitude (§9.2 decision 3) — a fixed threshold calibrated on bench
+values would never fire on air — and it means the *magnitude* carries real information that hard
+slicing throws away.
+
+> **Consequence for the design, stated plainly.** The cheapest fix is not FEC. We already transmit
+> the same frame continuously, so several noisy copies of every bit are already on the air and we
+> are discarding them by hard-slicing each copy independently. **Soft accumulation across
+> repetitions** — deliberately scoped out of §9.2 as "possible and out of scope" — is where the
+> margin is, and it costs no extra airtime and no change to the wire format, so the framing stays
+> deletable. Decide it against the next set of numbers, not these: an OTA run **with speech** is
+> the missing measurement, and the tooling to read it now exists.
 
 ## 11. Fidelity & Licensing
 
