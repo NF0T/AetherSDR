@@ -181,20 +181,36 @@ private:
 
 }  // namespace AetherSDR
 
-#  define RADE_V2_TAP_MEMBER          AetherSDR::RadeV2Tap m_tap;
-#  define RADE_V2_TAP_RESET()         m_tap.reset()
-#  define RADE_V2_TAP_FLUSH(prefix)   m_tap.flush(prefix)
-#  define RADE_V2_TAP(name, rate, ch, ptr, frames) \
-       m_tap.add(name, rate, ch, ptr, frames)
-#  define RADE_V2_TAP_IQ(name, rate, re, im, frames) \
-       m_tap.addRadeComp(name, rate, re, im, frames)
+// TWO tap objects, not one, and the split is load-bearing rather than tidy.
+// The two directions have different lifetimes: a TX tap set is exactly one
+// over, while RX runs for as long as the mode is selected. Sharing one object
+// meant the end-of-over flush also wrote and cleared the RX buffers, under a
+// "tx" prefix — so a receive tap ended up named rade_v2_tx_rx1_… and contained
+// whatever had been heard since the previous unkey. Wrong name, wrong span.
+#  define RADE_V2_TAP_MEMBERS \
+       AetherSDR::RadeV2Tap m_tapTx; \
+       AetherSDR::RadeV2Tap m_tapRx;
+#  define RADE_V2_TAP_TX_RESET()    m_tapTx.reset()
+#  define RADE_V2_TAP_TX_FLUSH()    m_tapTx.flush("tx")
+#  define RADE_V2_TAP_RX_FLUSH()    m_tapRx.flush("rx")
+#  define RADE_V2_TAP_TX(name, rate, ch, ptr, frames) \
+       m_tapTx.add(name, rate, ch, ptr, frames)
+#  define RADE_V2_TAP_TX_IQ(name, rate, re, im, frames) \
+       m_tapTx.addRadeComp(name, rate, re, im, frames)
+#  define RADE_V2_TAP_RX(name, rate, ch, ptr, frames) \
+       m_tapRx.add(name, rate, ch, ptr, frames)
+#  define RADE_V2_TAP_RX_IQ(name, rate, re, im, frames) \
+       m_tapRx.addRadeComp(name, rate, re, im, frames)
 
 #else   // !RADE_V2_WAV_TAP — everything compiles away
 
-#  define RADE_V2_TAP_MEMBER
-#  define RADE_V2_TAP_RESET()                       ((void)0)
-#  define RADE_V2_TAP_FLUSH(prefix)                 ((void)0)
-#  define RADE_V2_TAP(name, rate, ch, ptr, frames)  ((void)0)
-#  define RADE_V2_TAP_IQ(name, rate, re, im, frames) ((void)0)
+#  define RADE_V2_TAP_MEMBERS
+#  define RADE_V2_TAP_TX_RESET()                        ((void)0)
+#  define RADE_V2_TAP_TX_FLUSH()                        ((void)0)
+#  define RADE_V2_TAP_RX_FLUSH()                        ((void)0)
+#  define RADE_V2_TAP_TX(name, rate, ch, ptr, frames)   ((void)0)
+#  define RADE_V2_TAP_TX_IQ(name, rate, re, im, frames) ((void)0)
+#  define RADE_V2_TAP_RX(name, rate, ch, ptr, frames)   ((void)0)
+#  define RADE_V2_TAP_RX_IQ(name, rate, re, im, frames) ((void)0)
 
 #endif  // RADE_V2_WAV_TAP
