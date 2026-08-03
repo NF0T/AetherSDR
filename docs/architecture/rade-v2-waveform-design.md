@@ -2050,6 +2050,85 @@ correct here and costs no linearity; backing off 10 dB only radiates 10 dB less.
 result for this station and should not be generalised to other radios or backends without
 re-measuring.
 
+### 10.18 The websdr may not be a valid instrument for the data channel — 2026-08-03
+
+**This invalidates the evidence base for §10.14, and with it the case for redesigning the callsign
+framing.** An 18 s over at unity on 20 m, captured on the websdr, with the `tx4` tap kept as ground
+truth. The tap and the capture contain the same 442 symbols over the same 17.6 s, so they are
+certainly the same transmission.
+
+**What the framing did:** `tx4` decodes `"NF0T" ×6`, confidence 1.00. The encoder, framing, CRC and
+detector are all correct.
+
+**What arrived:** zero CRC-valid frames, in this capture *and* in the 12:30 capture whose voice the
+operator confirmed fully intelligible.
+
+| test | result |
+|---|---|
+| BER, index-aligned (442 vs 442, constant 2.20 s offset) | **50.9 %** |
+| same with a deliberate 1 / 2 / 5 / 10 symbol slip | 50.8 / 50.7 / 50.8 / 50.9 % |
+| BER of the **high-confidence** subset (\|soft\| > 0.5) | **50.0 %** |
+| autocorrelation at the 60-bit frame period, tap | **+0.984** (max, 11 sd above noise) |
+| same, 12:30 capture / this capture | +0.164 / +0.686 — **both below 1 sd** |
+
+The slip insensitivity is what makes this conclusive: a stream carrying any signal dips at the
+correct alignment. It does not move. And the symbols the demodulator was *most confident about* are
+exact coin flips, so its confidence carries no information either.
+
+**It is not noise, not offset, not level, and not our receiver.** Each ruled out on the bench
+against the same tap:
+
+| candidate | test | result |
+|---|---|---|
+| AWGN | inject −2…+20 dB | **6/6 frames down to ~5 dB estimated SNR**; 3/6 at 4.3; 1/6 at 2.3 |
+| frequency offset | 0…30 Hz on the analytic signal | **6/6 at every offset**, SNR unmoved |
+| absolute level | scale capture +6 / +12 / +18 dB | byte-identical output — RX is scale-invariant |
+
+The captures reported mean SNR 5.9 (this) and 12.5 dB (12:30). **The bench decodes 6/6 at both.**
+
+**The discriminating measurement is the soft-decision magnitude.** AWGN degrades the *sign* while
+leaving magnitude near saturation; it never falls below ~0.92 even at the SNR where the frame is
+nearly dead. Both captures sit at ~0.3 — off the bottom of the AWGN scale:
+
+| | mean \|soft\| |
+|---|---|
+| tap, clean | 0.999 |
+| AWGN at 4.3 dB est. SNR | 0.957 |
+| AWGN at 2.3 dB (1/6 frames) | **0.925** |
+| 12:30 capture / this capture | **0.274 / 0.307** |
+
+A symbol smeared toward zero is not a noisy symbol — the decoder is returning *no opinion*, which
+noise does not produce.
+
+> **Hypothesis, NOT established: a deterministic stage in the receive path, most likely the
+> websdr's lossy audio streaming.** Supported by the strongest clue available — the two captures
+> agree to 0.03 in soft magnitude despite differing by **8 dB in SNR and 12 dB in level**. A
+> stochastic channel impairment is not that invariant; a fixed processing stage is. A perceptual
+> codec would also preserve voice (perceptually important) while discarding a small-amplitude
+> embedded feature (perceptually irrelevant), which is exactly the observed split.
+>
+> **A spectral check for a codec lowpass fingerprint found none** — only the expected ~3 kHz SSB
+> filter. So this is unconfirmed, and the mechanism could equally be Doppler spread or something
+> else in the websdr chain.
+
+**Consequences.**
+
+1. **Every off-air data-channel figure we hold is suspect** — §10.14's 15–16 %, and the 32 % and
+   37.5 % before it. All were taken through this instrument.
+2. **Do not redesign the framing.** The premise for repetition, soft accumulation or FEC was a
+   measured off-air BER, and that measurement may be of the receiver rather than the channel. At
+   50 % BER no coding helps anyway, so the redesign could not have worked either.
+3. **Cheap next test:** capture the same transmission on a **KiwiSDR** as well. Different software,
+   different audio path. If the callsign decodes on one and not the other, the instrument is proven
+   and the RF path is exonerated.
+4. **Definitive test: Level 3.** A real receiver over coax and attenuators removes the websdr
+   entirely. This raises Level 3 from "needed for the verification submission" to "needed to answer
+   the callsign question at all", and matches the upstream procedure's own reason for excluding OTA.
+
+**This does confirm §7.1 D3 is wrong, though**, and more strongly than §10.14 did: voice was fully
+intelligible while the data channel carried literally nothing. Whatever the mechanism, data and
+voice do **not** degrade together.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
