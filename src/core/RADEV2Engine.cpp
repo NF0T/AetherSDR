@@ -149,7 +149,7 @@ void RADEV2Engine::stop() {
     m_synced = false;
     m_textChannel.reset();
     // Catches an RX-only session, which never reaches the end-of-over path.
-    RADE_V2_TAP_FLUSH("rx");
+    RADE_V2_TAP_RX_FLUSH();
 
     qCDebug(lcRadeV2Codec) << "stopped";
 }
@@ -193,7 +193,7 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
 
     // RX1 - the passband as the transport hands it over, already deconjugated
     // (7.1 X2). Feed this to rade_v2_decode_wav to check the front end.
-    RADE_V2_TAP_IQ("rx1_passband_24k_iq", kWaveformRateHz, i.data(), q.data(), n);
+    RADE_V2_TAP_RX_IQ("rx1_passband_24k_iq", kWaveformRateHz, i.data(), q.data(), n);
 
     const QByteArray i8k = m_rxDownI->process(i.data(), n);
     const QByteArray q8k = m_rxDownQ->process(q.data(), n);
@@ -211,7 +211,7 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
     const auto* ip = reinterpret_cast<const float*>(i8k.constData());
     const auto* qp = reinterpret_cast<const float*>(q8k.constData());
     // RX2 - what rade_rx() actually receives, after 24->8 kHz.
-    RADE_V2_TAP_IQ("rx2_modem_8k_iq", kModemRateHz, ip, qp, nc);
+    RADE_V2_TAP_RX_IQ("rx2_modem_8k_iq", kModemRateHz, ip, qp, nc);
 
     m_rxAccumI.insert(m_rxAccumI.end(), ip, ip + nc);
     m_rxAccumQ.insert(m_rxAccumQ.end(), qp, qp + nc);
@@ -265,7 +265,7 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
             }
             float pcm[LPCNET_FRAME_SIZE];
             fargan_synthesize(fargan, pcm, m_rxFeatAccum.data());
-            RADE_V2_TAP("rx3_speech_16k_mono", kSpeechRateHz, 1, pcm, LPCNET_FRAME_SIZE);
+            RADE_V2_TAP_RX("rx3_speech_16k_mono", kSpeechRateHz, 1, pcm, LPCNET_FRAME_SIZE);
             speech16k.insert(speech16k.end(), pcm, pcm + LPCNET_FRAME_SIZE);
             m_rxFeatAccum.erase(m_rxFeatAccum.begin(),
                                 m_rxFeatAccum.begin() + kFeaturesPerFrame);
@@ -277,6 +277,14 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
                                                     int(speech16k.size()));
         const auto* up24 = reinterpret_cast<const float*>(up.constData());
         const int nUp = int(up.size() / qsizetype(sizeof(float)));
+
+        // RX4 — what goes BACK to the radio, after the 16->24 kHz stage. The
+        // counterpart of tx5, and the last point that is still ours: under §9.1
+        // decision B the operator hears RAD2 through the radio's own audio, so
+        // if rx3 sounds right and the slice does not, the damage is between
+        // here and the transport rather than in the vocoder.
+        RADE_V2_TAP_RX("rx4_out_24k_mono", kWaveformRateHz, 1, up24, nUp);
+
         m_rxOut24k.insert(m_rxOut24k.end(), up24, up24 + nUp);
     }
 
@@ -323,7 +331,7 @@ void RADEV2Engine::beginTx() {
     m_stats.txTailSamples = 0;
 
     // One tap set per over: cleared here, written when the tail is out.
-    RADE_V2_TAP_RESET();
+    RADE_V2_TAP_TX_RESET();
 
     // Mandatory, not hygiene: flush() is TERMINAL, so the upsampler used for
     // the previous over refuses to process anything until it is reset. Skipping
@@ -345,13 +353,13 @@ void RADEV2Engine::feedTxAudio(const QByteArray& stereo24k) {
 
     // TX1 — the mic, exactly as AudioEngine hands it over. If this is silent
     // the whole question of "why was the audio wrong" is answered here.
-    RADE_V2_TAP("tx1_mic_24k_stereo", kWaveformRateHz, 2, src, frames);
+    RADE_V2_TAP_TX("tx1_mic_24k_stereo", kWaveformRateHz, 2, src, frames);
 
     const QByteArray mono16k = m_txDown24to16->processStereoToMono(src, frames);
     const auto* mf = reinterpret_cast<const float*>(mono16k.constData());
     const int nMono = int(mono16k.size() / qsizetype(sizeof(float)));
     // TX2 — what lpcnet actually analyses, after the 24->16 kHz stage.
-    RADE_V2_TAP("tx2_speech_16k_mono", kSpeechRateHz, 1, mf, nMono);
+    RADE_V2_TAP_TX("tx2_speech_16k_mono", kSpeechRateHz, 1, mf, nMono);
 
     m_txSpeech16k.reserve(m_txSpeech16k.size() + size_t(nMono));
     for (int k = 0; k < nMono; ++k)
@@ -421,10 +429,10 @@ void RADEV2Engine::encodePendingFeatures(bool drain) {
             std::vector<float> re(size_t(n), 0.0f), im(size_t(n), 0.0f);
             for (int k = 0; k < n; ++k) { re[size_t(k)] = txOut[size_t(k)].real;
                                           im[size_t(k)] = txOut[size_t(k)].imag; }
-            RADE_V2_TAP_IQ("tx3_modem_8k_iq", kModemRateHz, re.data(), im.data(), n);
+            RADE_V2_TAP_TX_IQ("tx3_modem_8k_iq", kModemRateHz, re.data(), im.data(), n);
         }
 #endif
-        RADE_V2_TAP("tx4_modem_8k_real", kModemRateHz, 1, modem.data(), n);
+        RADE_V2_TAP_TX("tx4_modem_8k_real", kModemRateHz, 1, modem.data(), n);
 
         queueModem(modem.data(), n);
     }
@@ -443,7 +451,7 @@ void RADEV2Engine::queueModem(const float* modem8k, int count) {
     // TX5 — what actually goes to the radio, after the 8->24 kHz upsampler
     // (§7.1 T9). THE tap for a level question: peak/rms here is the amplitude
     // the waveform stream carries, and nothing downstream of us changes it.
-    RADE_V2_TAP("tx5_out_24k_mono", kWaveformRateHz, 1, p, n);
+    RADE_V2_TAP_TX("tx5_out_24k_mono", kWaveformRateHz, 1, p, n);
 
     m_txOut24k.insert(m_txOut24k.end(), p, p + n);
 }
@@ -497,7 +505,7 @@ void RADEV2Engine::serveTick(int samples) {
                           << "tail samples ≈" << msAt24k(int(m_stats.txTailSamples)) << "ms";
         // One tap set per over, written once the tail is actually out so the
         // files include the EOO rather than stopping at the last voice frame.
-        RADE_V2_TAP_FLUSH("tx");
+        RADE_V2_TAP_TX_FLUSH();
         emit txTailComplete();
     }
 }
