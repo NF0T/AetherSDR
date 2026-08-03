@@ -2001,6 +2001,55 @@ small dropout.
   *different* transmission and produced a confident decorrelation result that meant nothing. Check
   that durations and timestamps match before believing any tap-vs-capture comparison.
 
+### 10.17 The TX path is LINEAR — two-point measurement, 2026-08-03
+
+**Closes the "is ALC or clipping hurting us?" question.** §10.15 showed the chain flat and not
+pumping *at one level*, which rules out time-varying compression but says nothing about a static
+level-dependent nonlinearity. That needs two points, so we took two: an over at unity and an over
+at −10 dBFS via `AETHER_RADE_V2_TX_PEAK_DBFS`, ~13 s each, FLEX-8400 at 14.192 MHz, `rfPower` 100
+in both, nothing else touched.
+
+On a linear path every lit stage and `FWDPWR` must move down by exactly 10 dB.
+
+| stage | unity | −10 dBFS | delta | error |
+|---|---|---|---|---|
+| `RM_TX_AGC` (injection point) | −4.0 | −14.2 | −10.2 | −0.2 |
+| `SC_FILT_2`, `TX_AGC`, `B4RAMP`, `AFRAMP` | −6.2 | −16.3 | −10.1 | −0.1 |
+| `POST_P` | −6.1 | −16.3 | −10.1 | −0.1 |
+| `ATTN_FPGA` | −7.1 | −16.7 | −9.5 | +0.5 |
+| **`FWDPWR`** | **47.5 dBm** (56 W) | **37.1 dBm** (5.1 W) | **−10.4** | **−0.4** |
+
+**The radio does not compress, limit or clip RAD2 audio at unity.** Every digital stage tracks the
+input within 0.2 dB across a 10 dB range, and forward power — the only figure that includes the PA
+— moves the full 10 dB within 0.4 dB. `ATTN_FPGA`'s +0.5 is the noisiest meter in the set (26
+usable samples of 50 after the sentinel discard) and sits downstream of SWR foldback; it is scatter,
+not a mechanism.
+
+The `tx5` taps confirm the knob is a pure scalar and the only thing that changed:
+
+| | peak | rms | PAPR | over full scale |
+|---|---|---|---|---|
+| unity | −0.01 dBFS | −5.85 | 5.85 dB | 0 |
+| −10 dBFS | −10.09 dBFS | −15.91 | **5.82 dB** | 0 |
+
+PAPR is unchanged to 0.03 dB, so the gain introduced no distortion of its own and the comparison
+is clean.
+
+**Why the FT8 −10 dBFS convention does not apply to us.** That convention exists because a
+soundcard feeds the *microphone* input, upstream of the speech processor and software ALC. RAD2
+audio enters at `RM_TX_AGC`, downstream of all of it — which is why `ALC` and `COMPPEAK` read −150
+and 0.0 in **both** runs. There is no ALC in our path to back off from. Transmitting at unity is
+correct here and costs no linearity; backing off 10 dB only radiates 10 dB less.
+
+> **`COMPPEAK` reads exactly 0.0 too.** The 0.0-as-sentinel behaviour documented for `ATTN_FPGA` in
+> §10.15 is not an `ATTN_FPGA` quirk — it is the general convention on these meters. A bit-exact
+> 0.0 dBFS reading is not a real measurement. Discard it on any meter, not just the one where it
+> was first noticed.
+
+**Scope.** One radio (FLEX-8400, fw 4.2.20.41343), one drive setting, one band. It is a strong
+result for this station and should not be generalised to other radios or backends without
+re-measuring.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
