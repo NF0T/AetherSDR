@@ -4301,6 +4301,20 @@ target_link_libraries(resampler_flush_test PRIVATE aethercore Qt6::Core Qt6::Tes
 set_target_properties(resampler_flush_test PROPERTIES AUTOMOC ON)
 add_test(NAME resampler_flush_test COMMAND resampler_flush_test)
 
+# The interim framing on RADE V2's inline 25 bit/s data channel (RFC §9.2).
+#
+# Deliberately OUTSIDE the ENABLE_RADE_V2 gate, like the class itself. It is
+# pure bit manipulation with no codec, no Flex protocol and no platform
+# dependency, so building it unconditionally costs nothing and buys what the
+# rest of RADE V2 does not have: coverage from the existing cross-platform CI
+# jobs, none of which set ENABLE_RADE_V2. Its caller in RADEV2Engine stays
+# gated.
+add_executable(rade_v2_text_channel_test tests/rade_v2_text_channel_test.cpp)
+target_include_directories(rade_v2_text_channel_test PRIVATE src)
+target_link_libraries(rade_v2_text_channel_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(rade_v2_text_channel_test PROPERTIES AUTOMOC ON)
+add_test(NAME rade_v2_text_channel_test COMMAND rade_v2_text_channel_test)
+
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
 # Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
