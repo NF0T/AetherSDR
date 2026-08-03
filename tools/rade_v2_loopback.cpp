@@ -77,12 +77,15 @@ static void writeWav16(const char* p, const std::vector<short>& x, int rate) {
 
 int main(int argc, char** argv) {
     const char* inPath=nullptr; const char* outPath=nullptr; const char* refPath=nullptr;
+    const char* featTxPath=nullptr; const char* featRxPath=nullptr;
     bool txChain=false; double snrDb=-1000.0;
     for (int i=1;i<argc;++i) {
         const std::string a=argv[i];
         if (a=="--tx-chain") txChain=true;
         else if (a=="--snr" && i+1<argc) snrDb=atof(argv[++i]);
         else if (a=="--vocoder-ref" && i+1<argc) refPath=argv[++i];
+        else if (a=="--features-tx" && i+1<argc) featTxPath=argv[++i];
+        else if (a=="--features-rx" && i+1<argc) featRxPath=argv[++i];
         else if (!inPath) inPath=argv[i];
         else if (!outPath) outPath=argv[i];
     }
@@ -93,7 +96,22 @@ int main(int argc, char** argv) {
           "                      ReqTransBand=45, back to 8k (models the radio path)\n"
           "  --snr <dB>          inject AWGN at this wideband SNR\n"
           "  --vocoder-ref <f>   also write FARGAN's output from the ORIGINAL\n"
-          "                      features, with no modem at all\n");
+          "                      features, with no modem at all\n"
+          "  --features-tx <f>   raw float32 feature vectors AT THE ENCODER INPUT\n"
+          "  --features-rx <f>   raw float32 feature vectors AT THE DECODER OUTPUT\n"
+          "\n"
+          "The two --features files are what the RADE integration verification\n"
+          "procedure measures (doc/verification/verification_procedure.md in\n"
+          "drowe67/radae@dr-radev2). Level 1 is a software loopback like this one:\n"
+          "\n"
+          "  rade_v2_loopback wav/all.wav out.wav \\\n"
+          "      --features-tx features_tx.f32 --features-rx features_rx.f32\n"
+          "  python3 loss.py features_tx.f32 features_rx.f32 \\\n"
+          "      --clip_start 100 --clip_end 300\n"
+          "\n"
+          "V2 software-loopback baseline is loss ~0.082; a pass is within 10%%.\n"
+          "Feed their 16 kHz wav/all.wav directly so no resampler is in the path\n"
+          "and the signal-path declaration on the report form is honestly true.\n");
         return 2;
     }
     std::vector<short> in; int rate=0;
@@ -123,10 +141,22 @@ int main(int argc, char** argv) {
     printf("analysis: %zu feature frames (%.2f s)\n",
            feats.size()/NB_TOTAL_FEATURES, double(feats.size()/NB_TOTAL_FEATURES)*0.01);
 
+    // Feature vectors for the RADE integration verification procedure. 36
+    // floats per vector (NB_TOTAL_FEATURES); loss.py reads them raw and uses
+    // the first 20. Held in memory rather than streamed because a 56 s
+    // wav/all.wav run is only ~800 kB per side.
+    std::vector<float> featTx, featRx;
+
     // 2) modulate, 3) demodulate with NOTHING in between
     std::vector<RADE_COMP> modem;
     std::vector<RADE_COMP> txOut; txOut.resize(size_t(nTxOut));
     for (size_t p=0; p+size_t(nFeat)<=feats.size(); p+=size_t(nFeat)) {
+        // Encoder input, exactly as handed to rade_tx(). Captured here rather
+        // than from `feats` wholesale because the loop consumes whole nFeat
+        // blocks and may leave a partial one at the end — loss.py aligns the
+        // two streams itself, but only if each is a whole number of 36-float
+        // vectors.
+        if (featTxPath) featTx.insert(featTx.end(), &feats[p], &feats[p] + nFeat);
         int n = rade_tx(tx, txOut.data(), &feats[p]);
         modem.insert(modem.end(), txOut.begin(), txOut.begin()+n);
     }
@@ -176,6 +206,7 @@ int main(int argc, char** argv) {
     }
 
     std::vector<float> featOut, featAccum; featOut.resize(size_t(nFeat));
+    (void)featTx;   // filled above when --features-tx was given
     std::vector<short> out;
     size_t pos=0; int steps=0, decoded=0, syncBlocks=0; float snrSum=0; int snrN=0;
     while (pos + size_t(rade_nin(rx)) <= modem.size()) {
@@ -186,6 +217,9 @@ int main(int argc, char** argv) {
         if (rade_sync(rx)) { syncBlocks++; snrSum += float(rade_snrdB_3k_est(rx)); snrN++; }
         if (nOut > 0) {
             decoded++;
+            // Decoder output, before FARGAN. This is the other half of what
+            // loss.py compares — the vocoder is deliberately NOT in the loop.
+            if (featRxPath) featRx.insert(featRx.end(), featOut.begin(), featOut.begin()+nOut);
             featAccum.insert(featAccum.end(), featOut.begin(), featOut.begin()+nOut);
             while (int(featAccum.size()) >= NB_TOTAL_FEATURES) {
                 if (!warmed) {
@@ -206,6 +240,26 @@ int main(int argc, char** argv) {
            steps, decoded, syncBlocks, snrN? snrSum/snrN : 0.0f);
     printf("out: %zu samples = %.2f s\n", out.size(), double(out.size())/16000.0);
     writeWav16(outPath, out, 16000);
+
+    auto writeF32 = [](const char* path, const std::vector<float>& v, const char* what) {
+        if (!path) return;
+        FILE* f = fopen(path, "wb");
+        if (!f) { fprintf(stderr, "cannot write %s\n", path); return; }
+        fwrite(v.data(), sizeof(float), v.size(), f);
+        fclose(f);
+        printf("%s: %zu vectors (%zu floats) -> %s\n",
+               what, v.size() / 36, v.size(), path);
+        if (v.size() % 36)
+            fprintf(stderr, "  WARNING: %zu floats is not a whole number of 36-float "
+                            "vectors — loss.py will misread this\n", v.size());
+    };
+    writeF32(featTxPath, featTx, "features TX (encoder input)");
+    writeF32(featRxPath, featRx, "features RX (decoder output)");
+    if (featTxPath && featRxPath) {
+        printf("\nverification: python3 loss.py %s %s --clip_start 100 --clip_end 300\n",
+               featTxPath, featRxPath);
+        printf("  V2 software-loopback baseline ~0.082, pass within 10%%\n");
+    }
 
     // Also write what the vocoder does with the ORIGINAL features, no modem at
     // all. This separates "the vocoder/analysis is wrong" from "the modem is".
