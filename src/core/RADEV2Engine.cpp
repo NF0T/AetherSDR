@@ -102,19 +102,34 @@ bool RADEV2Engine::start() {
     m_textChannel.reset();
 
     // AETHER_RADE_V2_TX_PEAK_DBFS: target peak level for the transmitted modem
-    // audio, in dBFS. Unset or 0 = unity, i.e. exactly what shipped before this
-    // knob existed. -10 is the usual digital-mode target.
+    // audio, in dBFS. Unset or 0 = unity, which is the correct default — see
+    // below. -10 is the usual digital-mode target.
     //
     // A bench knob deliberately, not a stored setting: RFC §9.4 says RAD2
-    // persists nothing, and this exists to answer whether the radio's ALC is
-    // acting on us. If the answer is yes it becomes a real control with a real
-    // default; if no, it costs 10 dB of output for nothing and should go.
+    // persists nothing. It exists to answer whether the radio's ALC is acting
+    // on us, and on this station it has: RFC §10.17 transmitted the same audio
+    // at unity and at -10 dBFS and found every stage of the radio's TX chain,
+    // and forward power with it, tracking the input within 0.4 dB. The path is
+    // linear; there is no ALC to back off from, because RAD2 audio injects at
+    // RM_TX_AGC, downstream of the speech processor the FT8 -10 dBFS
+    // convention exists for. Unity is right and backing off only radiates less.
+    //
+    // The knob stays anyway, and this is a deliberate reversal of the "if no,
+    // it should go" note it used to carry. That result is one radio, one drive
+    // setting, one band. This is the instrument that produced it, and deleting
+    // it would delete the ability to repeat the measurement on a different
+    // radio, backend or firmware — for a saving of a branch that is inert at
+    // the default.
     m_txGain = 1.0f;
     if (qEnvironmentVariableIsSet("AETHER_RADE_V2_TX_PEAK_DBFS")) {
         bool ok = false;
         const double dbfs = qEnvironmentVariable("AETHER_RADE_V2_TX_PEAK_DBFS").toDouble(&ok);
         if (ok && dbfs < 0.0) {
             // rade_tx() output peaks at ~1.0, so the target IS the gain.
+            // Confirmed on air: -10 here produced a tx5 peak of -10.09 dBFS
+            // against -0.01 at unity (RFC §10.17). Note "~1.0" is not a hard
+            // ceiling — individual samples do land slightly above full scale,
+            // one or two per over, and nothing in this path clamps them.
             m_txGain = float(std::pow(10.0, dbfs / 20.0));
             qCInfo(lcRadeV2Codec) << "tx level" << dbfs << "dBFS -> gain" << m_txGain;
         } else if (!ok) {
@@ -476,6 +491,11 @@ void RADEV2Engine::queueModem(const float* modem8k, int count) {
     // waveform stream, so without this there is NO level control anywhere in
     // the path and we transmit whatever rade_tx() produces — measured at
     // -0.1 dBFS peak, about 10 dB hotter than the digital-mode convention.
+    //
+    // That is fine here, and being 10 dB hotter is not a defect: the radio's
+    // TX path is linear across at least that range (RFC §10.17), and RAD2
+    // injects downstream of the ALC the convention exists to protect. This
+    // knob is for measurement, not for routine backing-off.
     //
     // Applied AFTER the upsampler so the tx5 tap reports the level actually
     // transmitted rather than a pre-gain figure that would quietly lie.
