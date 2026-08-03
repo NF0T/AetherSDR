@@ -66,6 +66,26 @@ namespace AetherSDR {
 
 class RadeV2Tap {
 public:
+    // Public so the test asserts against the same numbers the production path
+    // uses, rather than against copies that can drift apart silently.
+    //
+    // Chunk granularity for the ring. Only the discard cost depends on this;
+    // smaller chunks mean a tighter fit to the cap and more bookkeeping.
+    //
+    // It does NOT have to be a multiple of the frame size, and an earlier
+    // comment here claimed it did. A mutation test disproved that: setting it
+    // to 1 MB + 4 broke nothing. Frame alignment across a discard is
+    // structural — a chunk is only ever grown by whole add() calls and every
+    // add() appends a whole number of frames, so a chunk boundary is always a
+    // frame boundary whatever this value is. **The property to protect is that
+    // invariant**: if add() ever starts splitting one append across two chunks,
+    // alignment breaks and this constant still will not save it.
+    static constexpr qsizetype kChunkBytes     = qsizetype(1) << 20;
+
+    // ~175 s of 24 kHz stereo float, ~350 s mono — sized for a listening
+    // session, which is what RX needs.
+    static constexpr qsizetype kMaxBytesPerTap = qsizetype(32) << 20;
+
     // Accumulate interleaved float frames. `frames` counts FRAMES, not floats,
     // so a stereo block of 128 frames is 256 floats — the same convention the
     // engine's own buffers use, to remove one conversion from the call sites.
@@ -80,6 +100,10 @@ public:
         const qsizetype len = qsizetype(frames) * channels * qsizetype(sizeof(float));
         const char* src = reinterpret_cast<const char*>(interleaved);
 
+        // One append goes into ONE chunk, never split. This is what keeps a
+        // chunk boundary on a frame boundary (see kChunkBytes) — it is the
+        // invariant, not the constant. A chunk overshoots kChunkBytes by at
+        // most one block, which is what "size() >= kChunkBytes" allows for.
         if (b->chunks.isEmpty() || b->chunks.last().size() >= kChunkBytes)
             b->chunks.push_back(QByteArray());
         b->chunks.last().append(src, len);
@@ -134,13 +158,6 @@ private:
         bool recycled;                // has it wrapped at least once?
     };
     QVector<Buf> m_bufs;
-
-    // 1 MB chunks: a multiple of 8, so chunk boundaries are frame boundaries
-    // for mono and stereo float32 alike.
-    static constexpr qsizetype kChunkBytes    = qsizetype(1) << 20;
-    // ~175 s of 24 kHz stereo float, or ~350 s mono. Bench overs are seconds;
-    // this is sized for a listening session, which is what RX needs.
-    static constexpr qsizetype kMaxBytesPerTap = qsizetype(32) << 20;
 
     Buf* find(const char* name) {
         for (Buf& b : m_bufs)
