@@ -1830,9 +1830,25 @@ receiver tuned outside the acquisition window.
 two websdr recordings from §10.13 were re-run through `rade_v2_decode_wav --dump-symbols`, which
 now records every soft symbol the decoder produces.
 
-Both recordings predate the framing, so they were sent by the *old* code: MSB-first ASCII, cycled,
-no sync word. A four-character callsign under that scheme is exactly **32 bits**, and that is what
-the symbol stream shows.
+Both recordings predate the §9.2 framing — but **not** the bit source. `setTxCallsign` landed in
+the engine at stage 6b (2026-07-28) sending raw MSB-first ASCII, cycled, and stage 6d
+(2026-07-29) wired it into `activateRADEV2`; both are before these transmissions. A
+four-character callsign under that scheme is exactly **32 bits**, and that is what the symbol
+stream shows.
+
+**What the session log confirms** (`aethersdr-20260729-131926.log`): the radio reported
+`callsign="NF0T"` — four characters — and `RadioModel: info — callsign: "NF0T"` at 13:19:30; the
+waveform registered and `slice set 0 mode=RAD2` at 13:19:46; and `PTT_REQUESTED` fired at 13:47:16
+and 13:47:41, matching the two recordings. `FreeDvUseRadioCallsign` defaults to `True` and is not
+overridden, so `NF0T` is what the callsign path would have carried.
+
+> **What the log does NOT confirm, stated so nobody over-reads this.** The engine's own
+> `tx callsign` line is absent, because `aether.radev2.codec` emitted **zero lines** that session —
+> it is a `qCDebug` and the category defaults to WARNING. So the call is *deduced* from the code
+> path plus the settings default, not *observed*. Two independent lines of evidence converge on 32
+> bits (the code would send a 4-character callsign; the recordings show a 32-bit period), which is
+> considerably better than one, but it is convergence rather than proof. **Enable the category on
+> the next OTA run** — it costs nothing and turns this into an observation.
 
 | lag | recording A | recording B |
 |---|---|---|
@@ -1860,8 +1876,10 @@ uncoded frame — this is a property of the channel, not of the frame layout.
 
 **Caveats, two of which cut in the favourable direction:**
 
-- The 32-bit period is *inferred* from the sender's old encoding, not known from a log. Two
-  independent recordings peaking at exactly 32 is strong, but it is an inference.
+- The 32-bit period is *inferred* from the sender's old encoding — see the log note above for
+  exactly which links in that chain are observed and which are deduced. Two independent recordings
+  peaking at exactly 32, and a code path that predicts exactly 32, is strong; it is still not a
+  direct observation of what was transmitted.
 - **The figure is an upper bound.** Symbols exist only for steps where `rade_rx()` returned > 0
   (§7.1 D2) — 200 of 394 synced blocks in recording A. Any step the receiver skipped shifts the
   stream against the sender's and registers as extra disagreement, so the true per-symbol error
