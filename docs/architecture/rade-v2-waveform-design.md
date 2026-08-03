@@ -1956,11 +1956,26 @@ answerable.
 > are smoothed. This is strong evidence against *slow* pumping; it cannot see per-symbol limiting on
 > a millisecond scale. It is evidence, not proof.
 
-**⚠ `ATTN_FPGA` is unexplained.** It alternates between ≈−7.0 dBFS and exactly 0.0 sample to
-sample. Either 0.0 is a "no fresh value" sentinel for that meter — plausible, since `COMPPEAK` also
-sits at a constant 0.0 — or it genuinely means 0 dBFS at the last stage before the antenna, which
-would be a 7 dB overshoot worth understanding. **Do not cite this row either way until §13's
-ATTN_FPGA validation has run.**
+**`ATTN_FPGA`'s 0.0 samples are a SENTINEL, not a level — resolved 2026-08-03.** The row alternates
+between a plausible reading and exactly 0.0, which raised the question of a 7 dB overshoot at the
+last stage before the antenna. It is not one.
+
+Settled by sampling **at idle**, with nothing transmitting: `ATTN_FPGA` reads exactly 0.0 in **27 of
+57 samples** while `POST_P` and `AFRAMP` sit steady at −150 and `FWDPWR` at 0. A dBFS meter reading
+0.0 is reading FULL SCALE, and full scale at the final transmit stage with no transmission is
+impossible. The 0.0s also appear at idle and during transmit at similar rates (~47 %), which no
+signal-dependent measurement would do.
+
+So the genuine readings are **−150 idle, ≈−7.0 dBFS transmitting** — and −7.0 against `POST_P`'s
+−6.2 is ~0.8 dB of loss at the final stage, which is unremarkable.
+
+> **Two fields that look like they should discriminate and do NOT.** `has_value` is **`true`** for
+> every 0.0 sample, and `age_ms` is indistinguishable (43 ms when 0.0 vs 47 ms otherwise). An
+> automated check keyed on either would have called this real. What settled it was reading the
+> meter in a state where the correct answer was known independently — the same shape as the §10.9
+> mistake, applied deliberately this time.
+
+**Consumer rule:** discard `ATTN_FPGA == 0.0` as "no fresh value". Do not average it into a level.
 
 ### 10.16 The receiving websdr's AGC was a major impairment — 2026-08-03
 
