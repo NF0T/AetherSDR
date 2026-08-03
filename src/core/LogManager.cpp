@@ -69,6 +69,23 @@ LogManager::LogManager()
         {"aether.vita49",     "VITA-49",      "UDP packet routing: FFT, waterfall, meters, DAX"},
         {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
         {"aether.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},
+        // RADE V2 (RAD2) — four categories, all event-level rather than
+        // per-packet, so none needs the separate high-rate treatment that
+        // "aether.hl2.tx" below does.
+        //
+        // These were declared and then invisible: applyFilterRules() emits a
+        // blanket "aether.*.debug=false", which matches them, and API rules set
+        // via setFilterRules() outrank QT_LOGGING_RULES — so the environment
+        // variable could not reach them either. An OTA session on 2026-07-29
+        // produced ZERO lines from aether.radev2.codec for exactly this reason,
+        // and the absence read as "the callsign was never set" rather than as
+        // "the category was filtered". Registering them is what makes the
+        // toggle exist at all; a category not in this list has no way to be
+        // turned on.
+        {"aether.radev2",     "RADE V2 (RAD2)",    "Waveform registration and control plane: waveform create/set/remove and the stream ids"},
+        {"aether.radev2.codec", "RADE V2 codec",   "Codec core: start-up geometry, TX/RX callsign on the inline data channel, and end-of-over tail sizing"},
+        {"aether.radev2.rx",  "RADE V2 RX",        "Inbound data plane: UDP bind, stream ids, VITA-49 sequence gaps"},
+        {"aether.radev2.tx",  "RADE V2 TX",        "Transmit lifecycle: key, tail drain on the synthesized clock, and when it is safe to unkey"},
         {"aether.smartlink",  "SmartLink",    "Auth0 login, TLS tunnel, WAN streaming"},
         // Label leads with TCI because TciServer.cpp owns the large majority of
         // this category's call sites — 53 of 76 as of #4750, with CatPort.cpp
