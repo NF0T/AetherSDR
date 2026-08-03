@@ -2100,16 +2100,33 @@ nearly dead. Both captures sit at ~0.3 — off the bottom of the AWGN scale:
 A symbol smeared toward zero is not a noisy symbol — the decoder is returning *no opinion*, which
 noise does not produce.
 
-> **Hypothesis, NOT established: a deterministic stage in the receive path, most likely the
-> websdr's lossy audio streaming.** Supported by the strongest clue available — the two captures
-> agree to 0.03 in soft magnitude despite differing by **8 dB in SNR and 12 dB in level**. A
-> stochastic channel impairment is not that invariant; a fixed processing stage is. A perceptual
-> codec would also preserve voice (perceptually important) while discarding a small-amplitude
-> embedded feature (perceptually irrelevant), which is exactly the observed split.
+**The mechanism is UNIDENTIFIED, and every single-cause hypothesis has been eliminated.** Each was
+tested on the bench against the same tap, with ffmpeg/libopus for the codec cases and a
+Watterson-style complex-gaussian channel for the fading cases:
+
+| impairment | mean \|soft\| | TEXT |
+|---|---|---|
+| AWGN, to 2.3 dB estimated SNR | **≥ 0.925** | 6 → 1 |
+| perceptual codec, Opus 8 kbit/s | 0.669 | **0** |
+| Opus 8–16 k **on top of** channel noise at the observed SNRs | 0.815 – 0.936 | 0 – 1 |
+| flat fading, 0.1–2.0 Hz Doppler spread | 0.686 – 0.899 | 5 → 0 |
+| 2-path selective fading, 1–2 ms delay | 0.859 | 3 – 4 |
+| **websdr, actual** | **0.274 / 0.307** | **0** |
+
+**The captures are worse than anything reproducible on the bench.** Note in particular that noise
+*raises* the magnitude relative to the codec alone (0.669 → ~0.82) — it dithers the quantiser and
+stops it zeroing the feature — so codec-plus-noise moves away from the observed value, not toward it.
+
+> **The codec hypothesis is weakened, not confirmed.** Opus at 8 kbit/s does reproduce the
+> *qualitative* signature exactly — voice sync essentially intact at 861/884 blocks while the
+> callsign channel drops to zero — and a PCM control passes 6/6, so the resampling is not
+> responsible. But it lands at 0.669, not ~0.30. A spectral check for a codec lowpass fingerprint
+> also found none, only the expected ~3 kHz SSB filter.
 >
-> **A spectral check for a codec lowpass fingerprint found none** — only the expected ~3 kHz SSB
-> filter. So this is unconfirmed, and the mechanism could equally be Doppler spread or something
-> else in the websdr chain.
+> **The one clue that still points somewhere:** the two captures agree to 0.03 in soft magnitude
+> while differing by **8 dB in SNR and 12 dB in level**. A stochastic channel impairment is not
+> that invariant; a fixed stage in the receive chain is. That is an argument about *where*, not
+> *what*, and it is the only part of this that survives.
 
 **Consequences.**
 
