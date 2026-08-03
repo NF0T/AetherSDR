@@ -4323,6 +4323,23 @@ target_link_libraries(rade_v2_text_channel_test PRIVATE aethercore Qt6::Core Qt6
 set_target_properties(rade_v2_text_channel_test PROPERTIES AUTOMOC ON)
 add_test(NAME rade_v2_text_channel_test COMMAND rade_v2_text_channel_test)
 
+# The bench WAV taps' ring buffer (src/core/RadeV2Tap.h).
+#
+# Compiled WITH -DRADE_V2_WAV_TAP, because the header is empty without it — so
+# this target is also the only thing that builds the tap code at all. That
+# matters: a gated block nothing compiles rots, and the first version of these
+# taps shipped a most-vexing-parse that only appeared once the flag was on.
+#
+# Header-only over Qt, no codec and no aethercore, so like
+# rade_v2_text_channel_test it runs in the existing cross-platform CI jobs —
+# none of which set ENABLE_RADE_V2.
+add_executable(rade_v2_tap_test tests/rade_v2_tap_test.cpp)
+target_include_directories(rade_v2_tap_test PRIVATE src)
+target_compile_definitions(rade_v2_tap_test PRIVATE RADE_V2_WAV_TAP)
+target_link_libraries(rade_v2_tap_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(rade_v2_tap_test PROPERTIES AUTOMOC ON)
+add_test(NAME rade_v2_tap_test COMMAND rade_v2_tap_test)
+
 # ── Settings store (RFC #4603) ───────────────────────────────────────────────
 # Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
