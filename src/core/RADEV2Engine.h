@@ -271,6 +271,10 @@ private:
     bool  m_synced = false;
     float m_snrDb  = 0.0f;
 
+    // Gain applied to transmitted modem audio (1.0 = what rade_tx produces).
+    // See start() — set from AETHER_RADE_V2_TX_PEAK_DBFS.
+    float m_txGain = 1.0f;
+
     Stats m_stats;
 
     // Bench WAV taps along the chain; compiles to nothing without
