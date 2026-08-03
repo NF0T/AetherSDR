@@ -4290,6 +4290,14 @@ if(RADE_V2_FOUND)
     add_executable(rade_v2_decode_wav tools/rade_v2_decode_wav.cpp)
     target_include_directories(rade_v2_decode_wav PRIVATE src ${RADE_V2_DIR}/src)
     target_link_libraries(rade_v2_decode_wav PRIVATE aethercore Qt6::Core)
+
+    # Bench counterpart to the decoder: real speech through our own chain with
+    # no radio in it. Answers "is our chain healthy?" independently of any link,
+    # which is the question an OTA failure cannot distinguish on its own.
+    # Also not a test — it takes a file and reports.
+    add_executable(rade_v2_loopback tools/rade_v2_loopback.cpp)
+    target_include_directories(rade_v2_loopback PRIVATE src ${RADE_V2_DIR}/src)
+    target_link_libraries(rade_v2_loopback PRIVATE aethercore Qt6::Core)
 endif()
 
 # Resampler::flush() recovers the samples left inside the FIR at end of stream.
