@@ -1547,10 +1547,31 @@ Single 1500 Hz tone, drive swept 0.05 → 1.00:
 | **0.50→0.70** | **+2.92** | **+2.90** | | | 0.70 | 22.0 | 0.160 |
 | **0.70→1.00** | **+3.10** | **+3.40** | | | 1.00 | 25.4 | 0.345 |
 
-Above drive 0.35 the transfer is linear to within **0.4 dB**, with **ALC pinned at −150.0 dBFS**
-and **COMPPEAK at 0.0** at every point. The soft bottom is the **forward-power meter's floor** at
-~11 dBm (13 mW) — a 100 W-capable coupler cannot resolve milliwatts — so those points measure the
-instrument, not the transmitter. Headroom is ample: drive 1.0 gave 0.345 W against a 1 W setting.
+Above drive 0.35 the transfer is linear to within **0.4 dB**. The soft bottom is the
+**forward-power meter's floor** at ~11 dBm (13 mW) — a 100 W-capable coupler cannot resolve
+milliwatts — so those points measure the instrument, not the transmitter. Headroom is ample:
+drive 1.0 gave 0.345 W against a 1 W setting.
+
+> ### ⛔ CORRECTION 2026-08-03 — the ALC evidence in this section was measured on a BLIND meter
+>
+> This section originally added *"with **ALC pinned at −150.0 dBFS** and **COMPPEAK at 0.0** at
+> every point"* as evidence that no ALC acts on our signal. **That evidence is void.** §10.15
+> enumerated the radio's whole TX chain and found `ALC` (TX- index 23, "after SW ALC") sits
+> **upstream of where waveform audio is injected**. It reads −150 whether or not anything
+> downstream is compressing us — it is not observing the path under test. The same is true of
+> `COMPPEAK`, `SC_MIC` and `AFTEREQ`, which are all on the mic / speech-processor chain that RAD2
+> never touches.
+>
+> The operator caught this after an agent watched those two meters through an entire 65 W
+> transmission and reported "no ALC action" from readings that could not have moved.
+>
+> **The power-transfer linearity above still stands** — it is measured from `FWDPWR`, which does
+> observe the output. Only the ALC/COMPPEAK claim is withdrawn. §10.15 re-establishes the
+> conclusion on meters that can actually see our signal.
+>
+> **General lesson, worth more than the specific fact:** an instrument reading its idle value is
+> not evidence of absence until you have shown the instrument is connected to the thing you are
+> measuring. Two meters pinned at their floor look identical to two meters watching a clean signal.
 
 > **The probe's own automatic verdict said "NON-LINEAR — something is compressing", and it was
 > wrong.** It anchored the ideal line to the lowest-drive point, the noisiest one, and projected
@@ -1901,6 +1922,69 @@ slicing throws away.
 > margin is, and it costs no extra airtime and no change to the wire format, so the framing stays
 > deletable. Decide it against the next set of numbers, not these: an OTA run **with speech** is
 > the missing measurement, and the tooling to read it now exists.
+
+### 10.15 The radio's TX chain, measured on meters that can see us — 2026-08-03
+
+**Supersedes §10.9's ALC evidence.** 63 W, 20 m, RAD2 with speech, ~10 s keyed, sampled at ~3.7 Hz
+through the automation bridge (`get meters`). The radio exposes its entire transmit chain in signal
+order, and reading all of it — rather than the two meters §10.9 picked — is what made this
+answerable.
+
+| stage (TX- index) | reading | |
+|---|---|---|
+| `CODEC` 17, `TXAGC` 18, `SC_MIC` 19, `AFTEREQ` 20, `SC_FILT_1` 22, `ALC` 23 | **−150.0** | mic / speech-processor path — **RAD2 never enters it** |
+| `COMPPEAK` 21 | 0.0 | 0 dB compression (idle value) |
+| **`RM_TX_AGC` 24** | **−4.1** | ⟵ **our audio enters here** |
+| `SC_FILT_2` 25 | −6.2 | −2.1 dB vs previous, constant across every sample |
+| `TX_AGC` 26, `B4RAMP` 27, `AFRAMP` 28, `POST_P` 29 | −6.2 | track each other identically |
+| `ATTN_FPGA` 30 | −7.0 / 0.0 | alternates — **unexplained, see below** |
+| `FWDPWR` 8 | 48.2 dBm | ≈63 W |
+
+**Findings:**
+
+1. **The waveform injects at `RM_TX_AGC`.** Every stage before it is the microphone chain. This is
+   why §10.9's ALC reading was meaningless and why any future TX-side measurement must start by
+   establishing *where in the chain the signal appears* before interpreting any level.
+2. **Injection → `POST_P` is flat within ~0.5 dB**, and those stages track each other sample for
+   sample. The single −2.1 dB step at `SC_FILT_2` is constant across all 38 samples, which is the
+   signature of fixed filter insertion loss rather than gain control.
+3. **Nothing pumps.** `RM_TX_AGC` spans −3.8…−4.8 dB and `FWDPWR` 47.6…48.6 dBm over ten seconds.
+   Compare the **−14.5 dB** excursion measured in a *received* recording the same day (§10.16) —
+   that was the receiving websdr's AGC, not us.
+
+> **Limit of this measurement, stated so it is not over-read.** These meters sample at ~3.7 Hz and
+> are smoothed. This is strong evidence against *slow* pumping; it cannot see per-symbol limiting on
+> a millisecond scale. It is evidence, not proof.
+
+**⚠ `ATTN_FPGA` is unexplained.** It alternates between ≈−7.0 dBFS and exactly 0.0 sample to
+sample. Either 0.0 is a "no fresh value" sentinel for that meter — plausible, since `COMPPEAK` also
+sits at a constant 0.0 — or it genuinely means 0 dBFS at the last stage before the antenna, which
+would be a 7 dB overshoot worth understanding. **Do not cite this row either way until §13's
+ATTN_FPGA validation has run.**
+
+### 10.16 The receiving websdr's AGC was a major impairment — 2026-08-03
+
+Established by comparing the `tx5` tap against a websdr recording of the *same* transmission, then
+repeating with the receiver's RF gain fixed.
+
+| | transmitted envelope | received envelope | implied channel gain |
+|---|---|---|---|
+| receiver AGC on | sd **0.57 dB** | sd 2.90 dB | sd 2.84, range **−14.5 … +1.7 dB** |
+| receiver RF gain fixed | sd **0.57 dB** | sd 2.32 dB | sd 2.27, range −6.2 … +3.5 dB |
+
+Our transmitted envelope is identical in both (OFDM is constant-envelope). The **13 dB collapse
+lasting ~600 ms with full recovery** existed only in the received copy, and fixing the receiver's
+RF gain removed it — after which the operator reported the decoded audio was fully present bar one
+small dropout.
+
+**Method warnings, both of which produced wrong answers first:**
+
+- **A per-window correlation that normalises each window by its own norm is BLIND to gain
+  variation slower than the window.** It reported ρ = 0.987 while a 13 dB dip was happening inside
+  it. Measure the envelope directly if the question is about gain.
+- **The tap keeps only the LAST over.** An earlier comparison paired a tap against a recording of a
+  *different* transmission and produced a confident decorrelation result that meant nothing. Check
+  that durations and timestamps match before believing any tap-vs-capture comparison.
 
 ## 11. Fidelity & Licensing
 
