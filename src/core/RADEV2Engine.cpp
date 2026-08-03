@@ -541,13 +541,30 @@ void RADEV2Engine::serveTick(int samples) {
             // radio holds TX through an underrun (§7.1 T4), and keeping the
             // sample clock honest costs one glitch instead of a permanent
             // offset between our stream and the radio's.
+            //
+            // ⚠ The reasoning is right about the sample clock and wrong about
+            // the cost. Zeros written into the middle of an OFDM symbol smear
+            // the carriers across the gaps between them, and the modulation is
+            // gone long before the levels move — see §10.19. If the underrun
+            // count logged at end-of-over is non-zero, THIS is the line to fix,
+            // and the fix is a pre-buffer so the queue never runs dry between
+            // the modem's 40 ms frames, not a different padding value.
             out.resize(size_t(samples), 0.0f);
             m_stats.txUnderruns++;
         }
+        // TX6 — what LEAVES, after any starvation padding. tx5 is written
+        // upstream of this queue and therefore records the modem's ideal
+        // output rather than the transmitted waveform; on a starved over the
+        // two differ, and only this one can be compared against a receiver.
+        RADE_V2_TAP_TX("tx6_emitted_24k_mono", kWaveformRateHz, 1,
+                       out.data(), int(out.size()));
         emit modulatedAudioReady(out);
     } else if (!m_tailQueued) {
         m_stats.txUnderruns++;
-        emit modulatedAudioReady(std::vector<float>(size_t(samples), 0.0f));
+        std::vector<float> silence(size_t(samples), 0.0f);
+        RADE_V2_TAP_TX("tx6_emitted_24k_mono", kWaveformRateHz, 1,
+                       silence.data(), int(silence.size()));
+        emit modulatedAudioReady(silence);
     }
 
     // The tail is done when the queue it was appended to has actually gone out
@@ -559,6 +576,29 @@ void RADEV2Engine::serveTick(int samples) {
         m_txActive = false;
         qCDebug(lcRadeV2Codec) << "tx tail complete —" << m_stats.txTailSamples
                           << "tail samples ≈" << msAt24k(int(m_stats.txTailSamples)) << "ms";
+
+        // Underruns were counted from the first over and read by nobody, which
+        // is how they stayed invisible while being the leading suspect for
+        // §10.19: serveTick() pads a starved tick with ZEROS, and zeros punched
+        // into an OFDM symbol smear the carriers into the gaps. Every level
+        // measurement still looks perfect, and so does the tx5 tap — the tap is
+        // written upstream of the padding, so it records a waveform we did not
+        // actually transmit.
+        //
+        // Reported per over, and as a WARNING when non-zero, because "0.0%" is
+        // the result that clears the hypothesis and it has to be visible to do
+        // that.
+        if (m_stats.txTicks > 0) {
+            const double pct = 100.0 * double(m_stats.txUnderruns) / double(m_stats.txTicks);
+            if (m_stats.txUnderruns > 0) {
+                qCWarning(lcRadeV2Codec).nospace()
+                    << "tx underruns " << m_stats.txUnderruns << " of " << m_stats.txTicks
+                    << " ticks (" << QString::number(pct, 'f', 1)
+                    << "%) — each one emitted a zero-filled packet mid-symbol";
+            } else {
+                qCInfo(lcRadeV2Codec) << "tx underruns 0 of" << m_stats.txTicks << "ticks";
+            }
+        }
         // One tap set per over, written once the tail is actually out so the
         // files include the EOO rather than stopping at the last voice frame.
         RADE_V2_TAP_TX_FLUSH();
