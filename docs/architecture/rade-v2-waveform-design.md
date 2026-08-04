@@ -2263,6 +2263,58 @@ it — established before the signal reaches an antenna.
 over (`txUnderruns`, and `emitFailed` on the stream). Both were invisible for the same reason and
 both are one line of evidence each; the underrun count is what retired the padding hypothesis.
 
+### 10.20 ROOT CAUSE — `rade_rx` needs the input near full scale, and we do not normalise — 2026-08-03
+
+**This is the answer, and it is an integration defect on our side.** It supersedes the premise of
+§10.18 and §10.19 both.
+
+Taking the good 12 s of the X6100 capture (aligned against `tx5`, matched-filter SNR **+5 … +16 dB**,
+correlating up to **0.987** with what we transmitted) and varying only the amplitude:
+
+| frequency offset | peak level | TEXT frames |
+|---|---|---|
+| intact (−16.9 Hz) | −23.3 dBFS | **0** |
+| intact (−16.9 Hz) | **−0.9 dBFS** | **4 × "NF0T"** |
+| removed | −23.6 dBFS | **0** |
+| removed | **−0.9 dBFS** | **4 × "NF0T"** |
+
+**Amplitude is the sole determinant. The frequency offset is irrelevant.** A gain sweep puts the
+threshold between **−11.6 and −5.6 dBFS peak**; the X6100 capture arrived at −23.6.
+
+**What does NOT change with level: `sync` (586 blocks) and the SNR estimate (15.1 dB), identical at
+every gain from −23.6 to +18.4 dBFS.** Acquisition and SNR estimation are scale-invariant; the
+autoencoder that produces the features — and with them the 21st data symbol — is not. It is a neural
+network, and a network fed 23 dB below its training level returns wrong outputs while every modem-
+domain indicator stays healthy.
+
+**The defect:** `RADEV2Engine::processRxBlock` accumulates I/Q and passes it to `rade_rx()` with **no
+level normalisation** (`RADEV2Engine.cpp`, the `while (m_rxAccumI.size() >= rade_nin())` loop). The
+level that arrives is whatever the radio's slice audio happens to be. **Fix: normalise the RX input
+to a known level before `rade_rx()`**, with the target derived from what the library expects rather
+than guessed.
+
+**This retroactively explains every failed capture, and corrects two earlier sections:**
+
+- All three captures were 15–24 dB below full scale. All three failed. Our taps are full scale and
+  always decode.
+- **The "soft magnitude 0.274 / 0.307 / 0.315" that §10.18 built its case on was never degradation
+  — it was the amplitude.** Those three figures agreeing so closely across two unrelated receivers
+  was the clue, and it was read as evidence of a deterministic impairment rather than of a
+  deterministic *level difference*.
+- Voice failed for the same reason: the same wrong features drive FARGAN.
+- Every bench test passed because it added impairments to a **full-scale tap** — the one variable
+  that mattered was the one held constant throughout.
+
+> **The measurement that nearly buried this.** An early scale test appeared to prove the RX path
+> scale-*invariant*: scaling the capture +6/+12/+18 dB gave byte-identical output. That test scaled
+> **int16 samples through `np.clip`** on a file already at −14.8 dBFS, so +18 dB simply clipped the
+> signal flat. It produced a confident negative result on a broken method, and it steered the next
+> several hours. Scale in float, without clipping, and the effect is unmissable.
+
+**Method note.** What finally isolated it was a 2×2: offset × amplitude, on one aligned span, with
+everything else held fixed. Eight mechanisms had been eliminated one at a time before that, each on
+its own single-variable test, and the answer was a variable that no single-variable test had varied.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
