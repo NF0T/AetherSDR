@@ -1,4 +1,4 @@
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
 
 #include "RadeApplet.h"
 #include "core/ThemeManager.h"
@@ -154,9 +154,16 @@ void RadeApplet::setRadeCallsign(const QString& callsign)
         m_callsignLabel->clear();
         m_callsignLabel->hide();
     } else {
-        m_callsignLabel->setText(callsign);
+        m_callsignLabel->setText(m_textCaption.isEmpty()
+                                 ? callsign
+                                 : m_textCaption + QLatin1Char(' ') + callsign);
         m_callsignLabel->show();
     }
+}
+
+void RadeApplet::setRadeTextCaption(const QString& caption)
+{
+    m_textCaption = caption;
 }
 
 } // namespace AetherSDR
