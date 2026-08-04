@@ -203,6 +203,13 @@ struct Result {
     std::vector<TextHit> texts;               // CRC-validated frames
     std::vector<float>   speech16k;           // only when --out-wav
     std::vector<std::pair<double, float>> symbolDump;   // only when --dump-symbols
+
+    // Raw decoder-output feature vectors, in the layout the upstream
+    // verification `loss.py` consumes: float32, reshaped (1, -1, 36).
+    // Exists so a capture that will not decode can be compared against one
+    // that does ON THE OFFICIAL METRIC, rather than by inferring from spectra
+    // what the decoder is or is not receiving — which is how §10.19 went wrong.
+    std::vector<float>   featuresRx;          // only when --features-rx
 };
 
 // Shift the whole spectrum by `shiftHz`. The input is a real passband
@@ -212,7 +219,7 @@ struct Result {
 // how V1 has always fed this modem and which §7.1b measured costing 0.3 dB
 // against a true analytic pair.
 Result decode(const std::vector<float>& x, int rate, double shiftHz, bool verbose,
-              bool wantSpeech, bool wantSymbolDump) {
+              bool wantSpeech, bool wantSymbolDump, bool wantFeatures) {
     Result r;
     struct rade* rade = rade_open(const_cast<char*>("dummy"), kV2Flags);
     if (!rade) return r;
@@ -258,6 +265,13 @@ Result decode(const std::vector<float>& x, int rate, double shiftHz, bool verbos
 
             // §7.1 D2 — the data symbol is valid only after a step that
             // produced features, and exactly once per such step.
+            // Whole vectors only. rade_rx returns nOut floats, a multiple of
+            // the 36-float frame; appending anything else would silently
+            // misalign every later frame in the file.
+            if (wantFeatures)
+                r.featuresRx.insert(r.featuresRx.end(),
+                                    features.begin(), features.begin() + nOut);
+
             const float symbol = rade_rx_get_data_symbol(rade);
             r.rawSymbols++;
             if (wantSymbolDump) r.symbolDump.emplace_back(tSec, symbol);
@@ -358,6 +372,7 @@ void reportTexts(const Result& r) {
 int main(int argc, char** argv) {
     const char* path = nullptr;
     const char* outWav = nullptr;
+    const char* featPath = nullptr;
     const char* dumpPath = nullptr;
     double shift = 0.0;
     bool sweep = false, verbose = false;
@@ -368,6 +383,7 @@ int main(int argc, char** argv) {
         else if (a == "-v" || a == "--verbose") verbose = true;
         else if (a == "--shift" && i + 1 < argc) shift = atof(argv[++i]);
         else if (a == "--out-wav" && i + 1 < argc) outWav = argv[++i];
+        else if (a == "--features-rx" && i + 1 < argc) featPath = argv[++i];
         else if (a == "--dump-symbols" && i + 1 < argc) dumpPath = argv[++i];
         else if (!path) path = argv[i];
     }
@@ -379,6 +395,8 @@ int main(int argc, char** argv) {
                 "                      +/-31.25 Hz only); ranks offsets by validated\n"
                 "                      TEXT frames, then by sync count\n"
                 "  --out-wav <f>       write decoded speech, 16 kHz mono\n"
+                "  --features-rx <f>   write decoder-output feature vectors as\n"
+                "                      float32 (1,-1,36), for the upstream loss.py\n"
                 "  --dump-symbols <f>  write raw inline-channel soft symbols as CSV\n"
                 "  -v                  per-event timeline\n");
         return 2;
@@ -410,12 +428,25 @@ int main(int argc, char** argv) {
     if (!sweep) {
         if (verbose) printf("  timeline:\n");
         const Result r = decode(wav.samples, wav.rate, shift, verbose,
-                                outWav != nullptr, dumpPath != nullptr);
+                                outWav != nullptr, dumpPath != nullptr,
+                                featPath != nullptr);
         printf("\n");
         report(shift == 0.0 ? "as recorded" : "shifted", r);
         if (r.firstSyncSec >= 0) printf("  first sync at %.2f s\n", r.firstSyncSec);
         if (r.firstEooSec >= 0)  printf("  first EOO  at %.2f s\n", r.firstEooSec);
         reportTexts(r);
+
+        if (featPath) {
+            FILE* f = fopen(featPath, "wb");
+            if (f) {
+                fwrite(r.featuresRx.data(), sizeof(float), r.featuresRx.size(), f);
+                fclose(f);
+                printf("  wrote %s — %zu floats = %zu frames of 36\n", featPath,
+                       r.featuresRx.size(), r.featuresRx.size() / 36);
+            } else {
+                fprintf(stderr, "  ERROR: cannot write %s\n", featPath);
+            }
+        }
 
         if (outWav) {
             if (writeWavMono16(outWav, r.speech16k, RADE_SPEECH_SAMPLE_RATE))
@@ -446,7 +477,7 @@ int main(int argc, char** argv) {
     double bestShift = 0.0;
     Result best;
     for (double s = -200.0; s <= 200.0; s += 10.0) {
-        const Result r = decode(wav.samples, wav.rate, s, false, false, false);
+        const Result r = decode(wav.samples, wav.rate, s, false, false, false, false);
         char label[32];
         snprintf(label, sizeof(label), "%+7.1f Hz", s);
         if (r.syncedBlocks > 0) report(label, r);
