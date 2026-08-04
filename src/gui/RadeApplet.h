@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
 
 #include <QWidget>
 
@@ -22,10 +22,20 @@ public slots:
     void setRadeFreqOffset(float hz);
     void setRadeCallsign(const QString& callsign);
 
+    // Caption rendered before the received-text field.
+    //
+    // V1 leaves this empty and shows the value bare, which is right: its EOO
+    // payload IS a callsign and reads as one. V2's inline channel carries
+    // arbitrary text (§9.2 — a 4-bit length field, up to 15 characters), so
+    // showing it bare would present whatever arrived as if it were a station
+    // identifier. Set once at activation, not per decode.
+    void setRadeTextCaption(const QString& caption);
+
 private:
     QLabel*  m_statusLabel{nullptr};
     QLabel*  m_snrLabel{nullptr};
     QLabel*  m_callsignLabel{nullptr};
+    QString  m_textCaption;            // empty = show the value bare (V1)
     QLabel*  m_offsetLabel{nullptr};
     QWidget* m_dataRows{nullptr};
     QLabel*  m_inactiveLabel{nullptr};
