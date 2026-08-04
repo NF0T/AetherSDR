@@ -9,6 +9,7 @@
 #include <QLoggingCategory>
 
 #include "core/RadeV2Tap.h"
+#include "core/RadeV2RxAgc.h"
 #include "core/Resampler.h"
 
 #ifdef HAVE_RADE_V2
@@ -264,9 +265,17 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
     // simply never acquires, with no error and no clue as to why.
     while (int(m_rxAccumI.size()) >= rade_nin(m_rade)) {
         const int nin = rade_nin(m_rade);
+
+        // §10.20 — rade_rx() is level-dependent and the C library does not
+        // normalise. Shared with the offline decode tool so the bench and the
+        // product cannot drift apart; see RadeV2RxAgc.h for why this exists
+        // and where the constants come from.
+        const float gain = RadeV2RxAgc::blockGain(
+            m_rxAccumI.data(), m_rxAccumQ.data(), nin);
+
         for (int k = 0; k < nin; ++k) {
-            rxIn[size_t(k)].real = m_rxAccumI[size_t(k)];
-            rxIn[size_t(k)].imag = m_rxAccumQ[size_t(k)];
+            rxIn[size_t(k)].real = m_rxAccumI[size_t(k)] * gain;
+            rxIn[size_t(k)].imag = m_rxAccumQ[size_t(k)] * gain;
         }
         m_rxAccumI.erase(m_rxAccumI.begin(), m_rxAccumI.begin() + nin);
         m_rxAccumQ.erase(m_rxAccumQ.begin(), m_rxAccumQ.begin() + nin);
