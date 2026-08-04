@@ -58,6 +58,7 @@
 #include <QString>
 
 #include "core/RadeV2TextChannel.h"
+#include "core/RadeV2RxAgc.h"
 
 extern "C" {
 #include "rade_api.h"
@@ -253,6 +254,23 @@ Result decode(const std::vector<float>& x, int rate, double shiftHz, bool verbos
             } else {
                 in[size_t(k)].real = float(s * std::cos(w * t));
                 in[size_t(k)].imag = float(s * std::sin(w * t));
+            }
+        }
+
+        // §10.20 — the SAME AGC the engine runs, from the same header, so a
+        // capture that decodes here is one that would have decoded live. This
+        // tool spent a day reporting healthy sync and SNR on captures that
+        // produced babble, purely because the level was low and nothing
+        // normalised it.
+        {
+            static_assert(sizeof(RADE_COMP) == 2 * sizeof(float),
+                          "RADE_COMP must be two packed floats to alias as "
+                          "interleaved I/Q");
+            const float g = AetherSDR::RadeV2RxAgc::blockGainInterleaved(
+                reinterpret_cast<const float*>(in.data()), nin);
+            for (int k = 0; k < nin; ++k) {
+                in[size_t(k)].real *= g;
+                in[size_t(k)].imag *= g;
             }
         }
         const double tSec = double(pos) / double(rate);
