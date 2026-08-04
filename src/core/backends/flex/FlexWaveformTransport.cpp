@@ -221,6 +221,24 @@ void FlexWaveformTransport::finishDrain(const char* why) {
     d->drainTimer->stop();
     setTxState(TxState::Idle);
     qCDebug(lcRadeV2Tx) << "drain finished:" << why << "— safe to unkey";
+
+    // §10.19 — what we EMIT decodes and what comes off the air does not, so the
+    // damage is downstream of this socket. `emitFailed` counts sends that never
+    // left, and a lost packet is a hole in the radio's playout that nothing on
+    // our side would otherwise reveal. It has been counted since the first over
+    // and read by nobody, which is exactly how txUnderruns hid.
+    //
+    // Logged as a warning only when non-zero: a clean over should not add noise
+    // to the log, but a dirty one must not stay quiet.
+    const auto s = d->stream->stats();
+    if (s.emitFailed > 0) {
+        qCWarning(lcRadeV2Tx).nospace()
+            << "tx emit failures " << s.emitFailed << " of " << s.emitted
+            << " packets — each is a gap in the radio's playout";
+    } else {
+        qCInfo(lcRadeV2Tx) << "tx emitted" << s.emitted << "packets, 0 send failures";
+    }
+
     emit readyToUnkey();
 }
 
