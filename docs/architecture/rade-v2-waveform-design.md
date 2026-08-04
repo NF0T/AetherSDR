@@ -2352,6 +2352,32 @@ sync essentially intact.
 `tx5`/`tx6` taps are kept beside it. It decoded nothing before the fix and 5
 frames after, so it pins this defect directly.
 
+### 10.20b LIVE-PATH CONFIRMATION — 2026-08-03
+
+Everything in §10.20/§10.20a was measured with the offline tool. This is the
+product.
+
+`x6100-1.wav` — the capture that decoded to nothing before the fix — was
+**played back through the X6100 as a transmitter** and received by AetherSDR in
+`RAD2`. **The live path decoded it with good voice.** That exercises
+`RADEV2Engine` with the shared AGC, on a real off-air signal, end to end.
+
+**What it establishes and what it does not.** It confirms the fix works in the
+shipping receive path, which no offline run can. It does **not** re-test the
+low-level case specifically: the level arriving from the Flex is whatever the
+Flex delivers, not the −23.6 dBFS of the original file. The offline runs cover
+that half.
+
+> **Telemetry gap found by the same test — none of it is on the GUI.**
+> `RADEV2Engine` already emits `syncChanged`, `snrChanged`, `freqOffsetChanged`
+> and `textDecoded(text, confidence)`, and **nothing connects to any of them**.
+> V1 wires the first two to the VFO indicator, the pan applet and the FreeDV
+> Reporter client (`MainWindow_DigitalModes.cpp`); V2 is plugged into none of
+> it. So a successful live decode cannot be characterised from the GUI at all —
+> the operator sees audio and nothing else, and the callsign the inline channel
+> exists to carry has no surface to appear on. The engine work is done; the
+> wiring is not.
+
 **Method note.** What finally isolated it was a 2×2: offset × amplitude, on one aligned span, with
 everything else held fixed. Eight mechanisms had been eliminated one at a time before that, each on
 its own single-variable test, and the answer was a variable that no single-variable test had varied.
