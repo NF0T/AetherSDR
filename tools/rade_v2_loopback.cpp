@@ -36,6 +36,7 @@
 #include <cstdlib>
 #include <QByteArray>
 #include "core/Resampler.h"
+#include "core/RadeV2RxAgc.h"
 
 extern "C" {
 #include "rade_api.h"
@@ -78,11 +79,12 @@ static void writeWav16(const char* p, const std::vector<short>& x, int rate) {
 int main(int argc, char** argv) {
     const char* inPath=nullptr; const char* outPath=nullptr; const char* refPath=nullptr;
     const char* featTxPath=nullptr; const char* featRxPath=nullptr;
-    bool txChain=false; double snrDb=-1000.0;
+    bool txChain=false; double snrDb=-1000.0; bool rxAgc=false;
     for (int i=1;i<argc;++i) {
         const std::string a=argv[i];
         if (a=="--tx-chain") txChain=true;
         else if (a=="--snr" && i+1<argc) snrDb=atof(argv[++i]);
+        else if (a=="--rx-agc") rxAgc=true;
         else if (a=="--vocoder-ref" && i+1<argc) refPath=argv[++i];
         else if (a=="--features-tx" && i+1<argc) featTxPath=argv[++i];
         else if (a=="--features-rx" && i+1<argc) featRxPath=argv[++i];
@@ -95,6 +97,8 @@ int main(int argc, char** argv) {
           "  --tx-chain          insert OUR real TX chain: .real, 8->24k at\n"
           "                      ReqTransBand=45, back to 8k (models the radio path)\n"
           "  --snr <dB>          inject AWGN at this wideband SNR\n"
+          "  --rx-agc            run the live path's RX AGC (RFC 10.20). OFF by\n"
+          "                      default: Level 1 declares no AGC in the path\n"
           "  --vocoder-ref <f>   also write FARGAN's output from the ORIGINAL\n"
           "                      features, with no modem at all\n"
           "  --features-tx <f>   raw float32 feature vectors AT THE ENCODER INPUT\n"
@@ -209,10 +213,39 @@ int main(int argc, char** argv) {
     (void)featTx;   // filled above when --features-tx was given
     std::vector<short> out;
     size_t pos=0; int steps=0, decoded=0, syncBlocks=0; float snrSum=0; int snrN=0;
+    // §10.20 — the RX AGC, OFF BY DEFAULT AND DELIBERATELY SO.
+    //
+    // The live path (RADEV2Engine) and the real-capture decode tool always run
+    // it, because the level arriving from a radio is unknown and rade_rx() is
+    // level-dependent. Level 1 is the opposite case: a file at a known level,
+    // and the procedure's signal-path declaration explicitly bans "additional
+    // signal processing (AGC, noise gate, resampler, EQ, compression)" in the
+    // verification path. Upstream draws the same line — `--agc` lives in
+    // radev2_rx_wav.sh, not in the loopback that defines the 0.082 baseline.
+    //
+    // It is not free either: recomputing gain per block puts small steps into
+    // a signal that did not need them. Measured on wav/all.wav, enabling it
+    // moves Level 1 from 0.081 (PASS) to 0.092 (FAIL). That is the right
+    // trade on a real receive path — the same capture goes from 0 to 5
+    // callsign frames — and the wrong one here.
+    std::vector<RADE_COMP> rxBlk;
+    static_assert(sizeof(RADE_COMP) == 2 * sizeof(float),
+                  "RADE_COMP must be two packed floats to alias as interleaved I/Q");
+
     while (pos + size_t(rade_nin(rx)) <= modem.size()) {
         int nin = rade_nin(rx);
         int hasEoo=0;
-        int nOut = rade_rx(rx, featOut.data(), &hasEoo, nullptr, &modem[pos]);
+        RADE_COMP* rxPtr = &modem[pos];
+        if (rxAgc) {
+            rxBlk.assign(modem.begin() + qsizetype(pos),
+                         modem.begin() + qsizetype(pos) + nin);
+            const float agc = AetherSDR::RadeV2RxAgc::blockGainInterleaved(
+                reinterpret_cast<const float*>(rxBlk.data()), nin);
+            for (int k = 0; k < nin; ++k) { rxBlk[size_t(k)].real *= agc;
+                                            rxBlk[size_t(k)].imag *= agc; }
+            rxPtr = rxBlk.data();
+        }
+        int nOut = rade_rx(rx, featOut.data(), &hasEoo, nullptr, rxPtr);
         pos += size_t(nin); steps++;
         if (rade_sync(rx)) { syncBlocks++; snrSum += float(rade_snrdB_3k_est(rx)); snrN++; }
         if (nOut > 0) {
