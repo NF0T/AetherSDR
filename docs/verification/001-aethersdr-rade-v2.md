@@ -14,7 +14,7 @@
 | Field | Value |
 |---|---|
 | Application name | AetherSDR (RADE V2 as an in-process Flex waveform) |
-| Application version / git hash | `818fff0a`, branch `feat/rade-v2-waveform-provider` |
+| Application version / git hash | `fb992267`, branch `feat/rade-v2-waveform-provider` |
 | Platform (OS + version) | Windows 11 (10.0.26200), MinGW GCC 13.1.0, Qt 6.11.0 |
 | Tester name / callsign | NF0T |
 | Date | 2026-08-03 |
@@ -32,6 +32,17 @@
 - [x] No additional signal processing (AGC, noise gate, resampler, EQ,
       compression) between WAV file input and RADE encoder input during
       this verification test
+
+> **Note on the RX AGC — declared explicitly, because it exists in the shipping
+> product.** AetherSDR's live receive path runs an automatic gain control before
+> `rade_rx()`, replicating `RADEv2Receiver._compute_gain` from `radae_v2.py`
+> (target RMS `10^(-3/20)`, per input block, gain clipped to `[0.1, 10]`). It is
+> **not** in the Level 1 path: the loopback tool has it off by default, precisely
+> so this declaration stays true. Enabling it moves the Level 1 result from
+> **0.081 to 0.092**, which is a real cost and the reason it is off here.
+>
+> It is on in the live path because it has to be — see the note at the end of this
+> report.
 
 **Basis for the declaration.** The Level 1 test feeds `wav/all.wav` (16 kHz mono)
 directly to `lpcnet_compute_single_frame_features()`. AetherSDR's live audio path
@@ -155,6 +166,32 @@ little-endian Windows, and UDP bind behaviour differs across platforms. Those
 are covered by AetherSDR's own cross-platform CI rather than by this procedure.
 We would propose one form plus this note, rather than three forms, but will
 follow the RADE team's preference.
+
+**A gap in `rade_c`/`radae_nopy` that may affect other integrators — offered as
+the most useful thing we found.** `rade_rx()` is **level-dependent**, and the C
+library contains no AGC while the Python reference receiver does
+(`radae_v2.py`, `_compute_gain`, enabled by `--agc` in `radev2_rx_wav.sh`).
+`rade_api.h` documents no input level requirement anywhere.
+
+The failure mode is unusually hard to diagnose, because the level-sensitive part
+is the autoencoder, not the modem:
+
+- `rade_sync()` acquires normally and `rade_snrdB_3k_est()` reports a healthy SNR
+  — both are scale-invariant. We measured sync at 586 blocks and SNR at 15.1 dB,
+  **identical across a 42 dB input range**.
+- The feature vectors, and with them the inline data symbol, are wrong. Decoded
+  speech is unintelligible and the aux channel sits at chance.
+
+On a real off-air capture the threshold was about **−11 dBFS peak**. A capture at
+−23.6 dBFS decoded **zero** callsign frames; the *same samples* scaled up decoded
+**five**, with copyable speech. We spent a day inside our own transmit chain
+before finding it, because every indicator the library exposes said the signal
+was fine.
+
+Two suggestions, offered rather than asserted: state the expected input level in
+`rade_api.h`, and consider whether the AGC belongs in the C library beside the
+Python reference — every integrator using the C API has to rediscover this
+independently.
 
 **Method note offered in case it is useful to others.** A first Level 1 run used
 a convenient local speech file and returned loss 0.002 — apparently 40× better
