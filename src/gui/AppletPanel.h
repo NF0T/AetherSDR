@@ -65,7 +65,7 @@ class HealthApplet;
 class MqttApplet;
 class KiwiSdrApplet;
 class FavoritesPickerDialog;
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
 class RadeApplet;
 #endif
 
@@ -157,7 +157,7 @@ public:
     ProfileSwitcherApplet* profileSwitcherApplet() { return m_profApplet; }
     HealthApplet* healthApplet() { return m_healthApplet; }
     KiwiSdrApplet* kiwiSdrApplet() { return m_kiwiSdrApplet; }
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
     RadeApplet*   radeApplet()   { return m_radeApplet; }
 #endif
 #ifdef HAVE_MQTT
@@ -431,7 +431,7 @@ private:
     ProfileSwitcherApplet* m_profApplet{nullptr};
     HealthApplet* m_healthApplet{nullptr};
     KiwiSdrApplet* m_kiwiSdrApplet{nullptr};
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
     RadeApplet*  m_radeApplet{nullptr};
 #endif
 #ifdef HAVE_MQTT

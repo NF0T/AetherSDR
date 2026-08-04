@@ -30,8 +30,12 @@
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "WfmDeviceDialog.h"
-#ifdef HAVE_RADE
+// RadeApplet is display-only and serves BOTH engines (§10.20b), so its include
+// is not tied to V1. RADEEngine is V1's codec and stays behind HAVE_RADE.
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
 #include "RadeApplet.h"
+#endif
+#ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
 #ifdef AETHER_ENABLE_RADE_V2
@@ -478,6 +482,60 @@ void MainWindow::activateRADEV2(int sliceId)
             m_radeV2Transport, &FlexWaveformTransport::notifyTxTailComplete,
             Qt::QueuedConnection);
 
+    // ─── Telemetry → GUI (§10.20b) ─────────────────────────────────────────
+    //
+    // The engine has always emitted these; nothing consumed them, so a
+    // successful live decode gave the operator audio and no way to tell
+    // whether it was synced, at what SNR, or from whom. The widgets already
+    // have the setters — this reuses V1's surfaces rather than adding any.
+    //
+    // textDecoded(QString, float) connects to setRadeCallsign(QString): Qt
+    // drops the trailing confidence argument. V1 feeds the same slot from its
+    // EOO frame; V2 carries the callsign inline instead (§9.2), so the source
+    // differs but the destination is identical.
+    //
+    // ⛔ DELIBERATELY NOT WIRED: the FreeDV Reporter client, which V1 does
+    // connect (see the V1 block above). RAD2 is experimental, and reporting
+    // its spots would put development traffic on a live network where it
+    // cannot be distinguished from real activity. This asymmetry with V1 is a
+    // decision, not an oversight — do not "fix" it without asking the
+    // operator.
+    if (auto* sw = spectrumForSlice(m_radioModel.slice(sliceId))) {
+        if (auto* vfo = sw->vfoWidget(sliceId)) {
+            // Labelled RAD2, not RADE. Both engines can be built into the same
+            // binary and both drive these same widgets, so an indicator that
+            // said "RADE" either way would leave the operator unable to tell
+            // which one produced the SNR they are looking at.
+            vfo->setRadeActive(true, QStringLiteral("RAD2"));
+            vfo->setRadeSynced(false);
+            connect(m_radeV2Engine, &RADEV2Engine::syncChanged,
+                    vfo, &VfoWidget::setRadeSynced, Qt::QueuedConnection);
+            connect(m_radeV2Engine, &RADEV2Engine::snrChanged,
+                    vfo, &VfoWidget::setRadeSnr, Qt::QueuedConnection);
+            connect(m_radeV2Engine, &RADEV2Engine::freqOffsetChanged,
+                    vfo, &VfoWidget::setRadeFreqOffset, Qt::QueuedConnection);
+            // Received text is deliberately NOT shown on the VFO flag — it
+            // goes to the applet only. The flag is a glanceable status
+            // indicator beside the slice marker; arbitrary decoded text there
+            // competes with the frequency readout for the operator's eye and
+            // can be up to 15 characters. The applet has room to label it.
+        }
+    }
+
+    if (auto* applet = m_appletPanel->radeApplet()) {
+        applet->setRadeActive(true, QStringLiteral("RAD2"));
+        applet->setRadeTextCaption(tr("Received Text:"));
+        applet->setRadeSynced(false);
+        connect(m_radeV2Engine, &RADEV2Engine::syncChanged,
+                applet, &RadeApplet::setRadeSynced, Qt::QueuedConnection);
+        connect(m_radeV2Engine, &RADEV2Engine::snrChanged,
+                applet, &RadeApplet::setRadeSnr, Qt::QueuedConnection);
+        connect(m_radeV2Engine, &RADEV2Engine::freqOffsetChanged,
+                applet, &RadeApplet::setRadeFreqOffset, Qt::QueuedConnection);
+        connect(m_radeV2Engine, &RADEV2Engine::textDecoded,
+                applet, &RadeApplet::setRadeCallsign, Qt::QueuedConnection);
+    }
+
     // ─── Mic ───────────────────────────────────────────────────────────────
     //
     // §9 — the transmit CLOCK comes from `tx_stream_in` (§7.1 T1) and the
@@ -604,6 +662,30 @@ void MainWindow::deactivateRADEV2()
         if (auto* s = m_radioModel.slice(m_radeV2SliceId))
             disconnect(s, &SliceModel::modeChanged,
                        this, &MainWindow::onRadeV2SliceModeChanged);
+
+        // §10.20b — clear the telemetry surfaces. Qt drops the connections
+        // itself when the engine is destroyed, so this is not about dangling
+        // pointers: it is about the widgets. Left alone they keep showing
+        // "RADE active" with the last SNR and callsign from an engine that
+        // has stopped, which reads as a live decode of whatever the slice
+        // moved to.
+        if (auto* sw = spectrumForSlice(m_radioModel.slice(m_radeV2SliceId))) {
+            if (auto* vfo = sw->vfoWidget(m_radeV2SliceId)) {
+                if (m_radeV2Engine) disconnect(m_radeV2Engine, nullptr, vfo, nullptr);
+                vfo->setRadeSynced(false);
+                vfo->setRadeCallsign(QString());
+                vfo->setRadeActive(false);
+            }
+        }
+        if (auto* applet = m_appletPanel ? m_appletPanel->radeApplet() : nullptr) {
+            if (m_radeV2Engine) disconnect(m_radeV2Engine, nullptr, applet, nullptr);
+            applet->setRadeSynced(false);
+            applet->setRadeCallsign(QString());
+            // Reset the caption too, or a later V1 session inherits V2's.
+            applet->setRadeTextCaption(QString());
+            applet->setRadeActive(false);
+        }
+
         m_radeV2SliceId = -1;
     }
 

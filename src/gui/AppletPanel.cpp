@@ -42,7 +42,7 @@
 #include "ProfileSwitcherApplet.h"
 #include "HealthApplet.h"
 #include "KiwiSdrApplet.h"
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
 #include "RadeApplet.h"
 #endif
 #ifdef HAVE_MQTT
@@ -978,7 +978,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_appletOrder.append(makeEntry("KSDR", "KiwiSDR", m_kiwiSdrApplet, false,
                                    m_drawer, m_drawerLayout));
 
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
     m_radeApplet = new RadeApplet;
     m_appletOrder.append(makeEntry("RADE", "RADE Status", m_radeApplet, false, m_drawer, m_drawerLayout));
 #endif

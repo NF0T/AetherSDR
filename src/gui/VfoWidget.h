@@ -300,7 +300,12 @@ public:
     // for non-split slices, both-sides for split pairs (#2761).
     bool onLeft() const { return m_lastOnLeft; }
 
-#ifdef HAVE_RADE
+// Display surface only — no engine here, which is why the guard covers BOTH
+// engines. It was `HAVE_RADE` alone, and because ENABLE_RADE_V2 forces
+// ENABLE_RADE off (CMakeLists), a V2 build compiled these setters out and had
+// nowhere to show sync, SNR or a decoded callsign. The `label` parameter is
+// what keeps the two distinguishable: V1 passes "RADE", V2 passes "RAD2".
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
     void setRadeActive(bool on, const QString& label = QStringLiteral("RADE"));
     void setRadeSynced(bool synced);
     void setRadeSnr(float snrDb);
@@ -316,7 +321,7 @@ Q_SIGNALS:
     void lockToggled(bool locked);
     // Client-side DSP signals deleted with the buttons — overlay menu
     // and AetherDSP applet handle those toggles directly now.
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
     void radeActivated(bool on, int sliceId);
 #endif
     void recordToggled(bool on);
@@ -801,7 +806,7 @@ private:
     // DAX tab
     QComboBox* m_daxCmb{nullptr};
 
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
     QLabel*  m_radeStatusLabel{nullptr};   // freq row: "RADE ●" badge only
     QWidget* m_radeInfoRow{nullptr};        // info row: callsign + SNR + offset
     QLabel*  m_radeCallsignLabel{nullptr};  // hidden until EOO received
