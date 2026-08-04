@@ -321,7 +321,10 @@ Q_SIGNALS:
     void lockToggled(bool locked);
     // Client-side DSP signals deleted with the buttons — overlay menu
     // and AetherDSP applet handle those toggles directly now.
-#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
+// V1 only. Emitted when the operator picks "RADE" from the mode combo, which
+// is a V1-only entry — V2 is selected as RAD2 from the radio's own mode list
+// and never routes through this widget.
+#ifdef HAVE_RADE
     void radeActivated(bool on, int sliceId);
 #endif
     void recordToggled(bool on);

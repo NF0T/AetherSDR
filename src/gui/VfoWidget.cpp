@@ -2551,7 +2551,7 @@ void VfoWidget::buildTabContent()
         m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(
             {"USB", "LSB", "CW", "AM", "SAM", "FM",
              "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"}));
-#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
+#ifdef HAVE_RADE   // V1 only — RAD2 comes from the slice's mode list
         m_modeCombo->addItem("RADE");
 #endif
         AetherSDR::applyComboStyle(m_modeCombo);
@@ -2560,7 +2560,7 @@ void VfoWidget::buildTabContent()
                 this, [this](int) {
             if (m_modeCombo->signalsBlocked()) return;
             QString mode = m_modeCombo->currentText();
-#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
+#ifdef HAVE_RADE   // V1 mode activation; V2 never routes through this
             if (mode == "RADE") {
                 emit radeActivated(true, m_slice ? m_slice->sliceId() : -1);
                 return;
@@ -2603,7 +2603,7 @@ void VfoWidget::buildTabContent()
                 }
                 if (!m_slice) return;
                 const QString& assign = m_quickModeAssign[i];
-#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
+#ifdef HAVE_RADE   // V1 quick-mode button assignment
                 if (assign == "RADE") {
                     emit radeActivated(true, m_slice->sliceId());
                     return;
@@ -2637,7 +2637,7 @@ void VfoWidget::buildTabContent()
                         updateQuickModeButtons();
                     });
                 }
-#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
+#ifdef HAVE_RADE   // V1 quick-mode context menu entry
                 menu.addAction("RADE", [this, i] {
                     m_quickModeAssign[i] = "RADE";
                     AppSettings::instance().setValue(
@@ -4439,7 +4439,10 @@ void VfoWidget::setSlice(SliceModel* slice)
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
         m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(modes));
-#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
+// V1 ONLY. RAD2 is a radio-side mode that arrives through the slice's own mode
+// list; adding "RADE" here in a V2 build offers V1 in the dropdown when V1 is
+// not compiled in, and the two are mutually exclusive by CMake.
+#ifdef HAVE_RADE
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");
 #endif
@@ -4452,7 +4455,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
         m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(m_slice->modeList()));
-#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
+#ifdef HAVE_RADE   // V1 only — see the note on the other refill site
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");
 #endif
