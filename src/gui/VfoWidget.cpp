@@ -1103,7 +1103,7 @@ void VfoWidget::buildUI()
         auto* freqRow = new QHBoxLayout;
         freqRow->setContentsMargins(0, 0, 0, 0);
         freqRow->setSpacing(4);
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
         m_radeStatusLabel = new QLabel;
         m_radeStatusLabel->setFixedHeight(16);
         m_radeStatusLabel->setTextFormat(Qt::RichText);
@@ -1117,7 +1117,7 @@ void VfoWidget::buildUI()
         root->addLayout(freqRow);
     }
 
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
     // ── RADE info row: [callsign] [SNR] [offset] [stretch] ──────────────
     // Hidden when RADE inactive; appears below frequency, above S-meter.
     {
@@ -2583,7 +2583,7 @@ void VfoWidget::buildTabContent()
         m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(
             {"USB", "LSB", "CW", "AM", "SAM", "FM",
              "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"}));
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
         m_modeCombo->addItem("RADE");
 #endif
         AetherSDR::applyComboStyle(m_modeCombo);
@@ -2592,7 +2592,7 @@ void VfoWidget::buildTabContent()
                 this, [this](int) {
             if (m_modeCombo->signalsBlocked()) return;
             QString mode = m_modeCombo->currentText();
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
             if (mode == "RADE") {
                 emit radeActivated(true, m_slice ? m_slice->sliceId() : -1);
                 return;
@@ -2635,7 +2635,7 @@ void VfoWidget::buildTabContent()
                 }
                 if (!m_slice) return;
                 const QString& assign = m_quickModeAssign[i];
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
                 if (assign == "RADE") {
                     emit radeActivated(true, m_slice->sliceId());
                     return;
@@ -2669,7 +2669,7 @@ void VfoWidget::buildTabContent()
                         updateQuickModeButtons();
                     });
                 }
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
                 menu.addAction("RADE", [this, i] {
                     m_quickModeAssign[i] = "RADE";
                     AppSettings::instance().setValue(
@@ -4538,7 +4538,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
         m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(modes));
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");
 #endif
@@ -4551,7 +4551,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
         m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(m_slice->modeList()));
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");
 #endif
@@ -6714,7 +6714,7 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
 
 // ── RADE status indicator ─────────────────────────────────────────────────
 
-#ifdef HAVE_RADE
+#if defined(HAVE_RADE) || defined(HAVE_RADE_V2)
 void VfoWidget::setRadeActive(bool on, const QString& label)
 {
     m_radeLabel = label;
