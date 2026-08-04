@@ -2146,6 +2146,63 @@ stops it zeroing the feature — so codec-plus-noise moves away from the observe
 intelligible while the data channel carried literally nothing. Whatever the mechanism, data and
 voice do **not** degrade together.
 
+### 10.19 The OFDM structure is destroyed in flight — 2026-08-03
+
+**Everything on our side is exonerated by measurement; one candidate is left.** A local X6100
+capture of an 18 s over decoded neither voice nor callsign — the same result two websdr captures
+gave, on an unrelated receiver with no lossy audio path. Soft magnitudes across all three:
+**0.274 / 0.307 / 0.315.** The impairment is transmitted, not received.
+
+**What it is.** V2 is 14 carriers at 62.5 Hz spacing. The contrast between the carriers and the
+gaps between them:
+
+| signal | contrast |
+|---|---|
+| `tx4` modem output (decodes 6/6) | **+14.7 dB** |
+| `tx5` handed to the radio | +14.6 dB |
+| `tx6` **actually emitted**, padding included | +9.7 dB, **still decodes** |
+| `tx4` + AWGN at 15 dB SNR *(control)* | **+14.3 dB** |
+| **X6100 received** | **+0.7 dB** |
+
+Noise costs 0.4 dB of carrier contrast. The real path costs 14. The carriers are smeared into a
+continuum, which kills voice and data together regardless of SNR and leaves every level
+measurement looking perfect.
+
+**Eliminated, each by its own measurement:**
+
+| candidate | verdict | how |
+|---|---|---|
+| our codec, resampler, TX chain | clean | `tx5`→8 k decodes 6/6 |
+| starvation zero-padding | **not the cause** | 8 of 1823 ticks (0.4 %); `tx6` decodes with identical contrast |
+| transport pacing | clean | 1823 ticks × 128 = 233 344 samples = exactly `tx6`'s duration; every tick produced a packet |
+| noise | not it | AWGN at the observed SNR barely moves contrast |
+| frequency offset | not it | 6/6 frames at every offset to 30 Hz |
+| absolute level | not it | +6/+12/+18 dB gives byte-identical output |
+| sample-clock error | **none** | correction swept ±10 000 ppm; **0 ppm is optimal**, SNR falls away either side |
+| **receiver + RF path** | **clean — POSITIVE CONTROL** | the radio's own two-tone, through the same PA, antenna, X6100, soundcard and analysis, arrives with **1.0–1.5 Hz linewidth**, at the resolution limit |
+| **the waveform TX ingest (`tx_stream_in`)** | **ONLY SURVIVOR** | — |
+
+> **The two-tone control is the measurement that makes this section trustworthy.** Until it was
+> run, every conclusion rested on comparing our transmitter against itself with no reference, and
+> a misconfigured receive chain would have produced exactly the same smearing. It does not: pure
+> tones stay pure. The chain resolves 1 Hz and our 62.5 Hz carriers still smear.
+
+**Limit, stated so it is not over-read.** The two-tone is generated inside the radio and never
+traverses the waveform stream, so it cannot separate "the waveform ingest is broken" from
+"wideband dynamic content is handled differently". It narrows the fault to that path; it does not
+yet name the mechanism.
+
+**Next, and it needs no receiver.** A pcap on the radio link gives both directions at once: our
+`tx_stream_in` packets as they actually went on the wire (sequence, timing, gaps — strictly better
+evidence than `tx6`, which is only what we handed the socket), and, with `txwaterfall on`, the
+radio's own FFT bins of its own transmission as **numbers rather than rendered pixels**. If the
+radio's own bins show the carriers smeared, the fault is inside the radio or in our delivery to
+it — established before the signal reaches an antenna.
+
+**Two counters that were incremented from the first over and read by nobody** are now logged per
+over (`txUnderruns`, and `emitFailed` on the stream). Both were invisible for the same reason and
+both are one line of evidence each; the underrun count is what retired the padding hypothesis.
+
 ## 11. Fidelity & Licensing
 
 **Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
