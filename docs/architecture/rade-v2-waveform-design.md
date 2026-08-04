@@ -2311,6 +2311,47 @@ than guessed.
 > signal flat. It produced a confident negative result on a broken method, and it steered the next
 > several hours. Scale in float, without clipping, and the effect is unmissable.
 
+### 10.20a FIXED — RX AGC, with the reference receiver's constants
+
+`src/core/RadeV2RxAgc.h`, used by **both** `RADEV2Engine` and
+`rade_v2_decode_wav`. From `radae_v2.py`, `RADEv2Receiver._compute_gain`:
+
+```
+agc_target = 10^(-3/20)            # "PAPR (~3 dB) below peak of 1.0"
+gain       = agc_target / (rms(rx_in) + 1e-6)
+gain       = clip(gain, 0.1, 10.0)  # +/-20 dB of authority
+```
+
+recomputed **per input block**. Upstream reaches this having scaled raw int16
+magnitudes by `1.22e-4` (`radev2_rx_wav.sh`), so a full-scale signal arrives at
+~4.0; our samples are already ±1.0 full scale, so the header applies that 4.0
+to land on the same operating point — without it we would sit 12 dB low and the
+clip, which is the AGC's entire authority, would engage at the wrong levels.
+
+**Result on unmodified captures — nothing scaled by hand:**
+
+| capture | before | after |
+|---|---|---|
+| `tx4` tap (control) | 6 | **6** — no regression |
+| **X6100, local receiver** | **0** | **5 × "NF0T"**, confidence 0.99 |
+| websdr 16:12 (mean SNR 5.8 dB) | 0 | **1 × "NF0T"** |
+| websdr 12:30 | 0 | 0 |
+
+The 12:30 websdr still fails, consistent with the separate lossy-codec effect
+measured earlier: Opus at 8 kbit/s zeroes the text channel while leaving voice
+sync essentially intact.
+
+> **Why the header is shared rather than duplicated.** A bench tool whose front
+> end differs from the product's cannot predict the product. `rade_v2_decode_wav`
+> spent a day reporting healthy sync and SNR on captures that produced babble,
+> because it lacked the normalisation the live path also lacked — the two agreed,
+> and were both wrong. They now agree by construction.
+
+**Regression fixture.** The X6100 capture is 18.4 s of good signal at
+**−23.6 dBFS peak** with the callsign transmitted throughout, and the matching
+`tx5`/`tx6` taps are kept beside it. It decoded nothing before the fix and 5
+frames after, so it pins this defect directly.
+
 **Method note.** What finally isolated it was a 2×2: offset × amplitude, on one aligned span, with
 everything else held fixed. Eight mechanisms had been eliminated one at a time before that, each on
 its own single-variable test, and the answer was a variable that no single-variable test had varied.
