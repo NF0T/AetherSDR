@@ -2146,7 +2146,67 @@ stops it zeroing the feature — so codec-plus-noise moves away from the observe
 intelligible while the data channel carried literally nothing. Whatever the mechanism, data and
 voice do **not** degrade together.
 
-### 10.19 The OFDM structure is destroyed in flight — 2026-08-03
+### 10.19 ⛔ RETRACTED — the OFDM is NOT destroyed in flight — 2026-08-03
+
+> **THE CENTRAL CLAIM OF THIS SECTION WAS WRONG, AND THE ERROR WAS IN THE ANALYSIS, NOT THE
+> RADIO.** It reported that the received carrier-to-gap contrast collapsed from +14.6 dB to
+> +0.7 dB. It does not. Measured with the frequency offset accounted for, on the same over:
+>
+> | | contrast | at offset |
+> |---|---|---|
+> | `tx5` transmitted | **+13.1 dB** | −0.50 Hz |
+> | X6100 received | **+12.2 dB** | −16.75 Hz |
+>
+> **0.9 dB, not 14.** The received capture sits **−17 Hz** low — the decoder reported exactly that
+> as `foff` and it was in every log line — but the contrast was computed at the *nominal* carrier
+> frequencies. At 0.488 Hz/bin, 17 Hz is **35 bins**, so the measurement sampled the gaps *between*
+> carriers and called them carriers. Every "smearing" figure in this section is void.
+>
+> **Independently confirmed from the radio's side.** With `txwaterfall on`, a pcap of the radio
+> link yields the radio's own FFT of its own transmission — 1232 complete frames, 1660 bins over
+> 14.31 kHz = **8.62 Hz/bin**. At matched resolution, same over:
+>
+> | | contrast |
+> |---|---|
+> | `tx4` / `tx5` / `tx6` (ours) | +5.4 / +5.4 / +5.3 dB |
+> | **radio's own FFT of its own TX** | **+4.2 dB** |
+>
+> 1.1 dB, within the difference in FFT windowing. **The radio transmits our signal faithfully.**
+> Note also how strongly this metric depends on resolution — `tx4` reads +14.7 dB at 0.488 Hz/bin
+> and +5.4 dB at 8.62 Hz/bin — so contrast figures are comparable ONLY at matched bin width. The
+> original section compared across resolutions as well as across offsets.
+>
+> **Method lesson, the same one this project keeps relearning:** an absolute-frequency measurement
+> on a *received* signal must first establish where that signal actually is. The offset was
+> measured, logged, and printed in the output I was reading, and I used nominal frequencies anyway.
+
+**What survives, each on its own evidence:**
+
+- Our TX chain is clean — `tx5`→8 k decodes 6/6, and `tx6` (post-padding, what actually leaves)
+  decodes too.
+- Starvation padding is **not** the cause — 8 of 1823 ticks (0.4 %), and `tx6` decodes with
+  carrier contrast identical to `tx5`.
+- Transport pacing is clean — 1974 ticks × 128 samples matches `tx6`'s duration exactly, and
+  `emitFailed` is **0**: every packet left the socket.
+- No sample-clock error — swept ±10 000 ppm, 0 ppm optimal.
+- **The receive chain is clean** — the radio's own two-tone arrives through the same PA, antenna,
+  X6100 and soundcard with **1.0–1.5 Hz linewidth**, at the resolution limit.
+- **The radio transmits faithfully** — its own FFT, above.
+- **The signal arrives with its carrier structure intact** — 0.9 dB down.
+
+**So the open question is now a different and sharper one.** The signal leaves clean, is
+transmitted faithfully, arrives with intact carriers at ~13 dB SNR, the decoder acquires sync
+(881 blocks) — and it still produces unintelligible audio and a data channel at ~50 % BER with
+soft magnitudes of 0.27–0.32 across three independent captures. Those three figures come from the
+decoder, not from the analysis retracted above, and they stand.
+
+That points at demodulation or equalisation rather than at the channel. The next measurement is
+the **per-carrier amplitude and phase profile, transmitted vs received**: frequency-selective
+fading would show as structure across the 14 carriers, and would explain an intact-looking
+spectrum that still fails to demodulate.
+
+### 10.19a Original section, as written (superseded)
+
 
 **Everything on our side is exonerated by measurement; one candidate is left.** A local X6100
 capture of an 18 s over decoded neither voice nor callsign — the same result two websdr captures
