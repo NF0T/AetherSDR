@@ -7960,6 +7960,15 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         if (m_spe) {
             m_spe->setAutoReconnect(on);
         }
+        if (m_lpMeter) {
+            m_lpMeter->setAutoReconnect(on);
+        }
+        // NOTE: m_vkamp is deliberately NOT propagated here, and that is a
+        // pre-existing gap from #4919 rather than an intentional omission --
+        // VkampConnection has setAutoReconnect() and the startup block in
+        // MainWindow_Wiring.cpp does call it, so toggling this checkbox
+        // mid-session reaches every peripheral except that one. Left alone on
+        // purpose: it is not this PR's file to change. Filed separately.
     });
     vbox->addWidget(reconnectCheck);
 

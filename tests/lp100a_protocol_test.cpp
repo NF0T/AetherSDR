@@ -356,7 +356,7 @@ int main()
     // ---- RangeTracker ----------------------------------------------------
     {
         RangeTracker t;
-        t.setCeilings(RangeCeilings{});
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         t.reset();
         report("defaults to High with the 1500 W ceiling",
                t.displayedRange() == 0 && near(t.ceilingW(), 1500.0));
@@ -365,7 +365,7 @@ int main()
         // Contract High -> Low, then expand back. Expansion is immediate;
         // contraction takes kContractHoldMs.
         RangeTracker t;
-        t.setCeilings(RangeCeilings{});
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         t.reset();
         t.onReading(2, 0.0, 0);
         const bool notYet = (t.displayedRange() == 0);
@@ -385,7 +385,7 @@ int main()
         // record of a transmission to the second -- the record where the wide
         // scale is most wanted.
         RangeTracker t;
-        t.setCeilings(RangeCeilings{});
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         t.reset();
         t.onReading(2, 0.0, 0);
         t.onReading(2, 0.0, RangeTracker::kContractHoldMs);
@@ -397,7 +397,7 @@ int main()
         // A meter hunting between two ranges must never contract: the flow's
         // counter would expire and latch whatever a single record said.
         RangeTracker t;
-        t.setCeilings(RangeCeilings{});
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         t.reset();
         for (int i = 0; i < 200; ++i) {
             t.onReading((i % 2) ? 1 : 2, 0.0, i * 100);
@@ -410,12 +410,12 @@ int main()
         // and its own comment concedes that assumes a 100 ms poll rate; at a
         // 5 s riding-along cadence that would be minutes.
         RangeTracker fast;
-        fast.setCeilings(RangeCeilings{});
+        fast.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         fast.reset();
         for (int i = 0; i <= 20; ++i) { fast.onReading(2, 0.0, i * 100); }
 
         RangeTracker slow;
-        slow.setCeilings(RangeCeilings{});
+        slow.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         slow.reset();
         slow.onReading(2, 0.0, 0);
         slow.onReading(2, 0.0, 5000);   // ONE record, 5 s later
@@ -424,7 +424,7 @@ int main()
     }
     {
         RangeTracker t;
-        t.setCeilings(RangeCeilings{});
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         t.reset();
         t.onReading(0, 1600.0, 0);
         const bool notYet = near(t.ceilingW(), 1500.0);
@@ -438,14 +438,15 @@ int main()
     }
     {
         // Same up-only guard AcomConnection applies to a late SystemConfig
-        // reply: an edited or re-read ceiling must not shrink one that
-        // observed power has already established this session.
+        // reply: a RE-READ must not shrink one that observed power has
+        // already established this session. An operator EDIT is a different
+        // matter and deliberately does shrink it -- see the rows below.
         RangeTracker t;
-        t.setCeilings(RangeCeilings{});
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
         t.reset();
         t.onReading(0, 1600.0, 0);
         t.onReading(0, 1600.0, 100);
-        t.setCeilings(RangeCeilings{});   // re-read of the same config
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);   // re-read of the same config
         report("a re-read ceiling does not shrink an auto-expanded one",
                near(t.ceilingW(), 1600.0));
     }
@@ -455,10 +456,77 @@ int main()
         c.highW = 700.0;
         c.midW = 125.0;
         c.lowW = 25.0;
-        t.setCeilings(c);
+        t.setCeilings(c, RangeTracker::CeilingSource::ConfigLoad);
         t.reset();
         report("operator-configured ceilings are honoured",
                near(t.ceilingW(), 700.0));
+    }
+
+    {
+        // The defect that splitting ConfigLoad from OperatorEdit fixes: with
+        // one shared entry point the up-only guard swallowed a deliberate
+        // edit, so an operator lowering High to match their meter saw no
+        // change and got no feedback either -- the ceiling never moved, so
+        // gaugeCeilingChanged() never fired.
+        RangeTracker t;
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
+        t.reset();
+        t.onReading(0, 1600.0, 0);
+        t.onReading(0, 1600.0, 100);       // auto-expanded past 1500 W
+        RangeCeilings lower;
+        lower.highW = 700.0;
+        t.setCeilings(lower, RangeTracker::CeilingSource::OperatorEdit);
+        report("an operator edit LOWERS an auto-expanded ceiling",
+               near(t.ceilingW(), 700.0));
+        report("and clears the auto-expanded flag with it",
+               !t.ceilingAutoExpanded());
+    }
+    {
+        // ...and the guard still holds for the path it was written for, so
+        // this cannot be "simplified" back into a single code path.
+        RangeTracker t;
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
+        t.reset();
+        t.onReading(0, 1600.0, 0);
+        t.onReading(0, 1600.0, 100);
+        RangeCeilings lower;
+        lower.highW = 700.0;
+        t.setCeilings(lower, RangeTracker::CeilingSource::ConfigLoad);
+        report("a config re-read still cannot lower it",
+               near(t.ceilingW(), 1600.0));
+    }
+    {
+        // Honouring a mistaken edit is self-correcting: real power above the
+        // lowered ceiling re-expands within kCeilingExpandRecords records,
+        // rather than leaving a pinned needle.
+        RangeTracker t;
+        RangeCeilings lower;
+        lower.highW = 700.0;
+        t.setCeilings(lower, RangeTracker::CeilingSource::ConfigLoad);
+        t.reset();
+        t.onReading(0, 900.0, 0);
+        t.onReading(0, 900.0, 100);
+        report("power above a lowered ceiling re-expands it",
+               t.ceilingW() > 700.0 && t.ceilingAutoExpanded());
+    }
+    {
+        // Regression guard for the unbounded-growth path. Once the buffer
+        // starts with a marker, indexOf() always succeeds, so the no-marker
+        // cap in feed() never runs again: a stream that delivers one ';' and
+        // then never another used to append forever.
+        ResponseParser p;
+        int records = 0;
+        p.setReadingCallback([&](const Reading&) { ++records; });
+        p.feed(";");
+        for (int i = 0; i < 200; ++i) {
+            p.feed(QByteArray(64, 'x'));   // 12.8 kB, no marker, never valid
+        }
+        report("a stuck stream after a marker does not grow without bound",
+               p.bufferedBytes() <= kRecordLength * 4 + 1);
+        // And the parser is still usable once the device recovers. rec()
+        // supplies the ';' -- the fixtures are bodies, not framed records.
+        p.feed(rec(kCapturedIdle));
+        report("and it resyncs on the next good record", records == 1);
     }
 
     std::printf("\n%s\n", g_failed == 0 ? "all passed"

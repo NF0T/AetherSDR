@@ -76,7 +76,10 @@ public:
     // Operator-configured gauge ceilings. The meter reports WHICH range is
     // active but never what that range's ceiling in watts is — see
     // LpMeter::RangeCeilings.
-    void setRangeCeilings(const LpMeter::RangeCeilings& ceilings);
+    // `source` distinguishes a stored-config load from a deliberate context-menu
+    // edit; see LpMeter::RangeTracker::CeilingSource for why that matters.
+    void setRangeCeilings(const LpMeter::RangeCeilings& ceilings,
+                          LpMeter::RangeTracker::CeilingSource source);
 
     const LpMeter::Reading& lastReading() const { return m_lastReading; }
 

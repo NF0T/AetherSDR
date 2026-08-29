@@ -6046,6 +6046,7 @@ void MainWindow::wireMeters()
         m_acomConn.setAutoReconnect(ar);
         m_speConn.setAutoReconnect(ar);
         m_vkampConn.setAutoReconnect(ar);
+        m_lpMeterConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
@@ -6558,7 +6559,12 @@ void MainWindow::wireMeters()
     // the applet is where it is edited; the connection only consumes it.
     connect(m_appletPanel->lpMeterApplet(), &LpMeterApplet::ceilingsChanged, this,
             [this](const AetherSDR::LpMeter::RangeCeilings& c) {
-        m_lpMeterConn.setRangeCeilings(c);
+        // From the context menu, so it is authoritative and overrides an
+        // auto-expanded ceiling -- see RangeTracker::CeilingSource.
+        m_lpMeterConn.setRangeCeilings(
+            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::OperatorEdit);
+        // Persisted as int: the edit dialog offers 0 decimals, so a fractional
+        // full scale is unreachable and the cast cannot lose anything today.
         PeripheralSettings::setDeviceInt("Lp100a", "RangeHighW",
                                          static_cast<int>(c.highW));
         PeripheralSettings::setDeviceInt("Lp100a", "RangeMidW",
@@ -6576,7 +6582,8 @@ void MainWindow::wireMeters()
                                                static_cast<int>(c.midW));
         c.lowW = PeripheralSettings::deviceInt("Lp100a", "RangeLowW",
                                                static_cast<int>(c.lowW));
-        m_lpMeterConn.setRangeCeilings(c);
+        m_lpMeterConn.setRangeCeilings(
+            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::ConfigLoad);
         m_appletPanel->lpMeterApplet()->setCeilings(c);
 
         const QString mode = PeripheralSettings::deviceString("Lp100a", "ConnectionMode",

@@ -172,6 +172,12 @@ public:
     void feed(const QByteArray& bytes);
     void reset() { m_buf.clear(); }
 
+    // Pending bytes not yet resolved into a record. Exposed so a test can
+    // assert the buffer stays bounded on a stream that goes malformed after
+    // delivering its first marker -- the one path the no-marker cap in feed()
+    // does not cover.
+    int bufferedBytes() const { return static_cast<int>(m_buf.size()); }
+
 private:
     QByteArray m_buf;
     std::function<void(const Reading&)> m_onReading;
@@ -196,13 +202,21 @@ constexpr double kCoherenceTolerance = 0.25;
 
 // Reflected power from forward power and SWR.
 //
+// NO v1 CALLER, deliberately -- the applet shows no reflected figure, for the
+// reason below. Declared here alongside kAlarmCommand/kModeCommand/
+// kPeakAvgCommand, which are also unused in v1, so the control PR adds no
+// protocol surface. Exercised by lp100a_protocol_test.
+//
 // CAUTION -- the fields this consumes are not always mutually coherent. At
 // key-up in Peak Hold the meter holds power and dBm for ~1.7 s while Z, phase
 // and SWR have already reverted to idle, so this returns 0 W reflected against
-// a live-looking forward reading. Callers must suppress the result unless both
-// inputs are currently live; see the per-field liveness tracking in
-// LpMeterConnection. Provided as a pure function so the coherence decision
-// stays with the caller that has the timing information.
+// a live-looking forward reading. A caller must therefore gate the result on
+// Reading::coherent, which decodeReading() computes by checking |Z| and phase
+// against the reported SWR; LpMeterApplet::applyDimming() is the worked
+// example. (An earlier draft of this comment pointed at "per-field liveness
+// tracking in LpMeterConnection" -- no such thing was ever built; the
+// coherence flag on the reading replaced it.) Provided as a pure function so
+// that decision stays with the caller.
 double reflectedWattsFromSwr(double forwardW, double swr);
 
 // ---- Poll gating ---------------------------------------------------------
@@ -345,7 +359,28 @@ public:
     // weakened, this must be revisited.
     static constexpr int kCeilingExpandRecords = 2;
 
-    void setCeilings(const RangeCeilings& ceilings);
+    // Why setCeilings() needs to know WHO is calling.
+    //
+    // The up-only guard below exists so a re-read of the stored configuration
+    // cannot shrink a ceiling that observed power already expanded within this
+    // session -- ACOM applies the same rule to a late SystemConfig reply that
+    // would otherwise snap the tier below what auto-ranging established.
+    //
+    // But the identical entry point also serves a deliberate edit from the
+    // applet's context menu, and there the guard is simply wrong: an operator
+    // who lowers High to match their meter gets no change AND no feedback,
+    // because the ceiling does not move so gaugeCeilingChanged() never fires.
+    // An operator action that silently does nothing is worse than the stale
+    // ceiling the guard was written to prevent.
+    //
+    // So the caller states its intent. No default -- the whole point is that
+    // the two paths stop being indistinguishable at the call site.
+    enum class CeilingSource {
+        ConfigLoad,    // stored settings, a reconnect, a late authoritative value
+        OperatorEdit,  // the context menu; always authoritative, always wins
+    };
+
+    void setCeilings(const RangeCeilings& ceilings, CeilingSource source);
     void reset();
 
     void onReading(int reportedRange, double watts, qint64 nowMs);

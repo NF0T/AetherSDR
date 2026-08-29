@@ -37,7 +37,8 @@ LpMeterConnection::LpMeterConnection(QObject* parent)
 
     m_parser.setReadingCallback([this](const LpMeter::Reading& r) { onReading(r); });
 
-    m_range.setCeilings(m_ceilings);
+    m_range.setCeilings(m_ceilings,
+                        LpMeter::RangeTracker::CeilingSource::ConfigLoad);
     m_range.reset();
 
     // The poll tick runs at the solo rate; PollGate decides per tick whether
@@ -134,14 +135,15 @@ QString LpMeterConnection::sourceLabel() const
     }
 }
 
-void LpMeterConnection::setRangeCeilings(const LpMeter::RangeCeilings& ceilings)
+void LpMeterConnection::setRangeCeilings(const LpMeter::RangeCeilings& ceilings,
+                                        LpMeter::RangeTracker::CeilingSource source)
 {
     m_ceilings = ceilings;
     const double before = m_range.ceilingW();
-    // RangeTracker applies its own up-only guard here, so a re-read or an
-    // edited ceiling cannot shrink one that observed power already expanded
-    // within this session.
-    m_range.setCeilings(ceilings);
+    // RangeTracker applies its up-only guard to a ConfigLoad only. An
+    // OperatorEdit always wins, including when it lowers an auto-expanded
+    // ceiling -- otherwise the edit is silently discarded.
+    m_range.setCeilings(ceilings, source);
     if (std::abs(before - m_range.ceilingW()) > 1e-6) {
         emit gaugeCeilingChanged(m_range.ceilingW(), m_range.ceilingAutoExpanded());
     }
@@ -260,7 +262,8 @@ void LpMeterConnection::onTransportUp()
     m_firstBytesMs = -1;
     m_dataFlowing = false;
     m_gate.reset();
-    m_range.setCeilings(m_ceilings);
+    m_range.setCeilings(m_ceilings,
+                        LpMeter::RangeTracker::CeilingSource::ConfigLoad);
     m_range.reset();
 
     qCInfo(lcTuner) << "LpMeterConnection: connected via" << description();
@@ -339,7 +342,24 @@ void LpMeterConnection::pollTick()
     const bool poll = m_gate.shouldPoll(now);
 
     // Report the gate's state only once it settles -- see m_gateSettleTimer.
-    if (m_gate.isRidingAlong() != m_ridingAlongSeen || !m_gateSettleTimer.isActive()) {
+    //
+    // Restart ONLY on an actual change. The condition used to include
+    // `|| !m_gateSettleTimer.isActive()`, which re-armed the timer on the
+    // first tick after every expiry: it fired, the next tick restarted it, it
+    // fired 1.5 s later, forever. The timeout early-returns when the state has
+    // not changed, so those wakeups did nothing but cost a timer event every
+    // ~1.6 s for the life of the connection. A state change is the only thing
+    // that ever needs debouncing, and it re-arms the timer by itself.
+    //
+    // The second clause keeps the one thing the old condition got right: the
+    // FIRST state after a connect must still be reported, and at that point
+    // the gate agrees with m_ridingAlongSeen's initial value, so a
+    // change-only test would never arm the timer and the opening
+    // POLLING/SHARED line would be lost from the support bundle.
+    // m_gateStateReported latches on the first report, so this arms once per
+    // connection and never again.
+    if (m_gate.isRidingAlong() != m_ridingAlongSeen
+        || (!m_gateStateReported && !m_gateSettleTimer.isActive())) {
         m_ridingAlongSeen = m_gate.isRidingAlong();
         m_gateSettleTimer.start();
     }

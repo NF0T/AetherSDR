@@ -185,6 +185,10 @@ std::optional<Reading> decodeReading(const QByteArray& body)
 
 // ---- Streaming parser ----------------------------------------------------
 
+// Longest body still treated as a possible record while waiting for the next
+// marker. Four records' worth, matching the cap on the no-marker path.
+static constexpr int kMaxBodyLength = kRecordLength * 4;
+
 void ResponseParser::feed(const QByteArray& bytes)
 {
     m_buf += bytes;
@@ -227,7 +231,30 @@ void ResponseParser::feed(const QByteArray& bytes)
             body = m_buf.mid(1, kRecordLength);
             consume = 1 + kRecordLength;
         } else {
-            break;  // incomplete; wait for more bytes
+            // Incomplete; wait for more bytes -- but not without limit. The
+            // cap on the no-marker path above does not cover this one: once
+            // m_buf starts with ';' that indexOf always succeeds, so a stream
+            // that delivers one marker and then never another (and never a
+            // body that validates) would append here forever. Needs a device
+            // that goes malformed AFTER talking properly, which is exactly
+            // the case the other cap was written for.
+            //
+            // A body longer than kMaxBodyLength cannot become a record, so
+            // drop the marker and resync at the next one. Bounded at four
+            // records' worth for the same reason as above: wide enough that
+            // no plausible firmware variant is truncated, narrow enough that
+            // the buffer cannot grow.
+            if (m_buf.size() - 1 > kMaxBodyLength) {
+                m_buf.remove(0, 1);       // discard this marker
+                const int resync = m_buf.indexOf(kRecordMarker);
+                if (resync < 0) {
+                    m_buf.clear();
+                    return;
+                }
+                m_buf.remove(0, resync);
+                continue;                 // retry from the next marker
+            }
+            break;
         }
 
         m_buf.remove(0, consume);
@@ -380,14 +407,27 @@ double RangeCeilings::forRange(int rangeIndex) const
     return std::max({highW, midW, lowW});
 }
 
-void RangeTracker::setCeilings(const RangeCeilings& ceilings)
+void RangeTracker::setCeilings(const RangeCeilings& ceilings, CeilingSource source)
 {
     m_ceilings = ceilings;
-    // A re-read or edited ceiling must never SHRINK one that observed power
-    // has already expanded within this session -- the same up-only guard
-    // AcomConnection applies to a late SystemConfig reply that would otherwise
-    // snap the tier below what auto-ranging had established.
     const double configured = m_ceilings.forRange(m_displayedRange);
+
+    // An operator edit is authoritative by definition -- it is a person
+    // telling us what their meter is actually set to, which is the one thing
+    // this protocol never puts on the wire. Take it even when it lowers an
+    // auto-expanded ceiling; if observed power really does exceed it, the
+    // kCeilingExpandRecords run re-expands within two records anyway, so the
+    // worst case is self-correcting and visible.
+    if (source == CeilingSource::OperatorEdit) {
+        m_ceilingW = configured;
+        m_autoExpanded = false;
+        return;
+    }
+
+    // A re-read must never SHRINK one that observed power has already expanded
+    // within this session -- the same up-only guard AcomConnection applies to
+    // a late SystemConfig reply that would otherwise snap the tier below what
+    // auto-ranging had established.
     if (!m_autoExpanded || configured > m_ceilingW) {
         m_ceilingW = configured;
         m_autoExpanded = false;

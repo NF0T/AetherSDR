@@ -173,6 +173,20 @@ consecutive over-ceiling records raise it, and `reset()` restores the
 configured value on reconnect — never persisted, the same rule
 `AcomConnection` applies to its auto-ranged tier.
 
+**The up-only guard applies to a config load, not to the operator.**
+`RangeTracker::setCeilings()` takes a `CeilingSource`, and the distinction is
+load-bearing rather than decorative. The guard exists so a re-read of stored
+settings cannot shrink a ceiling that observed power already expanded — but the
+same entry point also serves a deliberate edit from the applet's context menu,
+and there it is simply wrong. An operator who lowers High to match their meter
+would get no change *and no feedback*, because the ceiling never moves so
+`gaugeCeilingChanged()` never fires. An operator action that silently does
+nothing is worse than the stale ceiling the guard was written to prevent, so an
+`OperatorEdit` always wins. Honouring a mistaken edit is self-correcting: real
+power above the new ceiling re-expands it within `kCeilingExpandRecords`
+records. Found in review of #5320; three test rows pin all three behaviours so
+the two paths cannot be merged back into one.
+
 ---
 
 ## 6. The wire is shared: listen before you talk
