@@ -737,6 +737,7 @@ set(CORE_SOURCES
     src/core/SpeConnection.cpp
     src/core/VkampProtocol.cpp
     src/core/VkampConnection.cpp
+    src/core/LpMeterProtocol.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp

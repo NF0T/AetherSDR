@@ -1,0 +1,341 @@
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <optional>
+
+#include <QByteArray>
+#include <QMetaType>
+#include <QString>
+
+namespace AetherSDR {
+
+// TelePost LP-100A digital vector RF wattmeter serial protocol.
+//
+// Protocol authority: TelePost's own "LP-100A Digital Vector RF Wattmeter
+// Operations Manual", pp. 20-21 (telepostinc.com/LP-100A-Op_Manual.pdf). The
+// field ORDER and semantics come from there. The field WIDTHS and the record
+// framing come from a live capture off real hardware (2026-08-29, 954 records
+// across idle and three transmit cycles) because the manual's printed example
+// is wrong in one field -- see kRecordLength below. See
+// docs/architecture/lp-100a-wattmeter-design.md for the full provenance
+// record, including which of the manual's claims did not survive measurement.
+//
+// Link: 115200 8N1, no handshake. Firmware < 1.2.0.0 used 38400 and < 1.0.3
+// used 19200 without dBm or SWR; neither is supported and neither is detected
+// -- an older unit simply produces records this parser rejects.
+namespace LpMeter {
+
+// ---- Commands (host -> meter) -------------------------------------------
+//
+// The ENTIRE host command set. Every one is a single byte, and every one
+// except Poll is an INCREMENT with no absolute-set form and no acknowledgement:
+// the meter's resulting state is only observable in the next poll response.
+// Anything built on these must therefore report what the next reading says,
+// never what was commanded.
+//
+// One useful consequence of single-byte commands: two clients sharing a
+// ser2net port cannot interleave *within* a command, so no malformed command
+// can reach the meter. That is what lets PollGate below be advisory rather
+// than a hard lock.
+constexpr char kPollCommand      = 'P';  // request one reading
+constexpr char kAlarmCommand     = 'A';  // increment SWR alarm set point
+constexpr char kModeCommand      = 'M';  // increment mode / power range
+constexpr char kPeakAvgCommand   = 'F';  // cycle Peak / Avg / Tune
+
+// ---- Record framing ------------------------------------------------------
+
+// ';' LEADS a record; it is not a terminator. The meter emits no CR, LF or
+// any other terminator at all -- confirmed by capture, and consistent with
+// both transports in the reference Node-RED flow framing by timing rather
+// than by a delimiter.
+constexpr char kRecordMarker = ';';
+
+// Body length after the marker. Measured, not taken from the manual: the
+// manual's printed example
+//
+//     ;1457.00,49.3,005.0,2,N8LP  ,0,2,61.6,1.02
+//
+// is 41 characters because its Z field is 4 wide, where the wire sends 5
+// (zero-padded, e.g. "046.3"). Every one of 954 captured records was 42.
+//
+// This is a SANITY CHECK, not the validation rule -- see looksLikeRecord().
+// A firmware whose dBm field needs 5 characters (any value in -99.9..-10.0;
+// dBm is the one field that is signed AND not zero-padded) would emit 43,
+// and rejecting purely on length would then reject every record on that unit.
+constexpr int kRecordLength = 42;
+
+// Field indices within the comma-separated record.
+enum Field {
+    FieldPower      = 0,  // W,     7 wide, zero-padded
+    FieldZ          = 1,  // ohms,  5 wide, zero-padded, MAGNITUDE only
+    FieldPhase      = 2,  // deg,   5 wide, zero-padded, MAGNITUDE only (see below)
+    FieldAlarm      = 3,  // enum,  1 wide
+    FieldCallsign   = 4,  //        6 wide, space-padded
+    FieldRange      = 5,  // enum,  1 wide
+    FieldPeakHold   = 6,  // enum,  1 wide
+    FieldDbm        = 7,  // dBm,   4 wide, SIGNED, not zero-padded
+    FieldSwr        = 8,  //        4 wide
+    FieldCount      = 9,
+};
+
+// ---- A decoded reading ---------------------------------------------------
+
+struct Reading {
+    double  powerW{0.0};
+    double  zOhms{0.0};       // |Z| at the coupler LOAD port
+    // |phase|, UNSIGNED. The sign of the reactance is never transmitted --
+    // this is a protocol limitation, not a decode gap. The manual (p.12)
+    // has the operator recover it by hand: QSY ~100 kHz and watch which way
+    // the reactance moves. LP-Plot automates that only "since it can control
+    // your transmitter's frequency", sweeping to read the slope. 954 captured
+    // records across three frequencies contained no sign character.
+    //
+    // So NEVER render this as signed reactance or an R+jX form. AetherSDR
+    // does drive the VFO and could therefore implement the QSY-slope
+    // inference LP-Plot uses, but that is a separate feature, not a decode.
+    double  phaseDeg{0.0};
+    double  dBm{0.0};
+    double  swr{1.0};
+
+    int     alarmSetPoint{0};
+    int     powerRange{0};    // 0=High, 1=Mid, 2=Low -- see RangeTracker
+    int     peakHoldMode{0};
+
+    QString callsign;         // trailing pad stripped
+};
+
+// ---- Enum names ----------------------------------------------------------
+//
+// The manual documents five alarm values and two peak-hold modes. The
+// reference Node-RED flow decodes six and three, and its UI names them. Its
+// extra values are UNCONFIRMED -- I could not establish whether its author
+// observed them on hardware or added the cases defensively, and a capture at
+// idle plus three transmit cycles never produced them. They are handled
+// because handling them is free; they are not evidence.
+//
+// Every lookup returns a readable placeholder for an unknown index rather
+// than an empty string, so a firmware with a value neither source knows
+// degrades to a visible "unknown" instead of a blank readout.
+QString alarmSetPointName(int value);   // Off / 1.5 / 2.0 / 2.5 / 3.0 / User
+QString powerRangeName(int value);      // High / Mid / Low
+QString peakHoldModeName(int value);    // Avg / Peak / Fast
+
+// ---- Validation and decode ----------------------------------------------
+
+// The whole integrity mechanism for this protocol. There is NO CHECKSUM, so
+// this function is the only thing standing between a corrupted record and a
+// gauge -- which is why it checks considerably more than the reference flow's
+// single `str.length == 42`. A flipped digit keeps the length.
+//
+// Checks, cheapest first: field count, per-field parseability, physical
+// plausibility, and -- only when the length matches the known-good layout --
+// that every separator sits where it must. The last check is skipped for
+// other lengths so a wider dBm field degrades to "still valid" rather than
+// "every record rejected".
+bool looksLikeRecord(const QByteArray& body);
+
+// Decodes a record body (marker already stripped). Returns nullopt for
+// anything looksLikeRecord() rejects.
+std::optional<Reading> decodeReading(const QByteArray& body);
+
+// Streaming parser. Feed it bytes from either transport -- the wire format is
+// identical over a local serial port and a raw-TCP proxy. Resyncs on the
+// record marker, so leading garbage self-heals: notably the ser2net connect
+// banner, which is ~210 bytes of text containing no ';' and is therefore
+// discarded without special handling.
+//
+// Deliberately has zero Qt-networking dependency so it is unit-testable
+// against captured bytes with no hardware and no event loop.
+class ResponseParser {
+public:
+    void setReadingCallback(std::function<void(const Reading&)> cb)
+    {
+        m_onReading = std::move(cb);
+    }
+    void feed(const QByteArray& bytes);
+    void reset() { m_buf.clear(); }
+
+private:
+    QByteArray m_buf;
+    std::function<void(const Reading&)> m_onReading;
+};
+
+// ---- Derived values ------------------------------------------------------
+
+// Return loss in dB from SWR. 0.00 dB at a perfect match, which is the
+// division-by-zero edge every naive implementation gets wrong.
+double returnLossDb(double swr);
+
+// Reflected power from forward power and SWR.
+//
+// CAUTION -- the fields this consumes are not always mutually coherent. At
+// key-up in Peak Hold the meter holds power and dBm for ~1.7 s while Z, phase
+// and SWR have already reverted to idle, so this returns 0 W reflected against
+// a live-looking forward reading. Callers must suppress the result unless both
+// inputs are currently live; see the per-field liveness tracking in
+// LpMeterConnection. Provided as a pure function so the coherence decision
+// stays with the caller that has the timing information.
+double reflectedWattsFromSwr(double forwardW, double swr);
+
+// ---- Poll gating ---------------------------------------------------------
+
+// The meter never pushes; it answers 'P' and nothing else. On a shared
+// transport (ser2net, Lantronix, Digi) other clients are commonly already
+// polling it -- measured on the reference station: a second connection that
+// sent NOTHING received 60 complete records in 6 s, so the proxy mirrors one
+// client's replies to every other.
+//
+// Polling blindly on top of that doubles the meter's work, and for any client
+// that reads blind after a fixed delay it makes that client attribute our
+// replies to its own polls. So: ride along when someone else is already
+// polling, poll when the wire is quiet.
+//
+// The subtlety worth preserving. Gating on "no record in the last N ms" does
+// NOT work, because our own replies reset the same timestamp and N then sets
+// the solo poll rate as well as the suppression threshold. Measured against
+// the reference station's 100 ms foreign cadence: N=130 ms suppresses cleanly
+// but caps solo polling at 7.7 Hz, while N=100 ms keeps 10 Hz and polls over
+// the other client 48.5% of the time. Gating on FOREIGN records only breaks
+// that coupling -- solo stays at a full 10 Hz and the threshold is free to be
+// whatever suppression needs.
+//
+// Pure and clock-injected: no QTimer, no QDateTime, no socket. That is what
+// makes the coupling fix testable rather than merely asserted.
+class PollGate {
+public:
+    // A record arriving within this long after our own poll is our reply.
+    // MEASURED: own-reply latency <= 15 ms; minimum foreign inter-record gap
+    // 79 ms. Roughly 2.5x margin on both sides.
+    static constexpr qint64 kOwnReplyWindowMs = 40;
+
+    // 10 Hz when we own the wire, which is also exactly the applet's label
+    // throttle -- polling faster would produce readings the UI discards.
+    static constexpr qint64 kSoloPollIntervalMs = 100;
+
+    // Suppression threshold bounds. Floor is above the measured worst-case
+    // foreign gap (121 ms), so a 100 ms foreign poller never leaks a spurious
+    // poll. Ceiling is a STATED DECISION, not an artifact: we ride along with
+    // a foreign poller down to ~1.5 Hz, and past that we supplement rather
+    // than let our own gauge fall below ~0.5 Hz. TelePost's own VCP offers up
+    // to a 5 s interval, so a slow foreign client is a real configuration.
+    static constexpr qint64 kMinQuietMs = 130;
+    static constexpr qint64 kMaxQuietMs = 2000;
+
+    void reset();
+
+    // Call for every decoded record, before shouldPoll() for the same tick.
+    void onRecord(qint64 nowMs);
+
+    // Call exactly once per poll tick. Returns true if a poll should be sent
+    // NOW, and records that poll internally so the next record can be
+    // classified against it.
+    bool shouldPoll(qint64 nowMs);
+
+    // True while another client's polling is suppressing ours. For the
+    // applet's diagnostic tooltip -- an operator riding along at someone
+    // else's slow cadence otherwise sees a sluggish gauge with no explanation.
+    bool isRidingAlong() const { return m_ridingAlong; }
+
+    // Observed foreign cadence, or -1 before two foreign records have been
+    // seen. Also for the tooltip.
+    qint64 foreignIntervalMs() const { return m_foreignIntervalMs; }
+
+    qint64 quietThresholdMs() const;
+
+private:
+    qint64 m_lastPollMs{-1};
+    qint64 m_lastForeignMs{-1};
+    qint64 m_prevForeignMs{-1};
+    qint64 m_foreignIntervalMs{-1};
+    bool   m_ridingAlong{false};
+};
+
+// ---- Power-range scaling -------------------------------------------------
+
+// The meter reports WHICH of three ranges is active (field 5); it never
+// reports what that range's ceiling in watts is. The ceilings are configured
+// on the meter itself and cannot be read over the wire -- the manual's VCP
+// lists 25/250/2500 W while the reference station's unit is set to
+// 700/125/25 W. So they are an operator setting here, with these defaults.
+struct RangeCeilings {
+    // 1500 W: the US legal limit, which never under-scales a legal station.
+    double highW{1500.0};
+    // 150 W: a decade below, covering the ubiquitous 100 W barefoot rig with
+    // headroom. The manual's 250 and the reference unit's 125 bracket it.
+    double midW{150.0};
+    // 25 W: the one value the manual and the reference unit agree on.
+    double lowW{25.0};
+
+    double forRange(int rangeIndex) const;
+};
+
+// Follows the meter's reported range onto a gauge scale.
+//
+// The asymmetry is deliberate and is the one piece of the reference flow's
+// logic worth keeping: EXPAND the scale immediately, CONTRACT it only after
+// the meter has held the smaller range for a while. An under-scaled gauge
+// pins the needle and hides an overpower condition; an over-scaled one costs
+// nothing but a moment of a generous axis.
+//
+// Three things here differ from that flow deliberately:
+//
+//   1. Contraction is timed on the WALL CLOCK, not counted in records. The
+//      flow counts 20 records and its own comment concedes "2 seconds
+//      assuming 100 msec polling rate" -- but PollGate above can legitimately
+//      ride along behind a slow foreign poller, where 20 records is minutes.
+//   2. Contraction requires a STABLE candidate. The flow's counter advances
+//      whenever the reported range merely disagrees, then adopts whatever a
+//      single record says when the count expires; a meter hunting between two
+//      ranges therefore latches on one arbitrary sample. This protocol has no
+//      checksum, so a lone corrupt-but-plausible record is likelier here than
+//      in any of the checksummed peers.
+//   3. No "only while power > 0.1 W" gate. In the flow that gate stalls the
+//      timer between SSB syllables, making "2 seconds" an unpredictable
+//      multiple of itself. Dropping it is safe precisely BECAUSE expansion is
+//      immediate: contracting while idle is invisible, and keying up widens
+//      the scale on that same record.
+class RangeTracker {
+public:
+    static constexpr qint64 kContractHoldMs = 2000;
+
+    // Consecutive over-ceiling records required before the ceiling is raised.
+    // ACOM uses 2 for the same job (AcomConnection::maybeAutoRangeUp), but its
+    // 2 was chosen against an 8-bit checksum where ~1/256 corrupt frames pass.
+    // This protocol has none, so the constant does not transfer on ACOM's
+    // authority -- it is defensible here only because looksLikeRecord() is
+    // doing much more work than a length test. If that validation is ever
+    // weakened, this must be revisited.
+    static constexpr int kCeilingExpandRecords = 2;
+
+    void setCeilings(const RangeCeilings& ceilings);
+    void reset();
+
+    void onReading(int reportedRange, double watts, qint64 nowMs);
+
+    int    displayedRange() const { return m_displayedRange; }
+    double ceilingW() const { return m_ceilingW; }
+
+    // True while the ceiling has been auto-expanded past its configured value.
+    // Session-scoped and never persisted -- reset() restores the configured
+    // ceiling, exactly as AcomConnection resets to its default tier on every
+    // reconnect rather than carrying an auto-scaled one forward.
+    bool ceilingAutoExpanded() const { return m_autoExpanded; }
+
+private:
+    void adoptRange(int range);
+
+    RangeCeilings m_ceilings;
+    int     m_displayedRange{0};
+    double  m_ceilingW{0.0};
+    bool    m_autoExpanded{false};
+
+    int     m_candidateRange{-1};
+    qint64  m_candidateSinceMs{-1};
+    int     m_overCeilingRun{0};
+};
+
+}  // namespace LpMeter
+}  // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::LpMeter::Reading)
