@@ -7980,6 +7980,13 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
             "QComboBox::drop-down { border: none; }";
+        // Every style below goes through ThemeManager rather than a direct
+        // setStyleSheet() call -- including the shared kLabelStyle/kEditStyle/
+        // kBtnStyle that the rows above apply directly. The colour ratchet
+        // counts setStyleSheet CALL SITES as well as colours, so four new
+        // direct calls fail the gate even when they introduce no new colour;
+        // routing them through applyStyleSheet also means these widgets
+        // re-resolve on a theme change, which a direct call does not.
         auto& tm = AetherSDR::ThemeManager::instance();
 
         auto* devWidget = new QWidget;
@@ -7987,7 +7994,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         devLay->setContentsMargins(0, 0, 0, 0);
         devLay->setSpacing(2);
         auto* devLbl = new QLabel("LP-100A Meter");
-        devLbl->setStyleSheet(kLabelStyle);
+        tm.applyStyleSheet(devLbl, kLabelStyle);
         devLay->addWidget(devLbl);
         auto* modeCombo = new QComboBox;
         tm.applyStyleSheet(modeCombo, kComboStyle);
@@ -8011,7 +8018,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             tm.applyStyleSheet(serialCombo, kComboStyle);
             serialCustomEdit = new QLineEdit;
             serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
-            serialCustomEdit->setStyleSheet(kEditStyle);
+            tm.applyStyleSheet(serialCustomEdit, kEditStyle);
             const QString savedSerialPort =
                 PeripheralSettings::deviceString("Lp100a", "SerialPort");
             populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
@@ -8030,7 +8037,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         netLay->setContentsMargins(0, 0, 0, 0);
         auto* netIpEdit = new QLineEdit;
         netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.7");
-        netIpEdit->setStyleSheet(kEditStyle);
+        tm.applyStyleSheet(netIpEdit, kEditStyle);
         netIpEdit->setText(PeripheralSettings::deviceString("Lp100a", "ManualIp"));
         netLay->addWidget(netIpEdit);
         const int netPageIdx = addrStack->addWidget(netPage);
@@ -8100,7 +8107,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         grid->addWidget(statusLbl, row, 4);
 
         auto* lpBtn = new QPushButton(m_lpMeter->isConnected() ? "Disconnect" : "Connect");
-        lpBtn->setStyleSheet(kBtnStyle);
+        tm.applyStyleSheet(lpBtn, kBtnStyle);
         grid->addWidget(lpBtn, row, 3);
 
         auto updateLpState = [this, lpBtn, statusLbl, kOkStyle, kIdleStyle]() {
