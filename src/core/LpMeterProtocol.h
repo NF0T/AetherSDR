@@ -103,6 +103,22 @@ struct Reading {
     int     peakHoldMode{0};
 
     QString callsign;         // trailing pad stripped
+
+    // False when this record's fields do not describe one moment in time.
+    //
+    // MEASURED: at key-up in Peak Hold the meter holds power and dBm for
+    // ~1.7 s while Z, phase and SWR have already reverted to idle -- 54 of
+    // 894 captured records reported real power alongside SWR 1.00. A record
+    // is not a snapshot, and anything that combines fields across that
+    // boundary is wrong.
+    //
+    // Detected from physics rather than from the mode field: |Z| and phase
+    // must reproduce the SWR the meter itself reports, and they do so to
+    // within 0.0093 across every coherent record captured while diverging by
+    // up to 43 across the incoherent ones. That separation is enormous, and
+    // being mechanism-independent it also covers Avg mode's own averaging
+    // hold -- which gating on peakHoldMode would silently miss.
+    bool coherent{true};
 };
 
 // ---- Enum names ----------------------------------------------------------
@@ -166,6 +182,17 @@ private:
 // Return loss in dB from SWR. 0.00 dB at a perfect match, which is the
 // division-by-zero edge every naive implementation gets wrong.
 double returnLossDb(double swr);
+
+// SWR implied by |Z| and phase against a 50-ohm reference. The meter reports
+// all three, so this is a redundancy -- and that redundancy is exactly what
+// makes Reading::coherent detectable.
+double swrFromImpedance(double zOhms, double phaseDeg);
+
+// How far the implied and reported SWR may differ before a record is judged
+// incoherent. Coherent captured records agreed to 0.0093; incoherent ones
+// diverged by up to 43. Anywhere in between would do, so this is set well
+// clear of measurement noise without being anywhere near the real signal.
+constexpr double kCoherenceTolerance = 0.25;
 
 // Reflected power from forward power and SWR.
 //

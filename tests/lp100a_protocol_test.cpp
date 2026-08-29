@@ -127,6 +127,33 @@ int main()
         report("|Z|/phase reproduce the meter's own SWR to 0.01", ok);
     }
 
+    // ---- field coherence -------------------------------------------------
+    // A record is NOT a snapshot: at key-up in Peak Hold the meter holds
+    // power and dBm ~1.7 s while Z/phase/SWR have already reverted. Detected
+    // from physics, so it covers Avg mode's own hold too -- which gating on
+    // the peakHoldMode field would miss.
+    {
+        const auto r = decodeReading(kCapturedTx);
+        report("a coherent transmit record is flagged coherent",
+               r.has_value() && r->coherent);
+    }
+    {
+        // Captured verbatim during a key-up transient: real power alongside
+        // SWR 1.00 and an idle-looking phase.
+        const auto r = decodeReading("0008.77,046.3,087.3,0,NF0T  ,2,1,39.4,1.00");
+        report("a captured key-up transient is flagged INCOHERENT",
+               r.has_value() && !r->coherent);
+    }
+    {
+        const auto r = decodeReading(kCapturedIdle);
+        report("idle records are not judged incoherent (no RF to measure)",
+               r.has_value() && r->coherent);
+    }
+    report("swrFromImpedance: 50 ohms at 0 deg is a perfect match",
+           near(swrFromImpedance(50.0, 0.0), 1.0, 1e-6));
+    report("swrFromImpedance reproduces the captured record's own SWR",
+           near(swrFromImpedance(47.1, 28.5), 1.68, 0.01));
+
     // ---- validation: stricter than a length check ------------------------
     report("valid captured record accepted", looksLikeRecord(kCapturedIdle));
     report("wrong field count rejected",

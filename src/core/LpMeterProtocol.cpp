@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <QList>
 #include <QStringList>
@@ -170,6 +171,15 @@ std::optional<Reading> decodeReading(const QByteArray& body)
     parseDigit(fields.at(FieldRange), &r.powerRange);
     parseDigit(fields.at(FieldPeakHold), &r.peakHoldMode);
     r.callsign = QString::fromLatin1(fields.at(FieldCallsign)).trimmed();
+
+    // Only meaningful under drive. With no RF the impedance bridge has
+    // nothing to measure, so the idle values (SWR 1.00 against a phase near
+    // 90 degrees) are not physically consistent and would read as incoherent
+    // for the entire time the operator is receiving.
+    if (r.powerW > 0.5) {
+        const double implied = swrFromImpedance(r.zOhms, r.phaseDeg);
+        r.coherent = std::fabs(implied - r.swr) <= kCoherenceTolerance;
+    }
     return r;
 }
 
@@ -258,6 +268,23 @@ double returnLossDb(double swr)
     }
     const double gamma = (swr - 1.0) / (swr + 1.0);
     return -20.0 * std::log10(gamma);
+}
+
+double swrFromImpedance(double zOhms, double phaseDeg)
+{
+    const double theta = phaseDeg * M_PI / 180.0;
+    const double re = zOhms * std::cos(theta);
+    const double im = zOhms * std::sin(theta);
+    const double numer = std::hypot(re - 50.0, im);
+    const double denom = std::hypot(re + 50.0, im);
+    if (denom <= 0.0) {
+        return 1.0;
+    }
+    const double gamma = numer / denom;
+    if (gamma >= 1.0) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return (1.0 + gamma) / (1.0 - gamma);
 }
 
 double reflectedWattsFromSwr(double forwardW, double swr)
