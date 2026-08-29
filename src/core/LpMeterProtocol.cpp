@@ -301,6 +301,7 @@ double reflectedWattsFromSwr(double forwardW, double swr)
 void PollGate::reset()
 {
     m_lastPollMs = -1;
+    m_ownReplyPending = false;
     m_lastForeignMs = -1;
     m_prevForeignMs = -1;
     m_foreignIntervalMs = -1;
@@ -312,18 +313,26 @@ qint64 PollGate::quietThresholdMs() const
     if (m_foreignIntervalMs < 0) {
         return kMinQuietMs;
     }
-    // 1.3x the observed cadence: enough headroom for the jitter measured on
-    // real hardware (mean 100.5 ms, max 121 ms) without being so loose that a
-    // departed foreign client keeps us silent.
-    const qint64 scaled = m_foreignIntervalMs * 13 / 10;
+    // 2x the observed cadence. The multiplier has to cover the TAIL of the
+    // foreign client's jitter, not its mean: at a measured mean of 100.5 ms a
+    // 1.3x threshold is 131 ms, and a sample already contained gaps of 121 ms,
+    // so occasional gaps exceed it and the gate flaps between riding along and
+    // polling. Observed live before this was widened. The cost of 2x is that a
+    // departed foreign client is noticed one extra cadence later -- 200 ms at
+    // the measured rate, which nothing can perceive.
+    const qint64 scaled = m_foreignIntervalMs * 2;
     return std::clamp<qint64>(scaled, kMinQuietMs, kMaxQuietMs);
 }
 
 void PollGate::onRecord(qint64 nowMs)
 {
-    const bool ours = m_lastPollMs >= 0
+    // At most ONE reply per poll: a second record inside the same window is
+    // necessarily another client's, however well the phases happen to line up.
+    const bool ours = m_ownReplyPending
+                      && m_lastPollMs >= 0
                       && (nowMs - m_lastPollMs) <= kOwnReplyWindowMs;
     if (ours) {
+        m_ownReplyPending = false;
         return;
     }
 
@@ -351,6 +360,7 @@ bool PollGate::shouldPoll(qint64 nowMs)
     }
     m_ridingAlong = false;
     m_lastPollMs = nowMs;
+    m_ownReplyPending = true;
     return true;
 }
 

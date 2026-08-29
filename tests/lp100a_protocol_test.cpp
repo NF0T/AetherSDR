@@ -303,6 +303,9 @@ int main()
         }
         report("foreign 1 s cadence: fully suppressed once the cadence is learned",
                late == 0 && g.foreignIntervalMs() >= 900);
+        report("  ... and the threshold covers the jitter tail, not just the mean",
+               g.quietThresholdMs() >= 2 * g.foreignIntervalMs()
+                   || g.quietThresholdMs() == PollGate::kMaxQuietMs);
         report("  ... after a bounded startup burst while it is still unknown",
                early > 0 && early < 12);
     }

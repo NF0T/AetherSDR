@@ -240,9 +240,10 @@ public:
     // throttle -- polling faster would produce readings the UI discards.
     static constexpr qint64 kSoloPollIntervalMs = 100;
 
-    // Suppression threshold bounds. Floor is above the measured worst-case
-    // foreign gap (121 ms), so a 100 ms foreign poller never leaks a spurious
-    // poll. Ceiling is a STATED DECISION, not an artifact: we ride along with
+    // Suppression threshold bounds, applied to 2x the observed foreign
+    // cadence. Floor is above the measured worst-case foreign gap (121 ms) so
+    // a fast foreign poller never leaks a spurious poll even before its
+    // cadence has been established. Ceiling is a STATED DECISION, not an artifact: we ride along with
     // a foreign poller down to ~1.5 Hz, and past that we supplement rather
     // than let our own gauge fall below ~0.5 Hz. TelePost's own VCP offers up
     // to a 5 s interval, so a slow foreign client is a real configuration.
@@ -252,6 +253,14 @@ public:
     void reset();
 
     // Call for every decoded record, before shouldPoll() for the same tick.
+    //
+    // Classification is "exactly one reply per poll", not merely "inside the
+    // window". Both matter: when our cadence and a foreign client's are both
+    // ~100 ms and happen to align in phase, THEIR records land inside our
+    // reply window too, get misread as ours, and the gate flaps between
+    // riding along and polling until the phases drift apart. Observed live on
+    // the reference station -- three transitions in the first second of a
+    // connect. Claiming at most one reply per poll removes it.
     void onRecord(qint64 nowMs);
 
     // Call exactly once per poll tick. Returns true if a poll should be sent
@@ -272,6 +281,7 @@ public:
 
 private:
     qint64 m_lastPollMs{-1};
+    bool   m_ownReplyPending{false};
     qint64 m_lastForeignMs{-1};
     qint64 m_prevForeignMs{-1};
     qint64 m_foreignIntervalMs{-1};

@@ -147,6 +147,12 @@ private:
     QTimer m_reconnectTimer;
     // Link-alive-but-meter-quiet watchdog. Restarted by every valid record.
     QTimer m_dataWatchdog;
+    // Reports the poll gate's state only once it has held still. The gate can
+    // legitimately flap for the first second of a connect while the foreign
+    // cadence is still unknown, and logging each transition made an ordinary
+    // startup read like a fault. Restarted by every transition; logs whatever
+    // the state is when it finally fires.
+    QTimer m_gateSettleTimer;
 
     // Latched so a permanently malformed stream logs once on the transition
     // into failure rather than at the ~10 Hz record rate — the same reason
@@ -160,7 +166,12 @@ private:
     // arrives before any record — so the warning must be about a DURATION of
     // fruitless bytes, not about the first chunk.
     qint64 m_firstBytesMs{-1};
-    bool m_ridingAlongLogged{false};
+    // "Seen" is the gate's current state; "reported" is the last state
+    // actually logged. Keeping them apart is what makes a flap that returns
+    // to where it started produce no log at all.
+    bool m_ridingAlongSeen{false};
+    bool m_ridingAlongReported{false};
+    bool m_gateStateReported{false};
 };
 
 }  // namespace AetherSDR

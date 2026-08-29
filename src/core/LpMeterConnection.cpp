@@ -15,6 +15,9 @@ constexpr int kDataTimeoutMs = 2000;
 // Reconnect cadence, matching AcomConnection/SpeConnection: retry forever
 // until the meter returns or the operator disconnects.
 constexpr int kReconnectMs = 5000;
+// How long the poll gate must hold one state before it is worth reporting.
+// Comfortably longer than the startup flap it exists to absorb.
+constexpr int kGateSettleMs = 1500;
 }  // namespace
 
 qint64 LpMeterConnection::nowMs()
@@ -54,6 +57,40 @@ LpMeterConnection::LpMeterConnection(QObject* parent)
         } else if (m_mode == Mode::Serial && !m_lastSerialPort.isEmpty()) {
             connectSerial(m_lastSerialPort);
 #endif
+        }
+    });
+
+    m_gateSettleTimer.setSingleShot(true);
+    m_gateSettleTimer.setInterval(kGateSettleMs);
+    connect(&m_gateSettleTimer, &QTimer::timeout, this, [this]() {
+        if (!m_connected) { return; }
+        // Only report a state that actually differs from the last one logged.
+        // The gate flips briefly now and then even in steady state, because
+        // over TCP we are timing record ARRIVAL rather than the foreign
+        // client's true cadence: segment batching delivers two records
+        // together and then nothing for twice the interval, which reads as a
+        // gap no fixed multiple of the mean can absorb. One extra poll every
+        // few seconds is harmless; logging it as a state change is not.
+        if (m_gateStateReported && m_ridingAlongSeen == m_ridingAlongReported) {
+            return;
+        }
+        m_ridingAlongReported = m_ridingAlongSeen;
+        m_gateStateReported = true;
+        if (m_ridingAlongSeen) {
+            const qint64 iv = m_gate.foreignIntervalMs();
+            if (iv > 0) {
+                qCInfo(lcTuner) << "LpMeterConnection: another client is polling this"
+                                   " meter every" << iv << "ms — riding along on its"
+                                   " replies and sending no polls of our own.";
+            } else {
+                qCInfo(lcTuner) << "LpMeterConnection: another client is polling this"
+                                   " meter (cadence not yet established) — riding"
+                                   " along on its replies.";
+            }
+        } else {
+            qCInfo(lcTuner) << "LpMeterConnection: no other client polling this meter"
+                               " — polling it ourselves every"
+                            << LpMeter::PollGate::kSoloPollIntervalMs << "ms.";
         }
     });
 
@@ -187,6 +224,7 @@ void LpMeterConnection::disconnect()
     m_reconnectTimer.stop();
     m_pollTimer.stop();
     m_dataWatchdog.stop();
+    m_gateSettleTimer.stop();
     m_connected = false;
     teardownDevice();
     m_parser.reset();
@@ -215,7 +253,9 @@ void LpMeterConnection::onTransportUp()
 {
     m_connected = true;
     m_bytesWithoutRecords = false;
-    m_ridingAlongLogged = false;
+    m_ridingAlongSeen = false;
+    m_ridingAlongReported = false;
+    m_gateStateReported = false;
     m_lastRecordMs = -1;
     m_firstBytesMs = -1;
     m_dataFlowing = false;
@@ -237,6 +277,7 @@ void LpMeterConnection::onTransportDown()
     m_connected = false;
     m_pollTimer.stop();
     m_dataWatchdog.stop();
+    m_gateSettleTimer.stop();
     m_parser.reset();
     m_gate.reset();
     setDataFlowing(false);
@@ -295,21 +336,15 @@ void LpMeterConnection::pollTick()
     if (!m_connected || !m_device) { return; }
 
     const qint64 now = nowMs();
-    if (!m_gate.shouldPoll(now)) {
-        if (!m_ridingAlongLogged) {
-            m_ridingAlongLogged = true;
-            qCInfo(lcTuner) << "LpMeterConnection: another client is polling this"
-                               " meter (~" << m_gate.foreignIntervalMs()
-                            << "ms cadence) — riding along on its replies and"
-                               " sending no polls of our own.";
-        }
-        return;
+    const bool poll = m_gate.shouldPoll(now);
+
+    // Report the gate's state only once it settles -- see m_gateSettleTimer.
+    if (m_gate.isRidingAlong() != m_ridingAlongSeen || !m_gateSettleTimer.isActive()) {
+        m_ridingAlongSeen = m_gate.isRidingAlong();
+        m_gateSettleTimer.start();
     }
-    if (m_ridingAlongLogged) {
-        m_ridingAlongLogged = false;
-        qCInfo(lcTuner) << "LpMeterConnection: no other client polling — taking over"
-                           " at" << LpMeter::PollGate::kSoloPollIntervalMs << "ms.";
-    }
+
+    if (!poll) { return; }
     m_device->write(QByteArray(1, LpMeter::kPollCommand));
 }
 
