@@ -123,16 +123,16 @@ struct Reading {
 
 // ---- Enum names ----------------------------------------------------------
 //
-// The manual documents five alarm values and two peak-hold modes. The
-// reference Node-RED flow decodes six and three, and its UI names them. Its
-// extra values are UNCONFIRMED -- I could not establish whether its author
-// observed them on hardware or added the cases defensively, and a capture at
-// idle plus three transmit cycles never produced them. They are handled
-// because handling them is free; they are not evidence.
+// The manual documents five alarm values and two peak-hold modes. Both counts
+// are wrong, CONFIRMED on hardware 2026-08-29 by cycling the meter through
+// full rotations: 'A' walks 0,1,2,3,4,5 -- six alarm values -- and 'F' walks
+// 0,1,2 -- three peak-hold modes. The reference Node-RED flow's fuller tables
+// were right and the manual is short, which also settles that its author had
+// observed these rather than adding the cases defensively.
 //
-// Every lookup returns a readable placeholder for an unknown index rather
-// than an empty string, so a firmware with a value neither source knows
-// degrades to a visible "unknown" instead of a blank readout.
+// Every lookup still returns a readable placeholder for an unknown index
+// rather than an empty string, so a firmware with a value neither source
+// knows degrades to a visible "unknown" instead of a blank readout.
 QString alarmSetPointName(int value);   // Off / 1.5 / 2.0 / 2.5 / 3.0 / User
 QString powerRangeName(int value);      // High / Mid / Low
 QString peakHoldModeName(int value);    // Avg / Peak / Fast

@@ -227,11 +227,15 @@ int main()
     }
 
     // ---- enum names ------------------------------------------------------
-    report("alarm names cover the manual's five and the flow's sixth",
+    // Both tables were confirmed on hardware by cycling 'A' and 'F' through
+    // full rotations: alarm walks 0..5, peak-hold walks 0..2. The manual lists
+    // only 0..4 and 0..1, so these upper values are the ones a manual-derived
+    // implementation would render blank.
+    report("alarm names cover all six hardware-confirmed values",
            alarmSetPointName(0) == QStringLiteral("Off")
                && alarmSetPointName(4) == QStringLiteral("3.0")
                && alarmSetPointName(5) == QStringLiteral("User"));
-    report("peak-hold names cover Avg/Peak/Fast",
+    report("peak-hold names cover all three hardware-confirmed modes",
            peakHoldModeName(0) == QStringLiteral("Avg")
                && peakHoldModeName(1) == QStringLiteral("Peak")
                && peakHoldModeName(2) == QStringLiteral("Fast"));

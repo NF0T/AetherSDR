@@ -58,7 +58,7 @@ QString alarmSetPointName(int value)
         case 2: return QStringLiteral("2.0");
         case 3: return QStringLiteral("2.5");
         case 4: return QStringLiteral("3.0");
-        case 5: return QStringLiteral("User");   // unconfirmed; see header
+        case 5: return QStringLiteral("User");   // confirmed on hardware
         default: break;
     }
     return QStringLiteral("? (%1)").arg(value);
@@ -80,7 +80,7 @@ QString peakHoldModeName(int value)
     switch (value) {
         case 0: return QStringLiteral("Avg");
         case 1: return QStringLiteral("Peak");
-        case 2: return QStringLiteral("Fast");  // unconfirmed; see header
+        case 2: return QStringLiteral("Fast");  // confirmed on hardware
         default: break;
     }
     return QStringLiteral("? (%1)").arg(value);
