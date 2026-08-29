@@ -30,6 +30,7 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
@@ -640,12 +641,13 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    AcomConnection* acom,
                                    SpeConnection* spe,
                                    VkampConnection* vkamp,
+                                   LpMeterConnection* lpMeter,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom), m_spe(spe), m_vkamp(vkamp), m_lpMeter(lpMeter)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -7966,6 +7968,208 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         "Configure manual IP addresses for peripherals that cannot be discovered via UDP broadcast.\n"
         "This is needed for remote, VPN, and SmartLink connections. "
         "Configured devices auto-connect when the radio connects.");
+    // Row 8: TelePost LP-100A wattmeter — serial OR ser2net network,
+    // structurally identical to the ACOM row above. See
+    // docs/architecture/lp-100a-wattmeter-design.md for the design note.
+    //
+    // Only the CONNECTION settings live here. The per-range full scale is a
+    // display preference and is edited from the applet's own context menu.
+    if (m_lpMeter) {
+        const int row = 8;
+        static const QString kComboStyle =
+            "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+        auto& tm = AetherSDR::ThemeManager::instance();
+
+        auto* devWidget = new QWidget;
+        auto* devLay = new QVBoxLayout(devWidget);
+        devLay->setContentsMargins(0, 0, 0, 0);
+        devLay->setSpacing(2);
+        auto* devLbl = new QLabel("LP-100A Meter");
+        devLbl->setStyleSheet(kLabelStyle);
+        devLay->addWidget(devLbl);
+        auto* modeCombo = new QComboBox;
+        tm.applyStyleSheet(modeCombo, kComboStyle);
+#ifdef HAVE_SERIALPORT
+        modeCombo->addItem("Serial", "Serial");
+#endif
+        modeCombo->addItem("Network", "Network");
+        devLay->addWidget(modeCombo);
+        grid->addWidget(devWidget, row, 0);
+
+        auto* addrStack = new QStackedWidget;
+        int serialPageIdx = -1;
+        QComboBox* serialCombo = nullptr;
+        QLineEdit* serialCustomEdit = nullptr;
+#ifdef HAVE_SERIALPORT
+        {
+            auto* serialPage = new QWidget;
+            auto* lay = new QHBoxLayout(serialPage);
+            lay->setContentsMargins(0, 0, 0, 0);
+            serialCombo = new QComboBox;
+            tm.applyStyleSheet(serialCombo, kComboStyle);
+            serialCustomEdit = new QLineEdit;
+            serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
+            serialCustomEdit->setStyleSheet(kEditStyle);
+            const QString savedSerialPort =
+                PeripheralSettings::deviceString("Lp100a", "SerialPort");
+            populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
+            serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
+            connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                    [serialCombo, serialCustomEdit](int idx) {
+                serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
+            });
+            lay->addWidget(serialCombo, 1);
+            lay->addWidget(serialCustomEdit, 1);
+            serialPageIdx = addrStack->addWidget(serialPage);
+        }
+#endif
+        auto* netPage = new QWidget;
+        auto* netLay = new QHBoxLayout(netPage);
+        netLay->setContentsMargins(0, 0, 0, 0);
+        auto* netIpEdit = new QLineEdit;
+        netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.7");
+        netIpEdit->setStyleSheet(kEditStyle);
+        netIpEdit->setText(PeripheralSettings::deviceString("Lp100a", "ManualIp"));
+        netLay->addWidget(netIpEdit);
+        const int netPageIdx = addrStack->addWidget(netPage);
+        grid->addWidget(addrStack, row, 1);
+
+        auto* portStack = new QStackedWidget;
+        int serialBaudIdx = -1;
+#ifdef HAVE_SERIALPORT
+        {
+            // Fixed by the meter's own spec, not user-configurable. Firmware
+            // before 1.2.0.0 used 38400 and before 1.0.3 used 19200 without
+            // dBm or SWR; neither is supported.
+            auto* fixedLbl = new QLabel("115200 8N1");
+            tm.applyStyleSheet(fixedLbl,
+                "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+            serialBaudIdx = portStack->addWidget(fixedLbl);
+        }
+#endif
+        auto* netPortSpin = new QSpinBox;
+        netPortSpin->setRange(1, 65535);
+        // 2000, not the ACOM row's 7000: ser2net's own common default.
+        netPortSpin->setValue(PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000));
+        tm.applyStyleSheet(netPortSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        const int netPortIdx = portStack->addWidget(netPortSpin);
+        grid->addWidget(portStack, row, 2);
+
+        auto applyMode = [=](const QString& mode) {
+#ifdef HAVE_SERIALPORT
+            if (mode == "Serial" && serialPageIdx >= 0) {
+                addrStack->setCurrentIndex(serialPageIdx);
+                portStack->setCurrentIndex(serialBaudIdx);
+                return;
+            }
+#endif
+            addrStack->setCurrentIndex(netPageIdx);
+            portStack->setCurrentIndex(netPortIdx);
+        };
+        const QString savedMode = PeripheralSettings::deviceString("Lp100a", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        {
+            const int idx = modeCombo->findData(savedMode);
+            modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        applyMode(modeCombo->currentData().toString());
+        connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [=](int idx) {
+            const QString mode = modeCombo->itemData(idx).toString();
+            PeripheralSettings::setDeviceString("Lp100a", "ConnectionMode", mode);
+            applyMode(mode);
+        });
+
+        auto* statusLbl = new QLabel(m_lpMeter->isConnected() ? "Connected" : "Not connected");
+        const QString kOkStyle =
+            "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
+        const QString kIdleStyle =
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }";
+        const QString kErrStyle =
+            "QLabel { color: {{color.accent.danger}}; font-size: 11px; }";
+        tm.applyStyleSheet(statusLbl, m_lpMeter->isConnected() ? kOkStyle : kIdleStyle);
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* lpBtn = new QPushButton(m_lpMeter->isConnected() ? "Disconnect" : "Connect");
+        lpBtn->setStyleSheet(kBtnStyle);
+        grid->addWidget(lpBtn, row, 3);
+
+        auto updateLpState = [this, lpBtn, statusLbl, kOkStyle, kIdleStyle]() {
+            const bool conn = m_lpMeter->isConnected();
+            lpBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                statusLbl, conn ? kOkStyle : kIdleStyle);
+        };
+        connect(m_lpMeter, &LpMeterConnection::connected, this, updateLpState);
+        connect(m_lpMeter, &LpMeterConnection::disconnected, this, updateLpState);
+        connect(m_lpMeter, &LpMeterConnection::connectionFailed, this,
+                [statusLbl, kErrStyle](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(statusLbl, kErrStyle);
+        });
+        // Link up but the meter silent is its own state, and the operator
+        // should be able to tell it apart from "not connected" here as well
+        // as in the applet.
+        connect(m_lpMeter, &LpMeterConnection::dataFlowingChanged, this,
+                [this, statusLbl, kOkStyle, kIdleStyle](bool flowing) {
+            if (!m_lpMeter->isConnected()) return;
+            statusLbl->setText(flowing ? "Connected" : "Connected — meter not answering");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                statusLbl, flowing ? kOkStyle : kIdleStyle);
+        });
+
+        connect(lpBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_lpMeter->isConnected()) {
+                m_lpMeter->disconnect();
+                return;
+            }
+            const QString mode = modeCombo->currentData().toString();
+            if (mode == "Network") {
+                const QString ip = netIpEdit->text().trimmed();
+                if (ip.isEmpty()) return;
+                const int port = netPortSpin->value();
+                PeripheralSettings::setDeviceString("Lp100a", "ManualIp", ip);
+                PeripheralSettings::setDeviceInt("Lp100a", "ManualPort", port);
+                m_lpMeter->connectNetwork(ip, static_cast<quint16>(port));
+            }
+#ifdef HAVE_SERIALPORT
+            else {
+                QString port = serialCombo->currentData().toString();
+                if (port == "__custom__")
+                    port = serialCustomEdit->text().trimmed();
+                if (port.isEmpty()) return;
+                PeripheralSettings::setDeviceString("Lp100a", "SerialPort", port);
+                m_lpMeter->connectSerial(port);
+            }
+#endif
+        });
+
+        // Save-on-close, same shape and same reasoning as the ACOM row's.
+        m_peripheralRowSavers.append([netIpEdit, this]() {
+            if (!netIpEdit) return;
+            const QString ip = netIpEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("Lp100a", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("Lp100a", "ManualIp");
+            PeripheralSettings::clearDeviceField("Lp100a", "ManualPort");
+            if (m_lpMeter->isConnected()
+                && m_lpMeter->description().startsWith(savedIp + ":")) {
+                m_lpMeter->disconnect();
+            }
+        });
+    }
+
     note->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(note, "QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }");
     vbox->addWidget(note);

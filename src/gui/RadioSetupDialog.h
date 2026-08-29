@@ -34,6 +34,7 @@ class KiwiSdrManager;
 class AcomConnection;
 class SpeConnection;
 class VkampConnection;
+class LpMeterConnection;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -48,6 +49,7 @@ public:
                               AcomConnection* acom = nullptr,
                               SpeConnection* spe = nullptr,
                               VkampConnection* vkamp = nullptr,
+                              LpMeterConnection* lpMeter = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
@@ -150,6 +152,7 @@ private:
     AcomConnection* m_acom{nullptr};
     SpeConnection* m_spe{nullptr};
     VkampConnection* m_vkamp{nullptr};
+    LpMeterConnection* m_lpMeter{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

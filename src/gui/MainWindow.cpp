@@ -3252,7 +3252,8 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
     showOrRaisePersistent(m_radioSetupDialog,
                           &m_radioModel, m_audio,
                           &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
+                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
+                          &m_lpMeterConn);
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())

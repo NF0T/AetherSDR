@@ -235,9 +235,20 @@ void LpMeterApplet::setDataFlowing(bool flowing)
 
 void LpMeterApplet::setRidingAlong(bool riding, qint64 foreignIntervalMs)
 {
+    const bool changed = (m_ridingAlong != riding);
     m_ridingAlong = riding;
     m_foreignIntervalMs = foreignIntervalMs;
-    m_statusPill->setToolTip(diagnosticTooltip());
+    if (changed) {
+        // The pill TEXT depends on this (SHARED vs LIVE), not just the
+        // tooltip, so it has to be rebuilt -- an earlier version updated only
+        // the tooltip and the pill sat on "LIVE" while we were demonstrably
+        // riding along with another client.
+        refreshStatusPill();
+    } else {
+        // Called once per reading at 10 Hz, so avoid re-applying a stylesheet
+        // when only the cadence estimate moved.
+        m_statusPill->setToolTip(diagnosticTooltip());
+    }
 }
 
 void LpMeterApplet::setCeilings(const LpMeter::RangeCeilings& ceilings)
