@@ -7968,7 +7968,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         // VkampConnection has setAutoReconnect() and the startup block in
         // MainWindow_Wiring.cpp does call it, so toggling this checkbox
         // mid-session reaches every peripheral except that one. Left alone on
-        // purpose: it is not this PR's file to change. Filed separately.
+        // purpose: it is not this PR's row to change, and bundling an
+        // unrelated shipped-code fix into a feature PR is what the project's
+        // scope-discipline rule exists to prevent. Needs its own one-liner.
     });
     vbox->addWidget(reconnectCheck);
 
