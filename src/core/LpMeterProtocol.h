@@ -183,11 +183,54 @@ private:
     std::function<void(const Reading&)> m_onReading;
 };
 
+// ---- Field bounds --------------------------------------------------------
+//
+// The largest value each field's canonical width can express. Read off the
+// measured wire format rather than invented -- a 7-character Power field in
+// 0000.00 form cannot say more than 9999.99 -- so a value above these did not
+// come from a well-formed record whatever else about it looked plausible.
+//
+// They matter because this protocol has NO CHECKSUM: looksLikeRecord() is the
+// entire integrity mechanism, and without an upper bound a corrupted field
+// reached the gauges as a float infinity (see hasCanonicalNumericForm in the
+// .cpp for the exact path). Constitution VII -- validate at the boundary.
+constexpr double kMaxPowerW  = 9999.99;
+constexpr double kMaxZOhms   = 9999.9;
+constexpr double kMaxAbsDbm  = 999.9;
+constexpr double kMaxSwr     = 99.99;
+
 // ---- Derived values ------------------------------------------------------
 
-// Return loss in dB from SWR. 0.00 dB at a perfect match, which is the
-// division-by-zero edge every naive implementation gets wrong.
+// Return loss in dB from SWR, as the positive quantity the term denotes:
+// RL = -20*log10(|gamma|), so a PERFECT match returns +infinity (nothing comes
+// back) and 0 dB means total reflection.
+//
+// An earlier version had this exactly backwards -- it special-cased SWR <= 1.0
+// to return 0.0 dB, i.e. it reported a matched load and a dead short
+// identically, and did so on screen throughout receive because the meter idles
+// at SWR 1.00. Its comment called that "the division-by-zero edge every naive
+// implementation gets wrong", which was wrong twice over: gamma at SWR 1 is
+// (1-1)/(1+1) = 0, so nothing is divided by zero; the divergence is log10(0).
+// A test pinned the wrong value, so the suite protected the bug. Caught by
+// @rfoust in review of #5320.
+//
+// Callers must expect a non-finite result. Formatting it is a presentation
+// decision -- see kMaxReportableReturnLossDb.
 double returnLossDb(double swr);
+
+// The largest return loss the SWR field can actually justify.
+//
+// SWR arrives as 4 characters with two decimals, so a reported "1.00" means
+// anything in [0.995, 1.005) and the true return loss is merely >= ~52 dB.
+// Rendering infinity would claim a precision the wire does not carry, so the
+// applet shows this as a lower bound instead. Derived from the field's own
+// quantisation, not chosen.
+//
+// UNVERIFIED: what the LP-100A's own display shows at a perfect match is not
+// documented in the manual and we have not observed it. If it turns out to
+// have a house convention, match the instrument and update this.
+constexpr double kSwrDisplayQuantum = 0.01;
+double maxReportableReturnLossDb();
 
 // SWR implied by |Z| and phase against a 50-ohm reference. The meter reports
 // all three, so this is a redundancy -- and that redundancy is exactly what

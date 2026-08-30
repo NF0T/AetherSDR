@@ -101,10 +101,33 @@ Body is exactly **42 characters**, every field fixed width.
 
 ¹ 1-based, including the leading `;`.
 
-**There is no checksum.** `looksLikeRecord()` — field count, separator
-positions, per-field parseability, physical range checks — is the only thing
-between a corrupted record and a gauge. The reference implementation consulted
-(§9) checks length alone, which accepts any single flipped digit.
+**There is no checksum.** `looksLikeRecord()` is the only thing between a
+corrupted record and a gauge, so it validates in four layers: field count,
+separator positions (at the canonical length), **per-field maximum width**,
+**strict lexical form**, and physical range. The reference implementation
+consulted (§9) checks length alone, which accepts any single flipped digit.
+
+The width and lexical layers were added after review of #5320 found the first
+three insufficient, and the case that made it clear is worth recording because
+it defeats the obvious defence. `QString::toDouble()` accepts **exponent
+notation**, and `01e+100` is *exactly seven characters* — the canonical Power
+width — so it passed the separator-offset check as well. It decoded to 1e100 W,
+propagated into `RangeTracker`'s ceiling, reached the applet as a `float`
+infinity, and `evenTicks()`'s `static_cast<int>` on it is undefined behaviour
+(`inf * 0.0f` is NaN, so even the first tick was UB). Reproduced before fixing.
+
+So: **offset checking is not a value check**, and the fix is per-field lexical
+form (digits, at most one decimal point, sign only on dBm, no exponent) plus a
+width cap. The width cap doubles as the value bound — *n* characters cannot
+express a magnitude of 10ⁿ — which is why the upper limits in
+`LpMeterProtocol.h` are read off the measured wire format rather than invented.
+`evenTicks()` also rejects a non-finite scale on its own account, because a GUI
+helper should not depend on its caller having validated.
+
+This is Constitution VII (untrusted input validated at the boundary), and the
+boundary is `looksLikeRecord()`. **Do not weaken it without replacing it** —
+`RangeTracker::kCeilingExpandRecords` is 2 rather than something larger
+*because* this function carries the weight (§5).
 
 ### The fields are internally consistent, and that is load-bearing
 
@@ -273,6 +296,26 @@ captured records carry real power beside `SWR 1.00`. Consequences:
 
 **Unverified, and stated as such:**
 
+- **What the meter's own display shows for return loss at a perfect match.**
+  Not in the manual, and not observed. The applet shows `RL >52 dB`, because
+  the physics gives +∞ (a perfect match reflects nothing) while the SWR field
+  carries only two decimals — a reported `1.00` means [0.995, 1.005), which
+  justifies no more than ~52 dB. The bound is derived from the field's own
+  quantisation rather than chosen. **If the instrument turns out to have a
+  house convention, match it.**
+
+  Recorded here because the first implementation got this exactly backwards:
+  it returned **0.00 dB** at a perfect match, which is the value for *total
+  reflection*, and displayed it throughout receive since the meter idles at
+  SWR 1.00 — a matched load and a dead short rendered identically. Its comment
+  called that "the division-by-zero edge every naive implementation gets
+  wrong", which was wrong twice: γ at SWR 1 is (1−1)/(1+1) = 0, so nothing is
+  divided by zero; the divergence is log10(0). **A unit test pinned the wrong
+  value**, so the suite protected the defect instead of catching it. Found by a
+  human reviewer on #5320 after two AI reviews passed over it — the reason the
+  test now asserts monotonicity (a near-match must be *large*) rather than one
+  point.
+
 - **Whether field 0 is forward or net power.** The meter read 8.62–8.93 W
   against a 10 W TUNE setting at SWR ≈ 1.68; forward implies 0.53 dB of coax
   and calibration loss, net implies 0.24 dB, and both are entirely ordinary.
@@ -287,6 +330,24 @@ captured records carry real power beside `SWR 1.00`. Consequences:
 - **Firmware before 1.2.0.0** (38400 baud, and before 1.0.3 no dBm or SWR) is
   not supported and not detected. Such a unit produces records the parser
   rejects rather than misreading them.
+
+---
+
+### One deliberate divergence from the sibling peripherals
+
+`LpMeterConnection::setAutoReconnect(false)` **stops an armed retry timer**;
+`AcomConnection`, `SpeConnection` and `VkampConnection` all have the flag-only
+version (`{ m_autoReconnect = on; }`) whose armed callback never re-reads the
+flag, so an operator disabling the option during the five-second delay still
+gets one more reconnect.
+
+That is a real defect in all three, found while reviewing this PR, and it is
+**theirs to fix, not this PR's** — but copying it here would have been the
+mistake §9's standing rule exists to prevent: a working sibling is evidence
+that an approach functions, never that it is correct. Both halves are
+implemented here (the setter stops the timer, and the callback re-reads the
+flag), with a timer-lifecycle regression in
+`tests/lp100a_reconnect_test.cpp`.
 
 ---
 

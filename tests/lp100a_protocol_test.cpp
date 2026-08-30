@@ -247,8 +247,17 @@ int main()
                && !peakHoldModeName(7).isEmpty());
 
     // ---- derived values --------------------------------------------------
-    report("return loss is 0.00 dB at SWR 1.0 (the divide-by-zero edge)",
-           near(returnLossDb(1.0), 0.0));
+    // Was pinned at 0.0 dB, which is the value for TOTAL REFLECTION -- the
+    // test protected the bug rather than catching it. A perfect match
+    // reflects nothing, so the return loss is unbounded.
+    report("return loss is +infinity at SWR 1.0 (a perfect match)",
+           std::isinf(returnLossDb(1.0)) && returnLossDb(1.0) > 0.0);
+    report("return loss is monotonic: a near-match is LARGE, not small",
+           returnLossDb(1.001) > 60.0 && returnLossDb(1.001) > returnLossDb(3.0));
+    report("return loss approaches 0 dB as SWR diverges (total reflection)",
+           returnLossDb(1e9) < 0.001 && returnLossDb(1e9) >= 0.0);
+    report("the reportable ceiling is the SWR field's own quantisation",
+           near(maxReportableReturnLossDb(), 52.06, 0.05));
     report("return loss at SWR 3.0 is ~6.02 dB",
            near(returnLossDb(3.0), 6.0206, 1e-3));
     report("reflected power is 0 W at a perfect match",
@@ -557,6 +566,48 @@ int main()
         // supplies the ';' -- the fixtures are bodies, not framed records.
         p.feed(rec(kCapturedIdle));
         report("and it resyncs on the next good record", records == 1);
+    }
+
+    {
+        // Boundary validation. This protocol has no checksum, so
+        // looksLikeRecord() is the whole integrity mechanism -- every row
+        // here reached a gauge before the #5320 review.
+        report("exponent notation is rejected at canonical width",
+               !looksLikeRecord("01e+100,046.3,088.5,0,NF0T  ,2,1,-2.3,1.00"));
+        report("...and at any other width",
+               !looksLikeRecord("1e+100,046.3,088.5,0,NF0T  ,2,1,-2.3,1.00"));
+        report("an over-wide power field is rejected",
+               !looksLikeRecord("99999999,046.3,088.5,0,NF0T  ,2,1,-2.3,1.00"));
+        report("an unbounded SWR is rejected",
+               !looksLikeRecord("0000.00,046.3,088.5,0,NF0T  ,2,1,-2.3,1e300"));
+        report("an unbounded Z is rejected",
+               !looksLikeRecord("0000.00,1e300,088.5,0,NF0T  ,2,1,-2.3,1.00"));
+        report("an over-long callsign is rejected",
+               !looksLikeRecord(QByteArray("0000.00,046.3,088.5,0,")
+                                + QByteArray(200, 'X')
+                                + QByteArray(",2,1,-2.3,1.00")));
+        report("a sign on an unsigned field is rejected",
+               !looksLikeRecord("-000.10,046.3,088.5,0,NF0T  ,2,1,-2.3,1.00"));
+        report("a second decimal point is rejected",
+               !looksLikeRecord("00.00.0,046.3,088.5,0,NF0T  ,2,1,-2.3,1.00"));
+        report("hex is rejected",
+               !looksLikeRecord("0x10,046.3,088.5,0,NF0T  ,2,1,-2.3,1.00"));
+        // ...while everything the meter really sends still decodes.
+        report("the captured idle record still decodes",
+               looksLikeRecord(kCapturedIdle));
+        report("the captured TX record still decodes",
+               looksLikeRecord(kCapturedTx));
+        report("the manual's 41-char example still decodes",
+               looksLikeRecord(kManualExample));
+        report("dBm keeps its documented 5-char signed variant",
+               looksLikeRecord("0000.00,046.3,088.5,0,NF0T  ,2,1,-12.3,1.00"));
+        // No decoded field can reach the GUI as a float infinity.
+        const auto r = decodeReading(kCapturedTx);
+        report("a decoded reading is finite in float",
+               r.has_value()
+                   && std::isfinite(static_cast<float>(r->powerW))
+                   && std::isfinite(static_cast<float>(r->swr))
+                   && std::isfinite(static_cast<float>(r->zOhms)));
     }
 
     std::printf("\n%s\n", g_failed == 0 ? "all passed"

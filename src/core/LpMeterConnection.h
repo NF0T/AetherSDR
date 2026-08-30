@@ -49,6 +49,11 @@ public:
     explicit LpMeterConnection(QObject* parent = nullptr);
 
     bool isConnected() const { return m_connected; }
+
+    // Whether a reconnect attempt is currently counting down. Exposed so the
+    // timer's LIFECYCLE is observable -- disabling auto-reconnect must cancel
+    // a pending retry, and that is otherwise invisible from outside.
+    bool reconnectPending() const { return m_reconnectTimer.isActive(); }
     QString description() const;  // "COM4" or "192.168.1.7:2000", for status display
     // "SERIAL" / "NETWORK" for the applet's compact source label — derived
     // from the LIVE transport, never the persisted ConnectionMode setting
@@ -71,7 +76,16 @@ public:
     void connectNetwork(const QString& host, quint16 port);
     void disconnect();
 
-    void setAutoReconnect(bool on) { m_autoReconnect = on; }
+    // Disabling must also CANCEL a retry already armed. Flipping the flag
+    // alone left a pending 5 s timer to fire and reconnect once after the
+    // operator had switched the option off -- the callback never re-read the
+    // flag. Caught by @rfoust in review of #5320.
+    //
+    // NOTE: AcomConnection, SpeConnection and VkampConnection all still have
+    // the flag-only version, so this is a deliberate divergence from three
+    // siblings rather than an oversight; they have the same defect and it is
+    // theirs to fix, not this PR's. See the design note's divergences table.
+    void setAutoReconnect(bool on);
 
     // Operator-configured gauge ceilings. The meter reports WHICH range is
     // active but never what that range's ceiling in watts is — see

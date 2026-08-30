@@ -55,6 +55,14 @@ constexpr float kSwrRed = 3.0f;
 
 QVector<HGauge::Tick> evenTicks(float max)
 {
+    // Defensive: static_cast<int> of a non-finite float is UNDEFINED
+    // BEHAVIOUR, and inf*0.0f is NaN, so an infinite ceiling made even the
+    // first tick UB. The protocol layer now bounds every field so infinity
+    // cannot arrive here -- but a GUI helper should not depend on its caller
+    // having validated, and this is the last line before the cast.
+    if (!std::isfinite(max) || max <= 0.0f) {
+        return {{0.0f, QStringLiteral("0")}};
+    }
     QVector<HGauge::Tick> ticks;
     for (float frac : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
         const int v = static_cast<int>(max * frac);
@@ -350,7 +358,14 @@ void LpMeterApplet::refreshLabels()
 
     // dBm exactly as reported, negatives included.
     m_dbmLabel->setText(tr("dBm %1").arg(r.dBm, 0, 'f', 1));
-    m_rlLabel->setText(tr("RL %1 dB").arg(LpMeter::returnLossDb(r.swr), 0, 'f', 1));
+    // returnLossDb() is +infinity at a perfect match, which is correct but
+    // claims a precision the 2-decimal SWR field does not carry: a reported
+    // "1.00" only justifies ">= ~52 dB". Show it as a lower bound.
+    const double rl = LpMeter::returnLossDb(r.swr);
+    m_rlLabel->setText(
+        std::isfinite(rl)
+            ? tr("RL %1 dB").arg(rl, 0, 'f', 1)
+            : tr("RL >%1 dB").arg(LpMeter::maxReportableReturnLossDb(), 0, 'f', 0));
     // |Z| and |phase|. No sign, no R+jX — see the class comment.
     m_zLabel->setText(tr("Z %1 Ω").arg(r.zOhms, 0, 'f', 1));
     m_phaseLabel->setText(tr("Phase %1°").arg(r.phaseDeg, 0, 'f', 1));

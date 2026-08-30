@@ -52,6 +52,10 @@ LpMeterConnection::LpMeterConnection(QObject* parent)
     m_reconnectTimer.setInterval(kReconnectMs);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (m_connected) { return; }
+        // Re-read the flag rather than trusting that arming implied it. Both
+        // halves are needed: setAutoReconnect() stops an armed timer, and
+        // this guard covers any other route to a fired-but-stale timer.
+        if (!m_autoReconnect) { return; }
         if (m_mode == Mode::Network && !m_lastHost.isEmpty()) {
             connectNetwork(m_lastHost, m_lastPort);
 #ifdef HAVE_SERIALPORT
@@ -132,6 +136,16 @@ QString LpMeterConnection::sourceLabel() const
         case Mode::Network: return QStringLiteral("NETWORK");
         case Mode::Serial:  return QStringLiteral("SERIAL");
         default:            return QStringLiteral("—");
+    }
+}
+
+void LpMeterConnection::setAutoReconnect(bool on)
+{
+    m_autoReconnect = on;
+    if (!on) {
+        // Cancel a retry already counting down; the flag alone does not
+        // reach it.
+        m_reconnectTimer.stop();
     }
 }
 

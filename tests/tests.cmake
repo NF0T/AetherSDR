@@ -1987,6 +1987,19 @@ target_include_directories(lp100a_protocol_test PRIVATE src)
 target_link_libraries(lp100a_protocol_test PRIVATE Qt6::Core)
 add_test(NAME lp100a_protocol_test COMMAND lp100a_protocol_test)
 
+# Timer-lifecycle regression for the auto-reconnect cancel path. Needs the
+# real LpMeterConnection (hence Network + AUTOMOC), not just the protocol
+# layer. Skips (exit 77) where loopback is unavailable rather than failing.
+# Links aethercore rather than listing sources: LpMeterConnection pulls in
+# LogManager, which cascades into AsyncLogWriter and AppSettings. Same shape
+# as hl2_state_restore_test.
+add_executable(lp100a_reconnect_test tests/lp100a_reconnect_test.cpp)
+set_target_properties(lp100a_reconnect_test PROPERTIES AUTOMOC ON)
+target_include_directories(lp100a_reconnect_test PRIVATE src tests)
+target_link_libraries(lp100a_reconnect_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME lp100a_reconnect_test COMMAND lp100a_reconnect_test)
+set_tests_properties(lp100a_reconnect_test PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(spe_protocol_test
     tests/spe_protocol_test.cpp
     src/core/SpeProtocol.cpp

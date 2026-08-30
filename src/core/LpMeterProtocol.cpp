@@ -22,10 +22,92 @@ const QList<int>& canonicalCommaOffsets()
     return offsets;
 }
 
-bool parseDouble(const QByteArray& field, double* out)
+// Maximum width of each field, in characters. These are the MEASURED widths
+// plus the one documented variant: dBm is the only field that is both signed
+// and not zero-padded, so it is 4 characters at the reference station and
+// would be 5 for a unit whose noise floor reaches -10.0 dBm or below.
+//
+// A width cap is also a VALUE cap: n characters cannot express a magnitude of
+// 10^n. That is what keeps a decoded Reading inside float range downstream,
+// and it needs no invented physical constant to justify -- the wire format
+// supplies the bound.
+constexpr int kMaxFieldWidth[FieldCount] = {
+    7,  // Power    0000.00
+    5,  // Z        046.3
+    5,  // Phase    088.5
+    1,  // Alarm    0
+    6,  // Callsign NF0T__
+    1,  // Range    2
+    1,  // PeakHold 1
+    5,  // dBm      -2.3 or -12.3   <- the documented 4-or-5 variant
+    4,  // SWR      1.00
+};
+
+// Strict lexical form for a numeric field: optional single leading sign,
+// then digits with at most one decimal point, and at least one digit. No
+// exponent, no hex, no embedded whitespace, no second sign.
+//
+// This exists because QString::toDouble() is far more permissive than this
+// protocol is. It accepts exponent notation, so a corrupted or foreign
+// 7-character field reading "01e+100" -- which fits the canonical Power width
+// EXACTLY and therefore also passes the separator-offset check -- decoded to
+// 1e100 W, propagated into RangeTracker's ceiling, and reached the applet as
+// a float infinity, where evenTicks()'s static_cast<int> is undefined
+// behaviour. Reported by @rfoust on #5320 and reproduced before fixing.
+//
+// This protocol has no checksum, so this function and looksLikeRecord() are
+// the whole of the boundary validation (Constitution VII).
+bool hasCanonicalNumericForm(const QByteArray& field, bool signAllowed)
 {
+    if (field.isEmpty()) {
+        return false;
+    }
+    int i = 0;
+    if (field.at(0) == '-' || field.at(0) == '+') {
+        if (!signAllowed) {
+            return false;
+        }
+        i = 1;
+    }
+    int digits = 0;
+    int points = 0;
+    for (; i < field.size(); ++i) {
+        const char c = field.at(i);
+        if (c >= '0' && c <= '9') {
+            ++digits;
+        } else if (c == '.') {
+            if (++points > 1) {
+                return false;
+            }
+        } else {
+            return false;   // exponent, hex, sign, space, anything else
+        }
+    }
+    return digits > 0;
+}
+
+// Single source of truth for the sign policy, because looksLikeRecord() and
+// decodeReading() both parse the same fields and MUST agree. They briefly did
+// not while this validation was being added: looksLikeRecord() accepted the
+// signed dBm and decodeReading() silently left it at 0.0, because it ignores
+// parseDouble()'s return value. Both now consult this, and decodeReading()
+// checks the return.
+constexpr bool signAllowedFor(int field)
+{
+    return field == FieldDbm;
+}
+
+// `signAllowed` is per-field and deliberately narrow: dBm is the only field
+// the meter ever signs. Phase is transmitted as a magnitude (the sign is not
+// on the wire at all -- see the header), and power, Z and SWR cannot be
+// negative, so a sign character in any of them is corruption.
+bool parseDouble(const QByteArray& field, double* out, bool signAllowed = false)
+{
+    if (!hasCanonicalNumericForm(field, signAllowed)) {
+        return false;
+    }
     bool ok = false;
-    const double v = QString::fromLatin1(field).trimmed().toDouble(&ok);
+    const double v = QString::fromLatin1(field).toDouble(&ok);
     if (!ok || !std::isfinite(v)) {
         return false;
     }
@@ -114,16 +196,27 @@ bool looksLikeRecord(const QByteArray& body)
         }
     }
 
+    // Width cap on EVERY field, whatever the body length. This is the check
+    // the separator-offset test above cannot do, because that test only runs
+    // at the canonical length -- and a value like "01e+100" fits the
+    // canonical Power width exactly, so offsets never saw it either.
+    for (int i = 0; i < FieldCount; ++i) {
+        if (fields.at(i).size() > kMaxFieldWidth[i]) {
+            return false;
+        }
+    }
+
     double powerW = 0.0;
     double zOhms = 0.0;
     double phaseDeg = 0.0;
     double dBm = 0.0;
     double swr = 0.0;
-    if (!parseDouble(fields.at(FieldPower), &powerW)
-        || !parseDouble(fields.at(FieldZ), &zOhms)
-        || !parseDouble(fields.at(FieldPhase), &phaseDeg)
-        || !parseDouble(fields.at(FieldDbm), &dBm)
-        || !parseDouble(fields.at(FieldSwr), &swr)) {
+    // dBm is the only signed field on the wire.
+    if (!parseDouble(fields.at(FieldPower), &powerW, signAllowedFor(FieldPower))
+        || !parseDouble(fields.at(FieldZ), &zOhms, signAllowedFor(FieldZ))
+        || !parseDouble(fields.at(FieldPhase), &phaseDeg, signAllowedFor(FieldPhase))
+        || !parseDouble(fields.at(FieldDbm), &dBm, signAllowedFor(FieldDbm))
+        || !parseDouble(fields.at(FieldSwr), &swr, signAllowedFor(FieldSwr))) {
         return false;
     }
 
@@ -137,8 +230,18 @@ bool looksLikeRecord(const QByteArray& body)
     }
 
     // Physical plausibility. Deliberately generous -- this is here to catch
-    // corruption, not to second-guess the meter.
-    if (powerW < 0.0 || zOhms < 0.0) {
+    // corruption, not to second-guess the meter. The upper bounds are the
+    // largest value each field's canonical width can express, so they are
+    // read off the wire format rather than invented: a 7-character Power
+    // field in 0000.00 form tops out at 9999.99, and a reading above that
+    // did not come from a well-formed record.
+    if (powerW < 0.0 || powerW > kMaxPowerW) {
+        return false;
+    }
+    if (zOhms < 0.0 || zOhms > kMaxZOhms) {
+        return false;
+    }
+    if (dBm < -kMaxAbsDbm || dBm > kMaxAbsDbm) {
         return false;
     }
     // Phase is a magnitude, so it can never be negative on the wire, and a
@@ -148,7 +251,7 @@ bool looksLikeRecord(const QByteArray& body)
     }
     // SWR is a ratio and cannot be below unity. A small tolerance absorbs a
     // meter that rounds 0.999 into its 4-character field.
-    if (swr < 0.99) {
+    if (swr < 0.99 || swr > kMaxSwr) {
         return false;
     }
     return true;
@@ -162,14 +265,20 @@ std::optional<Reading> decodeReading(const QByteArray& body)
 
     const QList<QByteArray> fields = body.split(',');
     Reading r;
-    parseDouble(fields.at(FieldPower), &r.powerW);
-    parseDouble(fields.at(FieldZ), &r.zOhms);
-    parseDouble(fields.at(FieldPhase), &r.phaseDeg);
-    parseDouble(fields.at(FieldDbm), &r.dBm);
-    parseDouble(fields.at(FieldSwr), &r.swr);
-    parseDigit(fields.at(FieldAlarm), &r.alarmSetPoint);
-    parseDigit(fields.at(FieldRange), &r.powerRange);
-    parseDigit(fields.at(FieldPeakHold), &r.peakHoldMode);
+    // looksLikeRecord() has already accepted every one of these, so a failure
+    // here means the two functions disagree -- refuse the record rather than
+    // publishing a silently defaulted field, which is what the earlier
+    // ignore-the-return version did.
+    if (!parseDouble(fields.at(FieldPower), &r.powerW, signAllowedFor(FieldPower))
+        || !parseDouble(fields.at(FieldZ), &r.zOhms, signAllowedFor(FieldZ))
+        || !parseDouble(fields.at(FieldPhase), &r.phaseDeg, signAllowedFor(FieldPhase))
+        || !parseDouble(fields.at(FieldDbm), &r.dBm, signAllowedFor(FieldDbm))
+        || !parseDouble(fields.at(FieldSwr), &r.swr, signAllowedFor(FieldSwr))
+        || !parseDigit(fields.at(FieldAlarm), &r.alarmSetPoint)
+        || !parseDigit(fields.at(FieldRange), &r.powerRange)
+        || !parseDigit(fields.at(FieldPeakHold), &r.peakHoldMode)) {
+        return std::nullopt;
+    }
     r.callsign = QString::fromLatin1(fields.at(FieldCallsign)).trimmed();
 
     // Only meaningful under drive. With no RF the impedance bridge has
@@ -291,10 +400,21 @@ void ResponseParser::feed(const QByteArray& bytes)
 double returnLossDb(double swr)
 {
     if (!(swr > 1.0)) {
-        return 0.0;  // perfect match; the log below would diverge
+        // A perfect match reflects nothing, so the return loss is unbounded.
+        // Infinity, NOT zero -- zero is the value for total reflection. See
+        // the header for the defect this replaced.
+        return std::numeric_limits<double>::infinity();
     }
     const double gamma = (swr - 1.0) / (swr + 1.0);
     return -20.0 * std::log10(gamma);
+}
+
+double maxReportableReturnLossDb()
+{
+    // The smallest SWR distinguishable from a reported 1.00 is the top of
+    // that rounding bucket, so this is the most return loss the field can
+    // justify claiming.
+    return returnLossDb(1.0 + kSwrDisplayQuantum / 2.0);
 }
 
 double swrFromImpedance(double zOhms, double phaseDeg)
