@@ -510,6 +510,36 @@ int main()
                t.ceilingW() > 700.0 && t.ceilingAutoExpanded());
     }
     {
+        // Editing one range must not disturb another range's scale. The menu
+        // edits a single range while the gauge shows whichever the meter
+        // reports, so an edit to Low used to overwrite a displayed, expanded
+        // High ceiling with its unchanged configured value.
+        RangeTracker t;
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
+        t.reset();
+        t.onReading(0, 1600.0, 0);
+        t.onReading(0, 1600.0, 100);       // High displayed, expanded to 1600
+        RangeCeilings edited;
+        edited.lowW = 10.0;                // a DIFFERENT range
+        t.setCeilings(edited, RangeTracker::CeilingSource::OperatorEdit);
+        report("editing another range leaves the displayed expansion alone",
+               near(t.ceilingW(), 1600.0) && t.ceilingAutoExpanded());
+    }
+    {
+        // ...while an edit to the displayed range still lands, so the guard
+        // above cannot be widened into "operator edits never apply".
+        RangeTracker t;
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
+        t.reset();
+        t.onReading(0, 1600.0, 0);
+        t.onReading(0, 1600.0, 100);
+        RangeCeilings edited;
+        edited.highW = 700.0;              // the DISPLAYED range
+        t.setCeilings(edited, RangeTracker::CeilingSource::OperatorEdit);
+        report("editing the displayed range still applies",
+               near(t.ceilingW(), 700.0) && !t.ceilingAutoExpanded());
+    }
+    {
         // Regression guard for the unbounded-growth path. Once the buffer
         // starts with a marker, indexOf() always succeeds, so the no-marker
         // cap in feed() never runs again: a stream that delivers one ';' and

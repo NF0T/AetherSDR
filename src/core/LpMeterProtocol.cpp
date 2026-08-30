@@ -330,7 +330,6 @@ void PollGate::reset()
     m_lastPollMs = -1;
     m_ownReplyPending = false;
     m_lastForeignMs = -1;
-    m_prevForeignMs = -1;
     m_foreignIntervalMs = -1;
     m_ridingAlong = false;
 }
@@ -366,16 +365,15 @@ void PollGate::onRecord(qint64 nowMs)
     // Estimate the foreign cadence only from CONSECUTIVE foreign records, so
     // one own-reply misclassified as foreign (a reply delayed past the window)
     // cannot poison the estimate with a spuriously short interval.
-    if (m_prevForeignMs >= 0) {
-        const qint64 gap = nowMs - m_prevForeignMs;
+    if (m_lastForeignMs >= 0) {
+        const qint64 gap = nowMs - m_lastForeignMs;
         if (gap > 0 && gap <= kMaxQuietMs * 4) {
             m_foreignIntervalMs = (m_foreignIntervalMs < 0)
                                       ? gap
                                       : (m_foreignIntervalMs * 3 + gap) / 4;
         }
     }
-    m_prevForeignMs = nowMs;
-    m_lastForeignMs = nowMs;
+    m_lastForeignMs = nowMs;   // read above before being overwritten here
 }
 
 bool PollGate::shouldPoll(qint64 nowMs)
@@ -409,6 +407,9 @@ double RangeCeilings::forRange(int rangeIndex) const
 
 void RangeTracker::setCeilings(const RangeCeilings& ceilings, CeilingSource source)
 {
+    // Captured BEFORE the assignment: whether the edit touched the range
+    // currently on screen is the question the OperatorEdit branch turns on.
+    const double previous = m_ceilings.forRange(m_displayedRange);
     m_ceilings = ceilings;
     const double configured = m_ceilings.forRange(m_displayedRange);
 
@@ -418,9 +419,18 @@ void RangeTracker::setCeilings(const RangeCeilings& ceilings, CeilingSource sour
     // auto-expanded ceiling; if observed power really does exceed it, the
     // kCeilingExpandRecords run re-expands within two records anyway, so the
     // worst case is self-correcting and visible.
+    //
+    // But only when the edit actually moved THIS range. The menu edits one
+    // range at a time while the gauge shows whichever the meter reports, so
+    // editing Low while High is displayed used to discard High's expansion:
+    // `configured` was unchanged, yet m_ceilingW was overwritten with it and
+    // the flag cleared. Self-correcting, but a scale that visibly jumps when
+    // the operator edited a different range is a bug in its own right.
     if (source == CeilingSource::OperatorEdit) {
-        m_ceilingW = configured;
-        m_autoExpanded = false;
+        if (std::fabs(configured - previous) > 1e-9) {
+            m_ceilingW = configured;
+            m_autoExpanded = false;
+        }
         return;
     }
 

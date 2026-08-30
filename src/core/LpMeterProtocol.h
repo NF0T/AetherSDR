@@ -296,8 +296,12 @@ public:
 private:
     qint64 m_lastPollMs{-1};
     bool   m_ownReplyPending{false};
+    // One timestamp, two jobs: shouldPoll() asks "how long since a foreign
+    // record" and onRecord() asks "how long between the last two". An earlier
+    // draft kept m_prevForeignMs alongside this, assigned the same value on
+    // the same line -- two names implying a last-vs-previous distinction the
+    // code never made. Collapsed; onRecord() reads it before overwriting it.
     qint64 m_lastForeignMs{-1};
-    qint64 m_prevForeignMs{-1};
     qint64 m_foreignIntervalMs{-1};
     bool   m_ridingAlong{false};
 };
