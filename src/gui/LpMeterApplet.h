@@ -16,7 +16,8 @@ class HGauge;
 // docs/architecture/lp-100a-wattmeter-design.md.
 //
 // Two gauges rather than the amplifier family's three: the LP-100A reports
-// forward power and SWR, and does NOT report reflected power. Reflected could
+// power and SWR, and does NOT report reflected power. The protocol authority
+// does not resolve whether field 0 is forward or net power. Reflected could
 // be derived from the pair, but the fields are not always mutually coherent
 // (see LpMeter::Reading::coherent), so nothing here cross-derives between
 // fields — every number displayed is one the meter actually sent.
@@ -66,7 +67,9 @@ public:
 
 signals:
     // Emitted when the operator edits a range ceiling from the context menu.
-    void ceilingsChanged(const AetherSDR::LpMeter::RangeCeilings& ceilings);
+    // editedRange is 0..2 for one range, or -1 when resetting all ranges.
+    void ceilingsChanged(const AetherSDR::LpMeter::RangeCeilings& ceilings,
+                         int editedRange);
 
 private:
     void showContextMenu(const QPoint& pos);

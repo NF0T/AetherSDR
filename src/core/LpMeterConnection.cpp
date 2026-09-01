@@ -150,15 +150,18 @@ void LpMeterConnection::setAutoReconnect(bool on)
 }
 
 void LpMeterConnection::setRangeCeilings(const LpMeter::RangeCeilings& ceilings,
-                                        LpMeter::RangeTracker::CeilingSource source)
+                                        LpMeter::RangeTracker::CeilingSource source,
+                                        std::optional<int> editedRange)
 {
     m_ceilings = ceilings;
     const double before = m_range.ceilingW();
+    const bool beforeAutoExpanded = m_range.ceilingAutoExpanded();
     // RangeTracker applies its up-only guard to a ConfigLoad only. An
-    // OperatorEdit always wins, including when it lowers an auto-expanded
-    // ceiling -- otherwise the edit is silently discarded.
-    m_range.setCeilings(ceilings, source);
-    if (std::abs(before - m_range.ceilingW()) > 1e-6) {
+    // OperatorEdit wins for the displayed range (or a reset of all ranges),
+    // including when it lowers an auto-expanded ceiling.
+    m_range.setCeilings(ceilings, source, editedRange);
+    if (std::abs(before - m_range.ceilingW()) > 1e-6
+        || beforeAutoExpanded != m_range.ceilingAutoExpanded()) {
         emit gaugeCeilingChanged(m_range.ceilingW(), m_range.ceilingAutoExpanded());
     }
 }
@@ -166,12 +169,13 @@ void LpMeterConnection::setRangeCeilings(const LpMeter::RangeCeilings& ceilings,
 #ifdef HAVE_SERIALPORT
 void LpMeterConnection::connectSerial(const QString& portName)
 {
+    // Retire the old session before changing its mode or reconnect target.
+    // QSerialPort::close() does not emit disconnected(), so teardownDevice()
+    // alone leaves m_connected and the reconnect lifecycle stale.
+    disconnect();
     m_mode = Mode::Serial;
     m_lastSerialPort = portName;
     m_deliberateDisconnect = false;
-    m_reconnectTimer.stop();
-    teardownDevice();
-    m_parser.reset();
 
     if (!m_serialPort) {
         m_serialPort = new QSerialPort(this);
@@ -214,13 +218,13 @@ void LpMeterConnection::connectSerial(const QString& portName)
 
 void LpMeterConnection::connectNetwork(const QString& host, quint16 port)
 {
+    // Also aborts an in-flight previous TCP attempt under the deliberate-
+    // disconnect guard, so its teardown cannot arm a retry for the old host.
+    disconnect();
     m_mode = Mode::Network;
     m_lastHost = host;
     m_lastPort = port;
     m_deliberateDisconnect = false;
-    m_reconnectTimer.stop();
-    teardownDevice();
-    m_parser.reset();
 
     m_device = &m_socket;
     qCDebug(lcTuner) << "LpMeterConnection: connecting to" << host << ":" << port;
@@ -245,6 +249,11 @@ void LpMeterConnection::disconnect()
     teardownDevice();
     m_parser.reset();
     m_gate.reset();
+    if (wasConnected || m_dataFlowStateKnown) {
+        setDataFlowing(false);
+    } else {
+        m_dataFlowing = false;
+    }
     if (wasConnected) {
         qCDebug(lcTuner) << "LpMeterConnection: disconnected";
         emit disconnected();
@@ -275,6 +284,7 @@ void LpMeterConnection::onTransportUp()
     m_lastRecordMs = -1;
     m_firstBytesMs = -1;
     m_dataFlowing = false;
+    m_dataFlowStateKnown = false;
     m_gate.reset();
     m_range.setCeilings(m_ceilings,
                         LpMeter::RangeTracker::CeilingSource::ConfigLoad);
@@ -403,8 +413,9 @@ void LpMeterConnection::onReading(const LpMeter::Reading& reading)
 
 void LpMeterConnection::setDataFlowing(bool flowing)
 {
-    if (m_dataFlowing == flowing) { return; }
+    if (m_dataFlowStateKnown && m_dataFlowing == flowing) { return; }
     m_dataFlowing = flowing;
+    m_dataFlowStateKnown = true;
     if (flowing) {
         qCInfo(lcTuner) << "LpMeterConnection: records flowing again.";
     }

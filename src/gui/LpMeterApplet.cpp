@@ -116,6 +116,7 @@ LpMeterApplet::LpMeterApplet(QWidget* parent)
     // runs more than one LP-100A, but it is free and it confirms at a glance
     // which meter the tile is showing.
     m_callsignLabel = new QLabel(this);
+    m_callsignLabel->setTextFormat(Qt::PlainText);
     ThemeManager::instance().applyStyleSheet(m_callsignLabel, kCallsignStyle);
     header->addWidget(m_callsignLabel);
     vbox->addLayout(header);
@@ -127,7 +128,7 @@ LpMeterApplet::LpMeterApplet(QWidget* parent)
     m_pwrGauge = new HGauge(0.0f, static_cast<float>(m_ceilingW),
                             static_cast<float>(m_ceilingW), "", "",
                             evenTicks(static_cast<float>(m_ceilingW)), this);
-    m_pwrGauge->setAccessibleName(tr("Forward power"));
+    m_pwrGauge->setAccessibleName(tr("Power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);
     pwrRow->addWidget(m_pwrValue);
@@ -395,7 +396,7 @@ void LpMeterApplet::showContextMenu(const QPoint& pos)
     QAction* reset = menu.addAction(tr("Reset to defaults"));
     connect(reset, &QAction::triggered, this, [this]() {
         m_ceilings = LpMeter::RangeCeilings{};
-        emit ceilingsChanged(m_ceilings);
+        emit ceilingsChanged(m_ceilings, -1);
     });
     menu.exec(mapToGlobal(pos));
 }
@@ -419,7 +420,7 @@ void LpMeterApplet::editCeiling(int rangeIndex)
         case 2: m_ceilings.lowW = value; break;
         default: return;
     }
-    emit ceilingsChanged(m_ceilings);
+    emit ceilingsChanged(m_ceilings, rangeIndex);
 }
 
 }  // namespace AetherSDR

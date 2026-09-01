@@ -288,11 +288,6 @@ double reflectedWattsFromSwr(double forwardW, double swr);
 // makes the coupling fix testable rather than merely asserted.
 class PollGate {
 public:
-    // A record arriving within this long after our own poll is our reply.
-    // MEASURED: own-reply latency <= 15 ms; minimum foreign inter-record gap
-    // 79 ms. Roughly 2.5x margin on both sides.
-    static constexpr qint64 kOwnReplyWindowMs = 40;
-
     // 10 Hz when we own the wire, which is also exactly the applet's label
     // throttle -- polling faster would produce readings the UI discards.
     static constexpr qint64 kSoloPollIntervalMs = 100;
@@ -311,13 +306,14 @@ public:
 
     // Call for every decoded record, before shouldPoll() for the same tick.
     //
-    // Classification is "exactly one reply per poll", not merely "inside the
-    // window". Both matter: when our cadence and a foreign client's are both
-    // ~100 ms and happen to align in phase, THEIR records land inside our
-    // reply window too, get misread as ours, and the gate flaps between
-    // riding along and polling until the phases drift apart. Observed live on
-    // the reference station -- three transitions in the first second of a
-    // connect. Claiming at most one reply per poll removes it.
+    // Classification is "exactly one reply per poll": the first record after
+    // an unanswered poll is ours, regardless of latency. This remains valid
+    // for remote/VPN ser2net paths where a reply can arrive much later than
+    // the <=15 ms measured on the local reference station. If a foreign
+    // record happens to arrive first, it consumes the pending slot and our
+    // later reply is counted as foreign; the next foreign record still
+    // establishes the shared cadence, so suppression converges without a
+    // latency heuristic.
     void onRecord(qint64 nowMs);
 
     // Call exactly once per poll tick. Returns true if a poll should be sent
@@ -337,7 +333,6 @@ public:
     qint64 quietThresholdMs() const;
 
 private:
-    qint64 m_lastPollMs{-1};
     bool   m_ownReplyPending{false};
     // One timestamp, two jobs: shouldPoll() asks "how long since a foreign
     // record" and onRecord() asks "how long between the last two". An earlier
@@ -424,10 +419,15 @@ public:
     // the two paths stop being indistinguishable at the call site.
     enum class CeilingSource {
         ConfigLoad,    // stored settings, a reconnect, a late authoritative value
-        OperatorEdit,  // the context menu; always authoritative, always wins
+        OperatorEdit,  // the context menu; authoritative for the edited range
     };
 
-    void setCeilings(const RangeCeilings& ceilings, CeilingSource source);
+    // For OperatorEdit, editedRange identifies the one menu row the operator
+    // changed. std::nullopt means all ranges (Reset to defaults). This keeps
+    // an edit to a hidden range from discarding an auto-expanded displayed
+    // range while still allowing a same-value edit/reset to clear expansion.
+    void setCeilings(const RangeCeilings& ceilings, CeilingSource source,
+                     std::optional<int> editedRange = std::nullopt);
     void reset();
 
     void onReading(int reportedRange, double watts, qint64 nowMs);

@@ -168,6 +168,10 @@ int main()
            !looksLikeRecord("0000.00,046.3,128.5,0,NF0T  ,2,1,-2.3,1.00"));
     report("non-digit enum field rejected",
            !looksLikeRecord("0000.00,046.3,088.5,X,NF0T  ,2,1,-2.3,1.00"));
+    report("control byte in callsign rejected",
+           !looksLikeRecord(QByteArray("0000.00,046.3,088.5,0,NF\nT  ,2,1,-2.3,1.00")));
+    report("markup punctuation in callsign rejected",
+           !looksLikeRecord("0000.00,046.3,088.5,0,<B>   ,2,1,-2.3,1.00"));
     // 42 characters with a separator in the wrong place: exactly the class of
     // corruption a `length == 42` test accepts and puts on a gauge.
     report("42 chars but misplaced separators rejected",
@@ -286,10 +290,10 @@ int main()
     {
         // Foreign poller at the measured 100 ms cadence.
         PollGate g;
-        qint64 now = 0;
+        qint64 now = 100;
         int polls = 0;
         for (int i = 0; i < 100; ++i) {
-            g.onRecord(now + 50);                // foreign, off our tick phase
+            g.onRecord(now - 50);                // foreign, off our tick phase
             if (g.shouldPoll(now)) { ++polls; }
             now += 100;
         }
@@ -311,7 +315,10 @@ int main()
         int late = 0;
         for (int i = 0; i < 200; ++i) {
             if (now % 1000 == 0) { g.onRecord(now); }
-            if (g.shouldPoll(now)) { (now < 2000 ? early : late)++; }
+            if (g.shouldPoll(now)) {
+                (now < 2000 ? early : late)++;
+                g.onRecord(now + 5);             // reply to the poll we sent
+            }
             now += 100;
         }
         report("foreign 1 s cadence: fully suppressed once the cadence is learned",
@@ -337,7 +344,10 @@ int main()
         int polls = 0;
         for (int i = 0; i < 300; ++i) {
             if (now % 5000 == 0) { g.onRecord(now); }
-            if (g.shouldPoll(now)) { ++polls; }
+            if (g.shouldPoll(now)) {
+                ++polls;
+                g.onRecord(now + 5);             // reply to the poll we sent
+            }
             now += 100;
         }
         report("foreign 5 s cadence is NOT suppressed (2 s ceiling, by design)",
@@ -346,11 +356,22 @@ int main()
     {
         PollGate g;
         g.shouldPoll(1000);
-        g.onRecord(1000 + PollGate::kOwnReplyWindowMs - 5);
+        g.onRecord(1250);                        // delayed remote/VPN reply
         const bool ownNotForeign = (g.foreignIntervalMs() < 0);
-        g.onRecord(2000 + PollGate::kOwnReplyWindowMs + 50);
-        report("a reply inside the own-reply window is not counted as foreign",
+        report("the first reply after our poll is ours regardless of latency",
                ownNotForeign);
+    }
+    {
+        // If a foreign record wins the race after our poll, it consumes our
+        // pending slot. The delayed own reply becomes the first foreign
+        // sample and the next shared record still establishes the cadence.
+        PollGate g;
+        g.shouldPoll(0);
+        g.onRecord(50);                          // foreign, classified as ours
+        g.onRecord(250);                         // our delayed reply, foreign #1
+        g.onRecord(350);                         // foreign #2
+        report("shared polling converges after a foreign record wins the race",
+               g.foreignIntervalMs() == 100 && !g.shouldPoll(400));
     }
     {
         PollGate g;
@@ -484,7 +505,7 @@ int main()
         t.onReading(0, 1600.0, 100);       // auto-expanded past 1500 W
         RangeCeilings lower;
         lower.highW = 700.0;
-        t.setCeilings(lower, RangeTracker::CeilingSource::OperatorEdit);
+        t.setCeilings(lower, RangeTracker::CeilingSource::OperatorEdit, 0);
         report("an operator edit LOWERS an auto-expanded ceiling",
                near(t.ceilingW(), 700.0));
         report("and clears the auto-expanded flag with it",
@@ -530,7 +551,7 @@ int main()
         t.onReading(0, 1600.0, 100);       // High displayed, expanded to 1600
         RangeCeilings edited;
         edited.lowW = 10.0;                // a DIFFERENT range
-        t.setCeilings(edited, RangeTracker::CeilingSource::OperatorEdit);
+        t.setCeilings(edited, RangeTracker::CeilingSource::OperatorEdit, 2);
         report("editing another range leaves the displayed expansion alone",
                near(t.ceilingW(), 1600.0) && t.ceilingAutoExpanded());
     }
@@ -544,9 +565,32 @@ int main()
         t.onReading(0, 1600.0, 100);
         RangeCeilings edited;
         edited.highW = 700.0;              // the DISPLAYED range
-        t.setCeilings(edited, RangeTracker::CeilingSource::OperatorEdit);
+        t.setCeilings(edited, RangeTracker::CeilingSource::OperatorEdit, 0);
         report("editing the displayed range still applies",
                near(t.ceilingW(), 700.0) && !t.ceilingAutoExpanded());
+    }
+    {
+        // Re-entering the stored value (or Reset to defaults) is still an
+        // operator action even though the RangeCeilings numbers do not
+        // change. It must clear a wider session-only scale.
+        RangeTracker t;
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
+        t.reset();
+        t.onReading(0, 1600.0, 0);
+        t.onReading(0, 1600.0, 100);
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::OperatorEdit, 0);
+        report("re-entering the configured displayed ceiling clears expansion",
+               near(t.ceilingW(), 1500.0) && !t.ceilingAutoExpanded());
+    }
+    {
+        RangeTracker t;
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::ConfigLoad);
+        t.reset();
+        t.onReading(0, 1600.0, 0);
+        t.onReading(0, 1600.0, 100);
+        t.setCeilings(RangeCeilings{}, RangeTracker::CeilingSource::OperatorEdit);
+        report("resetting all ranges clears displayed expansion",
+               near(t.ceilingW(), 1500.0) && !t.ceilingAutoExpanded());
     }
     {
         // Regression guard for the unbounded-growth path. Once the buffer

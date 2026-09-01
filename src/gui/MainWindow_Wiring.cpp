@@ -78,6 +78,8 @@
 #include <QJsonParseError>
 #include <QPointer>
 #include <QSet>
+
+#include <optional>
 #include <QStringList>
 #include <QTimer>
 
@@ -6558,11 +6560,12 @@ void MainWindow::wireMeters()
     // Power-range full scale is a display preference owned by the applet, so
     // the applet is where it is edited; the connection only consumes it.
     connect(m_appletPanel->lpMeterApplet(), &LpMeterApplet::ceilingsChanged, this,
-            [this](const AetherSDR::LpMeter::RangeCeilings& c) {
+            [this](const AetherSDR::LpMeter::RangeCeilings& c, int editedRange) {
         // From the context menu, so it is authoritative and overrides an
         // auto-expanded ceiling -- see RangeTracker::CeilingSource.
         m_lpMeterConn.setRangeCeilings(
-            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::OperatorEdit);
+            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::OperatorEdit,
+            editedRange >= 0 ? std::optional<int>(editedRange) : std::nullopt);
         // Persisted as int: the edit dialog offers 0 decimals, so a fractional
         // full scale is unreachable and the cast cannot lose anything today.
         PeripheralSettings::setDeviceInt("Lp100a", "RangeHighW",

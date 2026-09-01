@@ -206,6 +206,23 @@ bool looksLikeRecord(const QByteArray& body)
         }
     }
 
+    // The callsign is a fixed six-byte, space-padded ASCII field. It is
+    // displayed in a QLabel, so reject control bytes and punctuation that
+    // cannot be part of a callsign instead of treating arbitrary transport
+    // content as UI text. Slash and hyphen cover portable/special-event IDs.
+    const QByteArray& callsign = fields.at(FieldCallsign);
+    if (callsign.size() != kMaxFieldWidth[FieldCallsign]) {
+        return false;
+    }
+    for (const char ch : callsign) {
+        const bool alphaNumeric = (ch >= 'A' && ch <= 'Z')
+                                  || (ch >= 'a' && ch <= 'z')
+                                  || (ch >= '0' && ch <= '9');
+        if (!alphaNumeric && ch != '/' && ch != '-' && ch != ' ') {
+            return false;
+        }
+    }
+
     double powerW = 0.0;
     double zOhms = 0.0;
     double phaseDeg = 0.0;
@@ -447,7 +464,6 @@ double reflectedWattsFromSwr(double forwardW, double swr)
 
 void PollGate::reset()
 {
-    m_lastPollMs = -1;
     m_ownReplyPending = false;
     m_lastForeignMs = -1;
     m_foreignIntervalMs = -1;
@@ -472,19 +488,16 @@ qint64 PollGate::quietThresholdMs() const
 
 void PollGate::onRecord(qint64 nowMs)
 {
-    // At most ONE reply per poll: a second record inside the same window is
-    // necessarily another client's, however well the phases happen to line up.
-    const bool ours = m_ownReplyPending
-                      && m_lastPollMs >= 0
-                      && (nowMs - m_lastPollMs) <= kOwnReplyWindowMs;
-    if (ours) {
+    // At most ONE reply per poll, with no wall-clock cutoff. Remote/VPN
+    // ser2net latency is not bounded by the local reference measurement.
+    if (m_ownReplyPending) {
         m_ownReplyPending = false;
         return;
     }
 
-    // Estimate the foreign cadence only from CONSECUTIVE foreign records, so
-    // one own-reply misclassified as foreign (a reply delayed past the window)
-    // cannot poison the estimate with a spuriously short interval.
+    // Estimate the foreign cadence only from CONSECUTIVE foreign records. If
+    // a foreign record consumed our pending slot, the delayed own reply is the
+    // first sample and cannot establish a cadence by itself.
     if (m_lastForeignMs >= 0) {
         const qint64 gap = nowMs - m_lastForeignMs;
         if (gap > 0 && gap <= kMaxQuietMs * 4) {
@@ -504,7 +517,6 @@ bool PollGate::shouldPoll(qint64 nowMs)
         return false;
     }
     m_ridingAlong = false;
-    m_lastPollMs = nowMs;
     m_ownReplyPending = true;
     return true;
 }
@@ -525,11 +537,9 @@ double RangeCeilings::forRange(int rangeIndex) const
     return std::max({highW, midW, lowW});
 }
 
-void RangeTracker::setCeilings(const RangeCeilings& ceilings, CeilingSource source)
+void RangeTracker::setCeilings(const RangeCeilings& ceilings, CeilingSource source,
+                               std::optional<int> editedRange)
 {
-    // Captured BEFORE the assignment: whether the edit touched the range
-    // currently on screen is the question the OperatorEdit branch turns on.
-    const double previous = m_ceilings.forRange(m_displayedRange);
     m_ceilings = ceilings;
     const double configured = m_ceilings.forRange(m_displayedRange);
 
@@ -540,14 +550,12 @@ void RangeTracker::setCeilings(const RangeCeilings& ceilings, CeilingSource sour
     // kCeilingExpandRecords run re-expands within two records anyway, so the
     // worst case is self-correcting and visible.
     //
-    // But only when the edit actually moved THIS range. The menu edits one
-    // range at a time while the gauge shows whichever the meter reports, so
-    // editing Low while High is displayed used to discard High's expansion:
-    // `configured` was unchanged, yet m_ceilingW was overwritten with it and
-    // the flag cleared. Self-correcting, but a scale that visibly jumps when
-    // the operator edited a different range is a bug in its own right.
+    // But only when the operator acted on THIS range (or reset all ranges).
+    // Comparing old and new numeric values cannot represent re-entering the
+    // configured value to clear an automatic expansion, so the caller passes
+    // the edited range explicitly.
     if (source == CeilingSource::OperatorEdit) {
-        if (std::fabs(configured - previous) > 1e-9) {
+        if (!editedRange.has_value() || *editedRange == m_displayedRange) {
             m_ceilingW = configured;
             m_autoExpanded = false;
         }

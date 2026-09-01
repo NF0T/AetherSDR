@@ -7979,14 +7979,14 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         "Configure manual IP addresses for peripherals that cannot be discovered via UDP broadcast.\n"
         "This is needed for remote, VPN, and SmartLink connections. "
         "Configured devices auto-connect when the radio connects.");
-    // Row 8: TelePost LP-100A wattmeter — serial OR ser2net network,
+    // Next free row: TelePost LP-100A wattmeter — serial OR ser2net network,
     // structurally identical to the ACOM row above. See
     // docs/architecture/lp-100a-wattmeter-design.md for the design note.
     //
     // Only the CONNECTION settings live here. The per-range full scale is a
     // display preference and is edited from the applet's own context menu.
     if (m_lpMeter) {
-        const int row = 8;
+        const int row = grid->rowCount();
         static const QString kComboStyle =
             "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px 4px; }"
@@ -8036,6 +8036,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         tm.applyStyleSheet(devLbl, kLpLabelStyle);
         devLay->addWidget(devLbl);
         auto* modeCombo = new QComboBox;
+        modeCombo->setAccessibleName(tr("LP-100A connection type"));
         tm.applyStyleSheet(modeCombo, kComboStyle);
 #ifdef HAVE_SERIALPORT
         modeCombo->addItem("Serial", "Serial");
@@ -8054,8 +8055,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             auto* lay = new QHBoxLayout(serialPage);
             lay->setContentsMargins(0, 0, 0, 0);
             serialCombo = new QComboBox;
+            serialCombo->setAccessibleName(tr("LP-100A serial port"));
             tm.applyStyleSheet(serialCombo, kComboStyle);
             serialCustomEdit = new QLineEdit;
+            serialCustomEdit->setAccessibleName(tr("LP-100A custom serial port"));
             serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
             tm.applyStyleSheet(serialCustomEdit, kLpEditStyle);
             const QString savedSerialPort =
@@ -8075,6 +8078,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         auto* netLay = new QHBoxLayout(netPage);
         netLay->setContentsMargins(0, 0, 0, 0);
         auto* netIpEdit = new QLineEdit;
+        netIpEdit->setAccessibleName(tr("LP-100A network address"));
+        netIpEdit->setAccessibleDescription(
+            tr("IP address or host name of the raw-mode serial proxy"));
         netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.7");
         tm.applyStyleSheet(netIpEdit, kLpEditStyle);
         netIpEdit->setText(PeripheralSettings::deviceString("Lp100a", "ManualIp"));
@@ -8096,6 +8102,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
 #endif
         auto* netPortSpin = new QSpinBox;
+        netPortSpin->setAccessibleName(tr("LP-100A network port"));
+        netPortSpin->setAccessibleDescription(tr("TCP port, 1 to 65535, default 2000"));
         netPortSpin->setRange(1, 65535);
         // 2000, not the ACOM row's 7000: ser2net's own common default.
         netPortSpin->setValue(PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000));
@@ -8136,6 +8144,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
 
         auto* statusLbl = new QLabel(m_lpMeter->isConnected() ? "Connected" : "Not connected");
+        statusLbl->setAccessibleName(tr("LP-100A connection status"));
         const QString kOkStyle =
             "QLabel { color: {{color.accent.success}}; font-size: 11px; }";
         const QString kIdleStyle =
@@ -8146,6 +8155,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         grid->addWidget(statusLbl, row, 4);
 
         auto* lpBtn = new QPushButton(m_lpMeter->isConnected() ? "Disconnect" : "Connect");
+        lpBtn->setAccessibleName(tr("Connect or disconnect the LP-100A meter"));
         tm.applyStyleSheet(lpBtn, kLpBtnStyle);
         grid->addWidget(lpBtn, row, 3);
 

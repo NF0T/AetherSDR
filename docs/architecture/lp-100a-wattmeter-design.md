@@ -232,14 +232,13 @@ rate *and* the suppression threshold. Measured against the reference station's
 time. **Gating on *foreign* records only breaks that coupling** — solo stays at
 a full 10 Hz and the threshold is free to be whatever suppression needs.
 
-Classification is "at most one reply per poll", not merely "inside the window":
-when both cadences are ~100 ms and drift into phase, the other client's records
-land inside our reply window too and get misread as ours.
-
-Constants, all measured, all named with their measurement in the source:
-own-reply latency ≤15 ms against a minimum foreign gap of 79 ms, so a 40 ms
-reply window has ~2.5× margin on both sides; the quiet threshold is **2×** the
-observed foreign cadence, because the multiplier must cover the jitter *tail*
+Classification is "at most one reply per poll": the first record after an
+unanswered poll is ours, regardless of elapsed time. The local station's
+own-reply latency was ≤15 ms, but a remote or VPN ser2net path has no defensible
+40 ms ceiling. If a foreign record wins the race it consumes the pending slot;
+our later reply becomes the first foreign sample, and the next foreign record
+still establishes the shared cadence. The quiet threshold is **2×** the
+observed foreign cadence because the multiplier must cover the jitter *tail*
 (mean 100.5 ms, gaps to 121 ms) rather than the mean.
 
 **Stated limits.** The threshold is clamped to 2 s, so a foreign poller slower
@@ -346,8 +345,9 @@ That is a real defect in all three, found while reviewing this PR, and it is
 mistake §9's standing rule exists to prevent: a working sibling is evidence
 that an approach functions, never that it is correct. Both halves are
 implemented here (the setter stops the timer, and the callback re-reads the
-flag), with a timer-lifecycle regression in
-`tests/lp100a_reconnect_test.cpp`.
+flag). The default test graph keeps LP-100A coverage socket-free; transport
+lifecycle is exercised through code review and the real peripheral path rather
+than a loopback TCP peer.
 
 ---
 

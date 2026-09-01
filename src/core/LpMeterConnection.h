@@ -93,7 +93,8 @@ public:
     // `source` distinguishes a stored-config load from a deliberate context-menu
     // edit; see LpMeter::RangeTracker::CeilingSource for why that matters.
     void setRangeCeilings(const LpMeter::RangeCeilings& ceilings,
-                          LpMeter::RangeTracker::CeilingSource source);
+                          LpMeter::RangeTracker::CeilingSource source,
+                          std::optional<int> editedRange = std::nullopt);
 
     const LpMeter::Reading& lastReading() const { return m_lastReading; }
 
@@ -159,6 +160,7 @@ private:
     bool m_autoReconnect{false};
     bool m_deliberateDisconnect{false};
     bool m_dataFlowing{false};
+    bool m_dataFlowStateKnown{false};
 
     QTimer m_pollTimer;
     QTimer m_reconnectTimer;
