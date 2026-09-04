@@ -62,7 +62,8 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `usesVita49Transport` | ✅ | ❌ | ❌ | `RadioSetupDialog` | Declares the family's VITA-49 transport and shows its receive-socket buffer and Network MTU controls. The MTU remains locally persisted and is sent to Flex as `client set enforce_network_mtu=1 network_mtu=…`; Icom, HL2, and Sim do not use this transport path. |
 | `hasNetworkConfigurationReadback` | ✅ | ❌ | ❌ | `IcomCivBackend`, `RadioSetupDialog` | Declares that the backend can read radio-authoritative network information and gates the Network identity group. Icom is profile-driven: IC-9700 uses documented `1A 05 0139–0141` plus Network Name `0144`; IC-7300MK2 uses `0102–0104` plus `0107`; IC-705 is ❌ because its CI-V guide does not expose these WLAN settings. Network Name has dedicated session-owned model state and does not overwrite the operator-facing radio nickname. |
 | `hasPrivateIpConnectionPolicy` | ✅ | ❌ | ❌ | `RadioSetupDialog` | Shows the SmartSDR `enforce_private_ip_connections` control. Icom: ❌; having a command plane does not imply support for this Flex command. |
-| `hasTuner` | ✅ | ❌ | ❌ | `TransmitModel::setHasTuner` → `TxApplet` | ATU / MEM dimming |
+| `hasTuner` | ✅ | ❌ | per profile | `TransmitModel::setHasTuner` → `TxApplet` | Shared ATU matching control and Success/Byp indicators remain visible on every radio. False renders them dimmed/unavailable; true permits grey inactive or enabled active state. Icom opts in the evidenced IC-705, IC-7300MK2, IC-7300, IC-7610, and IC-785x tuner paths; IC-9700, IC-905, and unidentified models fail closed. ANAN-G2 explicitly reports false because it has no internal ATU. |
+| `hasTunerMemories` | ✅ | ❌ | ❌ | `TransmitModel::setHasTunerMemories` → `TxApplet` | Independent availability for the shared MEM control, Mem indicator, and memory-only ATU menu actions. This is Flex's radio-side memory recall/database contract; an Icom `1C 01` matching path does not imply it. False keeps those shared surfaces visible but dimmed. ANAN-G2 explicitly reports false. |
 | `forwardPowerRequiresSmoothing` | ✅ | ✅ | ❌ | `TxApplet::updateMeters` | Applies the established client-side PEP response only when the backend's forward-power samples require it. Icom: ✅ for native-watt profiles; ❌ for the IC-9700's already-indicated relative Po samples. The default is ❌ and every backend declares the choice explicitly |
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
 | `hasProfiles` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PROF applet, Profiles menu, Profile Manager, Import/Export |
@@ -86,7 +87,11 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `alwaysUseClientSideSpots` | ❌ | ❌ | ❌ | `MainWindow_Spots.cpp`, `MainWindow_Wiring.cpp` through `SpotCommandPolicy` | Forces SpotHub and manual spots into the existing passive-local `SpotModel` instead of emitting Flex `spot add` commands. Icom: ✅ because CI-V has no compatible spot service. Flex, HL2, and Sim remain under the existing operator Passive toggle. |
-| `hasGpsHardware` | ✅ | ❌ | ❌ | `RadioSetupDialog` | Shows the GPS page and the GPS entry under Radio › Options only when the backend declares hardware. Icom: ✅ only for the IC-705 profile; IC-9700 and IC-7300MK2 are ❌. Separate from `hasGpsLocation`, because CI-V does not expose the IC-705 receiver's live position/time data. |
+| `hasGpsLocation` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi`, `RadioModel::hasGpsHardware`, GPS dashboard | Family/model can provide coordinates. Flex combines this with per-unit GPSDO/GNSS presence; IC-705 is ✅ from verified `23 00` |
+| `hasGpsSatelliteTelemetry` | ✅ | ❌ | ❌ | `GpsLocationDialog::refreshGps` | Shows tracked/visible satellite metrics. Icom: ❌ because the IC-705 CI-V surface provides neither counts nor SNR |
+| `hasGpsFrequencyReference` | ✅ | ❌ | ❌ | `MainWindow` status stack, `GpsLocationDialog::refreshGps` | Treats GPS as a 10 MHz/GPSDO reference. Icom: ❌; its receiver reports position/time and does not discipline RF |
+| `hasGpsTimeConfiguration` | ❌ | ❌ | ❌ | `GpsLocationDialog::updateGpsTimeControls`, `RadioModel` GPS clock intents | Shows the radio-owned NTP client, configured server address, GPS Time Correct, and Sync Now controls. IC-705: ✅; explicit writes are read back before display |
+| `hasGpsHardware` | ✅ | ❌ | ❌ | `RadioSetupDialog` | Shows the GPS page and the GPS entry under Radio › Options only when the backend declares hardware. Icom: ✅ only for the IC-705 profile; IC-9700 and IC-7300MK2 are ❌. Separate from `hasGpsLocation`: hardware presence drives the Setup page, while `hasGpsLocation` (IC-705 `23 00`) drives the live dashboard, so a future model can declare a receiver without a position readout. |
 | `gpsHardwareRequiresPresence` | ✅ | ❌ | ❌ | `RadioModel::hasGpsSetupHardware` | Flex GPS hardware is optional per unit and needs live oscillator/GPS presence; fixed-profile hardware such as the IC-705 does not. |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar. Icom: ✅ only when the active model profile provides a calibrated Vd curve; unprofiled models neither publish nor poll Vd/Id |
 | `hasPaTemperatureTelemetry` | ✅ | ✅ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA-temperature gauge and °C/°F selector in Radio Vitals. Icom: ❌ until a model profile declares and implements a PA-temperature meter; the IC-9700 has no such declared telemetry |
@@ -102,6 +107,23 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `maxNotchFilters` | 1000 | 1024 | 0 | `MainWindow::applyCapabilitiesToUi`, `SpectrumWidget::setNotchCapabilities` | The sidebar `+TNF` button and the panadapter's add/remove-notch entries. **0 hides them.** Flex's figure is a UI sanity limit (neither FlexLib nor the wire declares one); HL2's is WDSP's real notch-database size |
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
 | `notchMinWidthHz` / `notchMaxWidthHz` | 10 / 6000 | 50 / 6000 | 0 / 0 | `SpectrumWidget::setNotchCapabilities` | Clamps drag-resize and the width presets. HL2's floor is set by the RX filter length and WDSP **silently widens** anything narrower, so a UI offering less draws a notch narrower than the one being heard |
+
+### RTL-SDR experimental profile
+
+RTL-SDR is receive-only and mostly inherits the false/empty capability
+defaults. Its non-default declarations are kept separately so adding the
+experimental family does not duplicate or stale the main cross-family table.
+
+| Field | RTL-SDR value | Effect |
+|---|---|---|
+| `family` / `model` / `manufacturer` | `"rtl"` / USB product / USB vendor (fallback `"Realtek"`) | Identifies the local device in the shared radio model and status bar |
+| `tuningMinHz` / `tuningMaxHz` | 24 kHz / 1.766 GHz | Bounds tune requests; frequencies below 24 MHz select Q-branch direct sampling |
+| `sampleRatesHz` | 225001, 250000, 300000, 1000000, 1536000, 1843200, 2000000, 2400000, 3000000 | Publishes only legal `librtlsdr` detents |
+| `canTransmit` / `txPowerMaxWatts` / `hostModulates` | false / 0 / false | Fails closed on every transmit path and never opens the microphone |
+| `maxSlices` / `maxPanadapters` | 1 / 1 | Matches the single in-process DDC |
+| `persistsMemories` / `hasSupplyVoltageTelemetry` / `hasMultiClientSessions` | false / false / false | Avoids fabricating radio-side services or telemetry |
+| `clientSettingsDomains` | Tuning\|Passband\|SpanRate\|RfGain\|Memories | Restores only state the USB receiver cannot persist itself |
+| `extensionNamespaces` | `["rtl"]` | Declares gain, PPM, direct-sampling, offset-tuning, and sample-rate controls |
 
 `MainWindow::applyCapabilitiesToUi()` is the single fan-out for UI visibility. It
 is bound to `RadioModel::capabilitiesChanged`, which fires on both connection

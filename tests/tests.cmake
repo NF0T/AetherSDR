@@ -66,6 +66,28 @@ unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
 
+# ── AetherD control protocol tests ───────────────────────────────────────────
+# AetherD control protocol v1: transport-neutral envelope validation and
+# fail-closed structural limits. QtCore only; no daemon/socket/model dependency.
+add_executable(control_protocol_codec_test
+    tests/control_protocol_codec_test.cpp
+    src/core/control/ControlProtocolCodec.cpp
+)
+target_include_directories(control_protocol_codec_test PRIVATE src)
+target_link_libraries(control_protocol_codec_test PRIVATE Qt6::Core)
+add_test(NAME control_protocol_codec_test COMMAND control_protocol_codec_test)
+
+# Current-user local transport plus the first-request handshake. This test
+# binds the production QLocalServer socket and proves that the Stage-3 surface
+# grants observation only; no control or transmit capability may appear.
+add_executable(local_control_server_test
+    tests/local_control_server_test.cpp
+)
+target_include_directories(local_control_server_test PRIVATE src)
+target_link_libraries(local_control_server_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME local_control_server_test COMMAND local_control_server_test)
+
 # ── Digital-voice / D-STAR tests ─────────────────────────────────────────────
 # Guarded by the same condition as the aether-dv-waveform target they exercise.
 # DIGITAL_VOICE_WAVEFORM_DIR, CRDV_DIR and crdv::crdv are all defined by the time
@@ -493,6 +515,20 @@ add_executable(icom_meters_test
 target_include_directories(icom_meters_test PRIVATE src)
 add_test(NAME icom_meters_test COMMAND icom_meters_test)
 
+# Socket-free lifecycle policy for the IC-705 one-shot NTP access command.
+add_executable(icom_ntp_access_test tests/icom_ntp_access_test.cpp)
+target_include_directories(icom_ntp_access_test PRIVATE src)
+target_link_libraries(icom_ntp_access_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_ntp_access_test COMMAND icom_ntp_access_test)
+
+# Socket-free injected-transport coverage for the IC-705 23 00/01 position
+# decode and the 0167-0169 / 1A 08 clock read-backs: frames go straight into
+# IcomCivBackend::onCivFrame, no fake peer.
+add_executable(icom_gps_readback_test tests/icom_gps_readback_test.cpp)
+target_include_directories(icom_gps_readback_test PRIVATE src)
+target_link_libraries(icom_gps_readback_test PRIVATE aethercore Qt6::Core)
+add_test(NAME icom_gps_readback_test COMMAND icom_gps_readback_test)
+
 # Socket-free backend-seam coverage for IC-9700 relative-Po conversion,
 # per-deck watt derivation, sibling-model isolation, and unkey clearing.
 add_executable(icom_power_derivation_test
@@ -724,6 +760,14 @@ target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6
 add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
 ]==]
 
+if(AETHER_BACKEND_RTL)
+    # Socket-free RTL-SDR backend seam, DSP, and discovery contract.
+    add_executable(rtl_backend_test tests/rtl_backend_test.cpp)
+    target_include_directories(rtl_backend_test PRIVATE src)
+    target_link_libraries(rtl_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+    add_test(NAME rtl_backend_test COMMAND rtl_backend_test)
+endif()
+
 # HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
 # test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
 # is what lets the weekly TSan job (.github/workflows/sanitizers.yml) exercise the
@@ -927,6 +971,7 @@ foreach(APP_SETTINGS_SCENARIO
         save-before-load
         xml-import-parity
         first-run
+        database-file-permissions
         xml-import-tmp-promotion
         xml-import-bak-fallback
         xml-artifacts-unusable
@@ -2006,6 +2051,14 @@ target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
+add_executable(lp100a_protocol_test
+    tests/lp100a_protocol_test.cpp
+    src/core/LpMeterProtocol.cpp
+)
+target_include_directories(lp100a_protocol_test PRIVATE src)
+target_link_libraries(lp100a_protocol_test PRIVATE Qt6::Core)
+add_test(NAME lp100a_protocol_test COMMAND lp100a_protocol_test)
+
 add_executable(spe_protocol_test
     tests/spe_protocol_test.cpp
     src/core/SpeProtocol.cpp
@@ -2651,6 +2704,17 @@ add_executable(cw_sidetone_device_match_test tests/cw_sidetone_device_match_test
 target_include_directories(cw_sidetone_device_match_test PRIVATE src)
 target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
+
+# #4281 — who owns the Client-Side QSO recorder's TX slot. Pure, header-only,
+# so the truth table is a compile-time assertion; the run-time rows carry the
+# labels. The static_assert on the function's own type is the regression pin:
+# the defect was an extra input (mic-capture state), so re-adding one fails the
+# build rather than silently restoring room noise over the recorded CW.
+add_executable(cw_record_gate_test
+    tests/cw_record_gate_test.cpp
+)
+target_include_directories(cw_record_gate_test PRIVATE src)
+add_test(NAME cw_record_gate_test COMMAND cw_record_gate_test)
 
 # #5028 — the RTTY sensitivity slider's confidence mapping. Pure, header-only;
 # the floor/default/ceiling rows are compile-time static_asserts, so every CI
@@ -3526,6 +3590,15 @@ target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
 
+add_executable(ctcss_tone_label_test
+    tests/ctcss_tone_label_test.cpp
+)
+target_include_directories(ctcss_tone_label_test PRIVATE src)
+target_link_libraries(ctcss_tone_label_test PRIVATE Qt6::Widgets)
+add_test(NAME ctcss_tone_label_test COMMAND ctcss_tone_label_test)
+set_tests_properties(ctcss_tone_label_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(local_memory_store_test
     tests/local_memory_store_test.cpp
     src/core/LocalMemoryStore.cpp
@@ -4263,6 +4336,28 @@ foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     endif()
 endforeach()
 
+# AutomationServer is desktop support, not engine code. Keep every test that
+# instantiates the production bridge linked through the same desktop-only
+# library as AetherSDR so moving QtWidgets out of aethercore cannot silently
+# leave these harnesses with unresolved bridge symbols.
+set(AETHER_AUTOMATION_SERVER_TESTS
+    automation_server_gesture_test
+    automation_device_diagnostics_test
+    automation_json_id_test
+    automation_connect_family_test
+    automation_connect_wait_phase_test
+    automation_double_click_test
+    automation_drag_at_test
+    automation_tx_watchdog_test
+    automation_rn2_probe_test
+    tci_automation_test
+)
+foreach(_automation_test IN LISTS AETHER_AUTOMATION_SERVER_TESTS)
+    if(TARGET ${_automation_test})
+        target_link_libraries(${_automation_test} PRIVATE aetherdesktop_support)
+    endif()
+endforeach()
+
 # ── FFTW planner bound for the HL2 / WDSP tests ─────────────────────────────
 #
 # WDSP builds every FFT with FFTW_PATIENT. The first OpenChannel in a cold
@@ -4348,6 +4443,28 @@ if (NOT _aether_ggml_baseline_str STREQUAL "")
         AETHER_GGML_CPU_BASELINE="${_aether_ggml_baseline_str}")
 endif()
 add_test(NAME system_inventory_test COMMAND system_inventory_test)
+
+# GUI harnesses that link aethercore used to receive ThemeManager,
+# SettingsHelpers, and ShortcutManager accidentally from that engine archive.
+# Run this retrofit only after every test target has been declared, preserving
+# their desktop dependency without exposing desktop support to engine-only tests.
+get_property(_aether_desktop_test_candidates DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_desktop_test IN LISTS _aether_desktop_test_candidates)
+    get_target_property(_desktop_test_type ${_desktop_test} TYPE)
+    if(NOT _desktop_test_type STREQUAL "EXECUTABLE")
+        continue()
+    endif()
+    get_target_property(_desktop_test_links ${_desktop_test} LINK_LIBRARIES)
+    if(";${_desktop_test_links};" MATCHES ";aethercore;"
+            AND ";${_desktop_test_links};" MATCHES ";Qt6::Widgets;"
+            AND NOT ";${_desktop_test_links};" MATCHES ";aetherdesktop_support;")
+        target_link_libraries(${_desktop_test} PRIVATE aetherdesktop_support)
+    endif()
+endforeach()
+unset(_aether_desktop_test_candidates)
+unset(_desktop_test)
+unset(_desktop_test_type)
+unset(_desktop_test_links)
 
 
 # The isolation TU, compiled once and linked into every test target below. An

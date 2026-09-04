@@ -173,6 +173,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.receiveOnlyModes = {};
     caps.hasRadioDialLock = false;
     caps.hasTuner = true;
+    caps.hasTunerMemories = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
     caps.hasRemoteOnControl = true;
     caps.canUpgradeFirmware = true;
@@ -272,6 +273,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // MainWindow therefore combines this family declaration with
     // RadioModel::hasGpsHardware() while connected.
     caps.hasGpsLocation = true;
+    caps.hasGpsSatelliteTelemetry = true;
+    caps.hasGpsFrequencyReference = true;
+    caps.hasGpsTimeConfiguration = false;
     caps.hasGpsHardware = true;
     caps.gpsHardwareRequiresPresence = true;
     // The radio owns the memory slots and re-dumps them on every connect, so
@@ -1120,6 +1124,20 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 
     GpsDelta d;
     carry(kvs, "status", d.status);
+    if (kvs.contains(QStringLiteral("status"))) {
+        const QString status = kvs.value(QStringLiteral("status")).trimmed().toLower();
+        const bool saysLock = status.contains(QLatin1String("lock"));
+        const bool saysNoLock = status.contains(QLatin1String("unlock"))
+            || status.contains(QLatin1String("no lock"))
+            || status.contains(QLatin1String("not lock"))
+            || status.contains(QLatin1String("lost"))
+            || status.contains(QLatin1String("loss"));
+        // Lock alone decides validity; the coordinates are carried by their
+        // own keys and consumers parse the persisted lat/lon, so a status
+        // line without them must not invalidate a fix the radio still has.
+        d.positionValid = saysLock && !saysNoLock;
+        d.source = QStringLiteral("GPSDO");
+    }
     carry(kvs, "tracked", d.tracked);
     carry(kvs, "visible", d.visible);
     carry(kvs, "grid", d.grid);

@@ -63,7 +63,7 @@ enum class FmTonePresentation {
 // that describe an already-established control instead default to the legacy
 // shape (for example PROC's 0..2 domain), avoiding a disconnected or older
 // backend briefly losing an existing surface. In both cases, set the field
-// explicitly in FlexBackend, Hl2Backend AND SimBackend. Then record it in
+// explicitly in every backend implementation. Then record it in
 // docs/architecture/radio-capabilities-map.md, which maps every field to the
 // code that reads it (and lists the ones nothing reads yet). A capability no
 // consumer reads looks identical, from here, to one that works.
@@ -310,7 +310,8 @@ struct RadioCapabilities {
     // knowing the address selected by the client.
     bool hasNetworkConfigurationReadback = false;
     bool hasPrivateIpConnectionPolicy = false; // SmartSDR private-IP enforcement setting
-    bool hasTuner = false;         // antenna tuner / ATU
+    bool hasTuner = false;         // antenna tuner / ATU matching control
+    bool hasTunerMemories = false; // radio-side ATU memory recall/database
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
 
@@ -681,11 +682,22 @@ struct RadioCapabilities {
     // rather than for the dashboard it happens to drive today.
     bool hasGpsLocation = false;
 
+    // Optional detail planes within the location dashboard. Keeping them
+    // separate prevents a radio that reports coordinates from being presented
+    // as a GPSDO or as a source of satellite-count telemetry.
+    bool hasGpsSatelliteTelemetry = false;
+    bool hasGpsFrequencyReference = false;
+
+    // The radio owns configurable GPS/NTP clock settings and reports their
+    // read-back state. This is an NTP CLIENT capability; hasNtpServer in the
+    // legacy Flex model table describes the distinct server role.
+    bool hasGpsTimeConfiguration = false;
     // The radio contains GPS/GNSS hardware and therefore has a meaningful GPS
     // setup surface. This is deliberately separate from hasGpsLocation: an
-    // IC-705 has an internal GPS receiver, but CI-V does not expose its live
-    // position/time data to this client. The hardware page is still truthful;
-    // a live station-location readout is not.
+    // IC-705 has an internal GPS receiver (this flag drives its Radio Setup
+    // page) and also reports live position/time through 23 00 (hasGpsLocation
+    // drives the dashboard). A future model may truthfully declare only the
+    // hardware half, so the two claims stay independent.
     bool hasGpsHardware = false;
     bool gpsHardwareRequiresPresence = false; // family declaration is conditional per unit
 
