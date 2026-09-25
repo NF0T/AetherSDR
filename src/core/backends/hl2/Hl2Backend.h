@@ -360,6 +360,7 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
+    friend struct Hl2UnkeyHoldTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -871,6 +872,23 @@ private:
     // more than one slice open this is where they become one.
     void mixReceiverAudio(int ddc, const std::vector<float>& pcm);
 
+    // THE RECEIVE-AUDIO HOLD, as two calls rather than as open-coded loops.
+    //
+    // applyRxAudioMute() is the ONLY writer of m_rxAudioMuted. It is NOT the
+    // only site that queues setAudioMuted -- pushInitialState()'s link-up loop
+    // re-asserts it per receiver as each one is opened, and that is deliberate:
+    // a receiver created after the mute was applied has to be told. It agrees
+    // with this flag because applyRxAudioMute() runs later in the same function.
+    // Saying "the only site" here would be an invariant a future reader relies
+    // on and the tree does not keep. Everything that wants the
+    // demodulator silenced goes through it, so the mixer's gate and the
+    // demodulator's mute can no longer drift apart -- which they did, and the
+    // skew was 70 ms wide by construction on the unkey edge.
+    void applyRxAudioMute(bool muted);
+    // Release the hold, but not before the radio has had time to drop out of
+    // transmit. Immediate when the hold is zero. Cancelled by any re-key.
+    void releaseRxAudioMuteAfterHold();
+
     // Per-slice meter name for the seam ("SLC:LEVEL" for the first receiver, so
     // an existing single-receiver consumer keeps the name it already binds to).
     static QString sliceMeterName(int uiNumber);
@@ -1229,6 +1247,58 @@ private:
     TxCoordinator::Operation m_lastTxOperation;
     TxCoordinator::Completion m_cwHangCompletion;
     bool m_txMonitor = false;
+    // ONE flag for the receive-audio hold, read by mixReceiverAudio() and
+    // mirrored to every Hl2RxDsp by applyRxAudioMute(). It is NOT a mirror of
+    // (m_keyed && !m_txMonitor) any more: on the key-UP edge it stays true for
+    // m_unkeyUnmuteHoldMs after the MOX-off is queued. See #5497.
+    bool m_rxAudioMuted = false;
+    // HOW LONG THE MUTE OUTLIVES THE UNKEY, in milliseconds.
+    //
+    // A member rather than a literal so a TEST can set it to ZERO — that is the
+    // only arrangement in which "still muted after one event-loop turn" can
+    // ONLY mean the hold, and not a dropped invokeMethod, a renamed slot or an
+    // unattached DSP. There is no setting behind it and none is proposed: a
+    // second station that needs a different value needs a new measurement and a
+    // rebuild, which is the honest cost of a one-station constant.
+    //
+    // MEASURED, not chosen. #5497 measures W — the interval from the
+    // demodulator's unmute to the last sample of our own transmitter reaching
+    // it — on ON8ST's HL2 into a dummy load: n = 11, median 59.40 ms, range
+    // 51.66-66.15 ms, spread/median 0.224. That last figure is the one that
+    // says a fixed timer is the right SHAPE at all: a spread comparable to W
+    // itself would have meant no single constant could cover the population.
+    // Coverage of those eleven windows: 55 ms covers 2, 60 ms covers 7, 65 ms
+    // covers 9, 70 ms covers 11 with 3.85 ms to spare.
+    //
+    // THE HONEST LIMIT TRAVELS WITH THE NUMBER: one radio, one gateware
+    // (74.2), one network, one operator, one day. It is not known whether an
+    // uncovered window yields a partial artefact or a full one, so a smaller
+    // value is choosing a coverage fraction against an untested failure mode.
+    //
+    // AND THE COST IS REAL AND IS CHARGED TO #5498: every millisecond of hold
+    // is a millisecond of receive the operator does not get back. #5498 is the
+    // post-unkey dropout, and this change makes it worse — measured at 113.74
+    // ms median on stock and 250.65 ms with this hold in place. That is the
+    // reason not to be generous "just in case".
+    // AND IT IS SKIPPED IN CW FULL BREAK-IN ONLY WHEN THE HANG IS SHORTER THAN
+    // IT. Ruled by the maintainer (KK7GWY, 2026-09-24, on #5850), narrowing what
+    // this PR first proposed: the hold is skipped only where it would swallow
+    // the space between elements and take QSK away. At the default cwDelay of
+    // 500 ms the hang is longer than this constant, so it fires once at the end
+    // of the over and that key-up gets the ordinary hold — break-in operators
+    // get the +57 dB burst removed like everyone else. applyKeying()'s
+    // cwBreakIn arm carries the predicate and the reasoning. So this constant
+    // governs SSB, tune, digital, semi-break-in CW, and full break-in at any
+    // delay at or above itself. The crossover where a 70 ms hold would have
+    // swallowed the whole inter-element space is arithmetic from this number,
+    // not a measurement — there is no CW measurement behind #5497 at all. That
+    // arm shows the division.
+    static constexpr int kUnkeyUnmuteHoldMs = 70;
+    int m_unkeyUnmuteHoldMs = kUnkeyUnmuteHoldMs;
+    // Single-shot, owned by this object, therefore on this object's thread —
+    // which is what makes the hold cancellable from applyKeying() without a
+    // lock. Null only before the constructor reaches it.
+    QTimer* m_unkeyUnmuteTimer = nullptr;
     // Both flags above are set SYNCHRONOUSLY while the setAudioMuted they imply
     // rides a queued connection to the DSP thread, so at key-up they say
     // "sampling" a block before it is true. This gate holds the moment sampling

@@ -29,6 +29,7 @@
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QPointer>
+#include <QThread>
 
 #include <algorithm>
 #include <cstddef>
@@ -422,6 +423,22 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_dspBuildContext->moveToThread(m_dspBuildThread);
     m_dspBuildThread->start();
 
+    // THE UNKEY HOLD. Single-shot and parented here, so it lives and fires on
+    // this object's thread — the same thread applyKeying() runs on, which is
+    // what lets a re-key stop it with a plain call and no lock.
+    m_unkeyUnmuteTimer = new QTimer(this);
+    m_unkeyUnmuteTimer->setSingleShot(true);
+    connect(m_unkeyUnmuteTimer, &QTimer::timeout, this, [this] {
+        // BELT AND BRACES WITH THE STOP IN applyKeying(). A re-key inside the
+        // window stops this timer, so reaching here while keyed should be
+        // impossible — but "should be impossible" is how a hold turns into an
+        // unmute in the middle of a transmission, and this costs one test.
+        if (m_keyed && !m_txMonitor) {
+            return;
+        }
+        applyRxAudioMute(false);
+    });
+
     m_cwHangTimer = new QTimer(this);
     m_cwHangTimer->setSingleShot(true);
     connect(m_cwHangTimer, &QTimer::timeout, this, [this] {
@@ -430,7 +447,23 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
         m_cwAutoKeyed = false;
         const TxCoordinator::Completion completion = std::exchange(m_cwHangCompletion, {});
-        setKeying(false, m_cwHangOperation, completion);
+        // applyKeying() DIRECTLY, with cwBreakIn TRUE, and that argument is the
+        // whole point of this line — see the QSK branch in applyKeying().
+        //
+        // THIS USED TO CALL setKeying(), WHICH HARD-CODES cwBreakIn=false.
+        // That made the flag unreachable on the only edge that arms the unkey
+        // hold: setCwKeying() passes true on the key-DOWN and nowhere else, so
+        // "applyKeying already receives cwBreakIn" was true of the class and
+        // false of the key-UP. A hold gated on the parameter as it stood would
+        // have been dead code in full break-in, which is exactly the case the
+        // gate exists for.
+        //
+        // NOTHING ELSE MOVES ON THE WIRE. applyKeying()'s only other use of the
+        // argument picks setCwMox() over setMox(), and MetisClient::setMoxImpl()
+        // reads cwBreakIn only in its `keyed ?` arm: on an UNKEY the two are the
+        // same function. Verified against the source rather than assumed,
+        // because this is a transmit path.
+        applyKeying(false, m_cwHangOperation, completion, /*cwBreakIn=*/true);
     });
 
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
@@ -1420,22 +1453,119 @@ void Hl2Backend::publishWideState()
         emit panWideChanged(ids.panId, spanned);
 }
 
+// AFFINITY, ENFORCED RATHER THAN TRUSTED — AND IN THE BUILD THAT SHIPS.
+//
+// Every caller of the two helpers below was traced to the backend's own thread:
+// applyKeying(), setTxAudioMonitor(), pushInitialState(), and the unkey timer,
+// which is parented to the backend and therefore fires there. The check exists
+// because the cost of being wrong is SILENT: m_rxAudioMuted is read by
+// mixReceiverAudio() with no synchronisation, on the strength of both being on
+// this thread, and a caller arriving from the I/O thread would produce a torn
+// gate that only misbehaves under load.
+//
+// WHY NOT Q_ASSERT ALONE, which is what this was. Qt defines QT_NO_DEBUG for
+// every non-Debug configuration, so Q_ASSERT compiles to nothing in
+// RelWithDebInfo — the configuration this project builds, measures and ships.
+// A check that disappears in exactly the build where it matters makes the
+// paragraph above true of the check as well as of the defect (ten9876, #5850
+// review). So: a warning in every build, and Q_ASSERT_X on top of it so a debug
+// run stops AT the offending call instead of logging past it.
+static void hl2RequireBackendThread(const QObject* owner, const char* what)
+{
+    if (owner->thread() == QThread::currentThread()) {
+        return;
+    }
+    qCWarning(lcHl2) << "HL2:" << what
+                     << "was called from a thread that does not own the "
+                        "backend. m_rxAudioMuted is read without "
+                        "synchronisation by mixReceiverAudio(), so this is a "
+                        "torn receive-audio gate, not a style point.";
+    Q_ASSERT_X(false, what, "called off the Hl2Backend's own thread");
+}
+
+void Hl2Backend::applyRxAudioMute(bool muted)
+{
+    hl2RequireBackendThread(this, "applyRxAudioMute");
+    m_rxAudioMuted = muted;
+    // Record the moment sampling is asked to RESUME at the site that actually
+    // asks for it, which since #5497 is HERE and not at the top of
+    // applyKeying(): on the unkey edge the request is now made a hold later
+    // than the key edge, and a stamp taken at the key edge would have told
+    // SliceSamplingGate the chain was sampling for the whole of the hold. The
+    // queued delivery to the DSP thread still leaves one block of skew, which
+    // is the skew the gate was built to answer — it reads the stamp Hl2RxDsp
+    // writes while unmuted rather than trusting this request.
+    m_sliceSampling.setRequested(!muted, hl2::steadyNowNs());
+    for (Receiver& r : m_rx) {
+        if (r.dsp) {
+            QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
+                Q_ARG(bool, muted));
+        }
+    }
+}
+
+void Hl2Backend::releaseRxAudioMuteAfterHold()
+{
+    hl2RequireBackendThread(this, "releaseRxAudioMuteAfterHold");
+    if (!m_rxAudioMuted) {
+        // Nothing is being held, so there is nothing to defer. This is the
+        // ordinary path when the TX audio monitor is on: the key edge never
+        // muted anything, and starting a 70 ms timer to un-mute an unmuted
+        // chain would be a lie in the trace and a spurious wake-up.
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();
+        }
+        return;
+    }
+    if (m_unkeyUnmuteHoldMs <= 0 || !m_unkeyUnmuteTimer) {
+        applyRxAudioMute(false);
+        return;
+    }
+    // start() on a running single-shot timer RESTARTS it, which is the
+    // behaviour a second unkey inside the window wants: that unkey has its own
+    // T/R turnaround to cover and inherits none of the elapsed time of the
+    // first. The bench build this fix comes from did not coalesce them.
+    m_unkeyUnmuteTimer->start(m_unkeyUnmuteHoldMs);
+}
+
 void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
 {
-    // Belt and braces with the demodulator mute. This drops any block that was
-    // already in flight when the key went down; Hl2RxDsp::setAudioMuted stops
-    // the pipeline FILLING with our own transmission, which is what stopped the
-    // tail draining out afterwards.
+    // THE SAME FLAG THE DEMODULATOR IS MUTED ON, not a second expression that
+    // happens to agree with it most of the time (#5497).
     //
-    // THE MONITOR EXCEPTION HAS TO BE HERE, not only at the demodulator mute.
+    // It used to read `m_keyed && !m_txMonitor`, evaluated here, while the
+    // demodulator was muted on `key && !m_txMonitor` evaluated in
+    // applyKeying(). Those agreed exactly until the unmute was deferred past
+    // the radio's T/R — after which this gate would have re-opened 70 ms before
+    // the demodulator did, and those 70 ms would have been DIGITAL ZEROS pushed
+    // into the engine. Gating both on m_rxAudioMuted makes the hold a continued
+    // GAP in audioFrameReady() instead, so the engine's presentation prebuffer
+    // refills with real audio when the hold ends rather than with silence.
+    //
+    // Belt and braces with the demodulator mute, as before: this drops any
+    // block that was already in flight when the key went down, while
+    // Hl2RxDsp::setAudioMuted stops the pipeline FILLING with our own
+    // transmission.
+    //
+    // THE MONITOR EXCEPTION IS STILL HONOURED HERE, and it has to be.
     // audioFrameReady() is emitted from this function and nowhere else, and it is
     // what feeds the engine's "output" capture — so an early return here silences
     // the capture no matter what the DSP is doing. Porting setTxAudioMonitor as a
     // demodulator-mute change alone would leave it a no-op on this backend, and a
     // diagnostic that reads silence draws a confident wrong conclusion from it
     // (#4487 review, finding 1). Off by default; only a measurement turns it on.
-    if (m_keyed && !m_txMonitor)
+    // m_rxAudioMuted carries that exception: applyKeying() never sets it while
+    // the monitor is on, and setTxAudioMonitor() clears it mid-over.
+    //
+    // ONE BLOCK OF SKEW REMAINS AND IS NOT HIDDEN: the flag clears on this
+    // thread while the unmute rides a queued connection to the DSP thread, so
+    // at most one already-zero-filled block can pass this gate at the end of
+    // the hold. That is one block, not the 70 ms the old gate would have let
+    // through, and it is the same direction of skew the SliceSamplingGate
+    // comment describes.
+    if (m_rxAudioMuted) {
         return;
+    }
     const Receiver* r = rx(ddc);
     if (!r || r->audioMuted)
         return;   // not queued at all: a muted receiver must not accumulate
@@ -4323,15 +4453,39 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
     // measurement turns it on. Applied to every receiver for the same reason the
     // mute is: whichever one the capture is taken from must not be silenced.
     const bool muteWhileKeyed = key && !m_txMonitor;
-    // Record the moment sampling is asked to RESUME, at the same site that asks
-    // for it. The unmute below is queued, so at key-up `!muteWhileKeyed` is true
-    // a block before Hl2RxDsp has unmuted; SliceSamplingGate turns that request
-    // into an answer taken from the stamp on the reading.
-    m_sliceSampling.setRequested(!muteWhileKeyed, hl2::steadyNowNs());
-    for (Receiver& r : m_rx) {
-        if (r.dsp)
-            QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
-                Q_ARG(bool, muteWhileKeyed));
+    // THE TWO EDGES ARE NOT SYMMETRIC, AND #5497 IS WHAT THEY COST WHEN THEY
+    // ARE TREATED AS IF THEY WERE.
+    //
+    // KEY DOWN: mute HERE, ahead of everything else this function does. Muting
+    // early is free — the operator cannot want to hear a transmitter that has
+    // not started — and late is expensive, because what the receiver hears
+    // while the PA is up is our own carrier at a level that rails the ADC.
+    //
+    // KEY UP: the release is NOT here. It is at the bottom of this function,
+    // after the MOX-off has been queued, and it is deferred past the radio's
+    // T/R turnaround on top of that. See releaseRxAudioMuteAfterHold() and the
+    // constant's own comment in the header.
+    //
+    // WHY THE OLD CODE WAS WRONG AND NOT MERELY RACY. Every Receiver::dsp is
+    // moved to m_ioThread in openReceiverDsp(), and MetisClient is moved to the
+    // same thread in this class's constructor. Both edges ride
+    // Qt::QueuedConnection onto that one event queue, at equal priority, so
+    // delivery is FIFO in POSTING order. An unmute posted ahead of the
+    // setMox(false) further down this function was therefore not racing it and
+    // did not sometimes lose: it was GUARANTEED to be delivered first, every
+    // time. The demodulator listened at full gain while the PA was still up,
+    // for the whole T/R turnaround, on every unkey.
+    //
+    // WHY A TIMER AND NOT AN EVENT. There is no T/R-complete indication to gate
+    // on, and that was checked rather than assumed: Ep6Response::ptt is decoded
+    // but MetisClient's own note records ptt_resp as `cw_on | ext_ptt` — the
+    // radio's EXTERNAL keying inputs, which never go high for a host MOX key.
+    // A delay is forced. #5497 measures its length; the header names it.
+    if (muteWhileKeyed) {
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();   // a re-key inside the hold cancels it
+        }
+        applyRxAudioMute(true);
     }
     // Drop whatever was already queued for the mix. On unkey these would be the
     // stalest blocks in the buffer and would play out ahead of live audio.
@@ -4399,6 +4553,142 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 metis->setMox(key, operation);
             }
         }, Qt::QueuedConnection);
+    }
+    // AND ONLY NOW THE RELEASE — after the MOX-off above is on the queue, never
+    // before it. The ordering is what #5497 is about, so it is stated as an
+    // ordering here rather than left to the timer to enforce: even at a hold of
+    // zero, the unmute is posted behind the MOX-off rather than ahead of it.
+    // The hold then covers what the ordering alone cannot — the control-packet
+    // wait, the network hop, the HL2's T/R relay and the PA's decay.
+    //
+    // ARMED BY THE KEY-UP EDGE, NOT BY THE UNKEYED STATE — and that distinction
+    // is worth the three branches below.
+    //
+    // A hold covers ONE T/R turnaround: the one the MOX-off just above started.
+    // A second setKeying(false) arriving with m_keyed ALREADY false started no
+    // turnaround and so has none of its own to cover; it inherits the one
+    // already being covered. This used to be a bare `if (!muteWhileKeyed)`,
+    // which re-entered releaseRxAudioMuteAfterHold() with the mute still set
+    // and RESTARTED the single-shot timer from zero — measured at 311 ms of
+    // mute past the real MOX-off for a 200 ms hold, against the 200 ms the
+    // operator is owed. Every one of those milliseconds is charged to #5498's
+    // post-unkey dropout by this change's own accounting, so the defect
+    // overstated that cost as well as causing it (ten9876, #5850 review).
+    //
+    // THE REDUNDANT UNKEY IS NOT HYPOTHETICAL, and the paths were traced rather
+    // than assumed. RadioModel::requestTransmitStop() calls
+    // TransmitModel::stopTune() — which reaches setTune(false) and its
+    // setKeying(false) — and then, in the same function, an unconditional
+    // TransmitModel::setMox(false). setMox's off edge is not edge-guarded: the
+    // `m_transmitting != on` block is skipped on an already-unkeyed model but
+    // the trailing moxCommandIssued(on) still fires, so a second
+    // setKeying(false) lands. pushInitialState() below is the same shape by
+    // construction — it assigns m_keyed = false and then calls setKeying(false).
+    //
+    // Nothing upstream filters it either: on the off edge
+    // TxCoordinator::Command::permitsDispatch degrades to
+    // Operation::permitsCleanup(), which tests liveness and generation and has
+    // no notion of key state, and every local unkey uses a cleanupFence() built
+    // to satisfy exactly that.
+    //
+    // keyChanged is already computed above, for m_sinceUnkey and for
+    // transmitChanged. The hold simply has to consult it too.
+    if (!muteWhileKeyed) {
+        if (key) {
+            // KEY DOWN WITH THE TX AUDIO MONITOR ON. muteWhileKeyed is false
+            // only because the monitor asked to HEAR the transmitter. There is
+            // no turnaround at a key-down and so nothing to wait for: anything
+            // still held is released NOW rather than deferred into a fresh
+            // hold. Normally a no-op, because the monitor path already
+            // unmuted; it is here so that it stays a no-op.
+            if (m_unkeyUnmuteTimer) {
+                m_unkeyUnmuteTimer->stop();
+            }
+            if (m_rxAudioMuted) {
+                applyRxAudioMute(false);
+            }
+        } else if (cwBreakIn && m_cwHangTimer
+                   && m_cwHangTimer->interval() < m_unkeyUnmuteHoldMs) {
+            // CW FULL BREAK-IN AT A SHORT DELAY SKIPS THE HOLD. RULED by the
+            // maintainer (KK7GWY, 2026-09-24, on #5850): the hold is skipped
+            // only when the CW hang is shorter than the hold, which is the case
+            // where it would swallow the inter-element space and take QSK away.
+            // At a longer delay the hang fires once, at the end of the over, and
+            // that unkey takes the ordinary hold below like any other.
+            //
+            // THIS IS NARROWER THAN WHAT THIS PR ORIGINALLY IMPLEMENTED, and the
+            // difference is the whole point. The earlier arm skipped the hold at
+            // EVERY break-in delay, on the author's own reading of the trade.
+            // AGENTS.md § Autonomous Agent Boundaries makes the maintainer the
+            // sole authority on UX direction, and break-in behaviour is UX — so
+            // the wider rule was never ours to make. At the default cwDelay of
+            // 500 ms the hang is longer than this hold, so it fires once at the
+            // end of the over; that key-up now gets the normal hold, so the
+            // +57 dB burst #5497 measured is removed for break-in operators too.
+            //
+            // THE PREDICATE READS THE HANG TIMER'S OWN INTERVAL, and nothing new
+            // is latched for it. setCwKeying() starts m_cwHangTimer with
+            // max(kCwEnvelopeReleaseMs, clamp(breakInDelayMs, 0, 2000)), and
+            // QTimer::interval() still returns that value after the single-shot
+            // has fired — which is where we are, since this call arrives FROM
+            // that timeout. So the comparison is the operator's configured hang
+            // against the hold, exactly as the ruling states it.
+            //
+            // WHAT THE HOLD WOULD HAVE COST IN THE SKIPPED CASE. The unkey hold
+            // is armed per
+            // ELEMENT in full break-in, not per transmission: setCwKeying()
+            // starts m_cwHangTimer at max(kCwEnvelopeReleaseMs, cwDelay) on
+            // every element release, so at the deliberate-QSK setting of
+            // cwDelay = 0 the hang is 6 ms and every element's release reaches
+            // this function. The next element's key-down then stops the timer
+            // and re-mutes, so a hold longer than the inter-element space
+            // means the receiver never opens at all.
+            //
+            // THE CROSSOVER IS ARITHMETIC FROM THE TWO CONSTANTS ABOVE, NOT A
+            // MEASUREMENT, and that is stated because it would otherwise read
+            // as one. There is NO CW measurement anywhere behind this change:
+            // #5497's eleven windows are all 4-second SSB keys. At PARIS
+            // timing the inter-element space is 1200/WPM ms, so it falls below
+            // kUnkeyUnmuteHoldMs (70) at 1200/70 = 17.1 WPM, and below the 76
+            // ms that actually elapses from element key-up to unmute — the
+            // 6 ms hang plus the hold it arms — at 1200/76 = 15.8 WPM. Both
+            // numbers are divisions, done here, on constants in this file.
+            //
+            // SEMI-BREAK-IN IS UNAFFECTED AND MUST BE. With break-in off,
+            // setCwKeying() never keys: CW rides an MOX/PTT the operator
+            // asserted, and the unkey that ends the over is that operator's
+            // release arriving through setKeying() with cwBreakIn FALSE. It
+            // takes the branch below and gets the full hold, which is right —
+            // that unkey ends a transmission and has a real T/R turnaround
+            // behind it, and the operator asked for no gap to hear in.
+            //
+            // THE LEAK IS REAL AND IS THE PRICE, and it is now paid only where
+            // the ruling says to pay it. What the receiver hears in these
+            // milliseconds is the operator's own PA decaying into their own
+            // front end, forty-plus times a second at speed — the same
+            // +57.55 dB / +10.60 dBFS artefact this change removes everywhere
+            // else. It is not suppressed here because suppressing it is what
+            // takes QSK away. At a hang at or above the hold there is no
+            // inter-element space to protect, so the burst is suppressed and
+            // nothing is given up for it.
+            if (m_unkeyUnmuteTimer) {
+                m_unkeyUnmuteTimer->stop();
+            }
+            if (m_rxAudioMuted) {
+                applyRxAudioMute(false);
+            }
+        } else if (keyChanged) {
+            // THE ONE TRUE KEY-UP EDGE, and the only site allowed to arm a
+            // hold.
+            releaseRxAudioMuteAfterHold();
+        } else if (!m_unkeyUnmuteTimer || !m_unkeyUnmuteTimer->isActive()) {
+            // A redundant unkey with no hold running — an unmuted chain, or one
+            // whose hold has already expired. Kept going through the helper so
+            // both settle exactly as they always did.
+            releaseRxAudioMuteAfterHold();
+        }
+        // else: a redundant unkey INSIDE a running hold. Leave the timer
+        // exactly as the real edge armed it; restarting it is the defect above.
     }
     if (!key) {
         // Drop buffered audio on unkey so the next transmission does not open
@@ -4757,12 +5047,53 @@ void Hl2Backend::setTxAudioMonitor(bool on)
     // which is the site that actually gates audioFrameReady().
     // Enabling the monitor mid-transmission is the second way sampling resumes,
     // and the one where the held peak is most likely still fresh by age — the
-    // key-down that froze it may be only milliseconds old. Same gate, same site.
-    m_sliceSampling.setRequested(!(m_keyed && !on), hl2::steadyNowNs());
-    for (Receiver& r : m_rx) {
-        if (r.dsp)
-            QMetaObject::invokeMethod(r.dsp, "setAudioMuted", Qt::QueuedConnection,
-                Q_ARG(bool, m_keyed && !on));
+    // key-down that froze it may be only milliseconds old. applyRxAudioMute()
+    // stamps SliceSamplingGate for both.
+    //
+    // NO HOLD ON THIS PATH, and that is not an oversight. #5497's hold exists
+    // to cover the radio's T/R turnaround — the interval in which the PA is
+    // still up after the host has asked it to stop. Turning the monitor ON
+    // asks to HEAR the transmitter, so there is nothing to wait for; turning it
+    // OFF while keyed must silence it now, for the same reason the key-down
+    // edge mutes now. Either way this is the immediate path. A hold placed here
+    // would make a diagnostic that enables the monitor mid-over wait 70 ms for
+    // audio it deliberately asked for.
+    if (m_keyed && !on) {
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();
+        }
+        applyRxAudioMute(true);
+    } else if (!on && !m_keyed && m_unkeyUnmuteTimer && m_unkeyUnmuteTimer->isActive()) {
+        // AN ARMED HOLD IS NOT AN OVERTAKEN ONE, and the else branch below used
+        // to treat it as one. (UNKEYED, monitor OFF) is exactly the state an
+        // unkey has just left behind, with the hold running and the PA still
+        // up; cancelling it there unmutes inside the T/R turnaround -- the
+        // defect this whole change exists to remove, let back in through
+        // another door.
+        //
+        // Not hypothetical: RadioCertification's run() epilogue calls
+        // keyViaOperatorPath(false) and then setTxAudioMonitor(false) in the
+        // same synchronous unwind, which is the one path in the tree that
+        // deliberately listens to its own transmitter.
+        //
+        // AND IT SPLITS ON `on`, WHICH IS THE CORRECTION. This guard was first
+        // written without the `!on`, so it was taken for BOTH values and
+        // swallowed setTxAudioMonitor(TRUE) inside the window as well: a
+        // diagnostic that asked to HEAR the receiver got silence until the
+        // timer expired, and a following key-down -- muteWhileKeyed false
+        // because the monitor is on -- then re-armed a fresh hold off the mute
+        // that was still set. ASKING TO HEAR IS ASKING FOR SOMETHING; only
+        // asking for OFF is asking for nothing, and only that one may be
+        // answered by doing nothing (ten9876, #5850 review).
+        //
+        // So: monitor OFF inside an armed hold leaves the timer running and
+        // stays muted, and the hold expires on its own a few tens of
+        // milliseconds later. Monitor ON falls through to the immediate path.
+    } else {
+        applyRxAudioMute(false);
+        if (m_unkeyUnmuteTimer) {
+            m_unkeyUnmuteTimer->stop();   // overtaken, or answered on purpose
+        }
     }
 }
 
@@ -7599,6 +7930,30 @@ void Hl2Backend::pushInitialState()
     if (m_lastTxOperation.permitsCleanup()) {
         setKeying(false, m_lastTxOperation);
     }
+    // AND THE RECEIVE-AUDIO HOLD WITH IT — AFTER the cleanup unkey above, never
+    // before it.
+    //
+    // While the mixer gated on m_keyed, clearing m_keyed above was enough;
+    // since #5497 it gates on m_rxAudioMuted, which that line does not touch. A
+    // session that ended mid-transmission would otherwise hand the new one a
+    // closed gate — and the setKeying(false) above is conditional, so on the
+    // path where it is skipped nothing would ever reopen it. Hence
+    // unconditional, and cleared rather than deferred: the T/R turnaround this
+    // hold exists to cover belonged to a transport that no longer exists.
+    //
+    // THE ORDER IS THE POINT, AND IT USED TO BE THE WRONG WAY ROUND. This block
+    // stood ABOVE the setKeying(false) — posting the unmute ahead of a queued
+    // MOX-off, which is the exact posting order this change removes from
+    // applyKeying(), reproduced on the relink path. It was not a live
+    // regression: EP2 stops when the link drops, the gateware's own watchdog
+    // halts the transmission, and the PA is long down before a relink runs. But
+    // ordering is what #5497 is about, and a counter-example sitting in the
+    // same file is what a future reader copies (ten9876, #5850 review). Costs
+    // nothing to put right.
+    if (m_unkeyUnmuteTimer) {
+        m_unkeyUnmuteTimer->stop();
+    }
+    applyRxAudioMute(false);
     // A fresh transport starts unkeyed by construction; an old connection's
     // stop must not be queued into it with a newly acquired operation.
 }
