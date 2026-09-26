@@ -4038,6 +4038,17 @@ target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
 add_test(NAME shortcut_manager_test COMMAND shortcut_manager_test)
 
+# Actual Qt key delivery, socket-free; no radio or transmitter is constructed.
+add_executable(window_shortcut_test
+    tests/window_shortcut_test.cpp
+    src/core/ShortcutManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(window_shortcut_test PRIVATE src)
+target_link_libraries(window_shortcut_test PRIVATE Qt6::Widgets Qt6::Test)
+add_test(NAME window_shortcut_test COMMAND window_shortcut_test)
+set_tests_properties(window_shortcut_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(antenna_alias_test
     tests/antenna_alias_test.cpp
     src/models/AntennaAliasStore.cpp
@@ -6593,6 +6604,7 @@ set(AETHER_SETTINGS_CONSUMERS
     s_meter_geometry_test
     qrz_callsign_test
     shortcut_manager_test
+    window_shortcut_test
     antenna_alias_test
     mqtt_settings_test
     mqtt_radio_state_test
