@@ -12,6 +12,7 @@
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+#include "core/backends/hl2/Hl2BandscopeHeadroom.h"
 #include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2GainSplit.h"
@@ -6174,10 +6175,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // requirement beside it would describe a rule that is not in force.
     if (m_autoGainConfig.requireHeadroomToRelease) {
         const AetherSDR::hl2::HeadroomObservation h =
-            AetherSDR::hl2::bandscopeHeadroom(
-                m_bandscopeBlock,
-                m_bandscopeBlockClock.isValid()
-                    ? m_bandscopeBlockClock.elapsed() : -1);
+            AetherSDR::hl2::bandscopeHeadroom(m_bandscopeBlock,
+                                              bandscopeBlockAgeMs());
         // How much room the step needs: the step, plus the gate's sampling
         // bias, plus the configured margin. This is the number the reading is
         // actually compared against, so publishing it saves an operator from
@@ -6693,7 +6692,62 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // "Link", where the last section marker left them, put the two at opposite
     // ends of the dialog. (PR #5650 review round 3.)
     section("adcPeakDbfs", QStringLiteral("Converter"));
-    const bool haveBlock = m_bandscopeBlock.samples > 0;
+    // TWO QUESTIONS, NOT ONE, AND THE ROWS BELOW DIVIDE ON WHICH THEY ANSWER.
+    //
+    // `haveObservation` is "has a block ever arrived". `haveBlock` is "is the
+    // newest one still describing now". Those were the same test here until
+    // this changed, and the gap between them is a defect with a measurement
+    // behind it: stop the EP4 stream inside a session -- closing the wideband
+    // bandscope does exactly that, with the link up and everything else on the
+    // dialog live -- and the level rows went on publishing the last block the
+    // gate happened to deliver, indefinitely, with no marker. Measured on
+    // hardware: 31 dB of commanded LNA gain moved these three rows 0.00 dB
+    // while adcSlicePeakDbfs0, sampled by a different subsystem, moved 19.04
+    // dB over the same steps. An earlier bench leg caught a pair frozen 21.17
+    // dB away from the radio's actual operating point.
+    //
+    // resetBandscopeMirrors() already applies exactly this cure at exactly one
+    // edge -- "back to 'never seen', which is what makes the level rows go
+    // ABSENT again rather than keep showing the previous session's last
+    // reading" -- and a gate stopped mid-session is the same sentence with the
+    // link still up. The auto-gain path is handed the age and refuses on it
+    // (see the bandscopeHeadroom() call in stepAutoGain); these rows were
+    // handed nothing. Two readers of one block, one refusing and one
+    // publishing.
+    //
+    // THE EXPIRY IS bandscopeHeadroom()'s OWN, deliberately and not by
+    // coincidence: kHeadroomMaxAgeMs, three MetisClient::kBandscopeSampleMs
+    // gate periods, which Hl2BandscopeHeadroom.h derives as two periods of
+    // block-to-block spacing plus one of slack for a late I/O thread, and
+    // which that header already calls "a DISPLAY AND CONTROL boundary". The
+    // rows and the loop read one block from one gate, so a separately chosen
+    // display threshold would buy nothing and would leave a window in which
+    // the loop refuses a block these rows still publish -- a smaller version
+    // of the bug being fixed.
+    //
+    // WHAT KEEPS A LIVE GATE FROM BLINKING is the producer's period against
+    // this expiry and nothing else: MetisClient::kBandscopeSampleMs is 1000 ms
+    // into kHeadroomMaxAgeMs's 3000 ms, so a running gate may miss two blocks
+    // before a row goes absent. RadioHealthDialog::kRefreshIntervalMs is NOT
+    // the reason and cannot be — a poll rate changes how soon a blink is
+    // OBSERVED, never whether there is one. (This comment asserted otherwise
+    // until PR #5880 review round 2.)
+    //
+    // AND THESE ROWS DO GO ABSENT DURING TRANSMIT. That is a consequence of
+    // this expiry and it is meant. MetisClient::bandscopeInterlocked() holds
+    // the gate off for m_mox, for the radio's OWN ptt, and for
+    // kBandscopeUnkeyHoldoffMs after unkey, and bandscopeArm() refuses
+    // silently on it — so no block arrives while keyed, and three seconds into
+    // an over these four rows read as dashes (JSON null on the bridge) until
+    // unkey plus the hold-off plus one gate period. The honest answer: the
+    // converter is being shown our own PA rather than the band, the sensor is
+    // not sampling it, and the last pre-key number presented as current is
+    // precisely the fabrication this function is fixing. adcObservedAgoMs is
+    // not expired with them and is what says which silence it is.
+    const std::int64_t blockAgeMs = bandscopeBlockAgeMs();
+    const bool haveObservation = m_bandscopeBlock.samples > 0;
+    const bool haveBlock =
+        AetherSDR::hl2::bandscopeBlockIsCurrent(m_bandscopeBlock, blockAgeMs);
     const double peak = haveBlock ? m_bandscopeBlock.peakDbfs() : 0.0;
     const double rms  = haveBlock ? m_bandscopeBlock.rmsDbfs()  : 0.0;
     auto dbfs = [haveBlock](double v) {
@@ -6749,9 +6803,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
                   : QVariant());
     // How old the reading is. A gated sensor's number is a snapshot, and a
     // snapshot with no age on it invites being read as current.
+    //
+    // GATED ON haveObservation, NOT ON haveBlock, and that is the whole reason
+    // the two names exist. This row is what EXPLAINS the four above going
+    // absent: an operator who sees four dashes and an age of 46 810 ms knows
+    // the gate stopped, where four dashes and a fifth dash says only that
+    // something is missing. Expiring the age along with the values would
+    // delete the evidence for the expiry.
     put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),
-        (haveBlock && m_bandscopeBlockClock.isValid())
-            ? QVariant(static_cast<qulonglong>(m_bandscopeBlockClock.elapsed()))
+        (haveObservation && m_bandscopeBlockClock.isValid())
+            ? QVariant(static_cast<qulonglong>(blockAgeMs))
             : QVariant());
     return h;
 }
@@ -7695,9 +7756,7 @@ void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
     // invalid clock is passed as a negative age for the same reason: "never
     // observed" and "observed too long ago" are both Absent, and neither is a
     // headroom of zero.
-    obs.headroom = bandscopeHeadroom(
-        m_bandscopeBlock,
-        m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1);
+    obs.headroom = bandscopeHeadroom(m_bandscopeBlock, bandscopeBlockAgeMs());
 
     const AutoGainAction a = autoGainStep(m_autoGainState, obs, m_autoGainConfig);
     m_autoGainState = a.next;
@@ -8496,6 +8555,21 @@ void Hl2Backend::resetIoBoardSchedule()
         m_ioBoardThrottle->stop();
     m_ioBoardSchedule.reset();
     m_ioBoardBandKey.clear();
+}
+
+// How old the mirrored bandscope block is, in the one encoding every consumer
+// of it already expects: a NEGATIVE age means "never observed", which is what
+// bandscopeBlockIsCurrent() and bandscopeHeadroom() both turn into Absent
+// rather than into a headroom of zero.
+//
+// ONE DEFINITION, because there are three readers — the auto-gain release rows,
+// the converter rows and stepAutoGain() — and this expression was written out
+// at all three. That is the same drift shape PR #5880 removed from the
+// predicate itself; leaving it in the argument would have re-opened it one
+// level down.
+std::int64_t Hl2Backend::bandscopeBlockAgeMs() const
+{
+    return m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1;
 }
 
 void Hl2Backend::resetBandscopeMirrors()

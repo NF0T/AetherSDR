@@ -25,6 +25,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -361,6 +362,10 @@ private:
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
     friend struct Hl2UnkeyHoldTestAccess;
+    // Delivers one bandscope block through MetisClient's own signal and lets
+    // the mirror age, so the converter rows' expiry can be exercised without a
+    // radio, a socket or an EP4 stream. Reaches nothing else.
+    friend struct Hl2HealthBlockTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
@@ -395,6 +400,10 @@ private:
     // the exact failure the connect-time reset exists to prevent, arrived at
     // from the other side (PR #5650 review).
     void resetBandscopeMirrors();
+    // Age of the mirrored bandscope block, negative when none has ever arrived
+    // — the encoding bandscopeBlockIsCurrent() and bandscopeHeadroom() both
+    // read as "never observed". The single definition its three readers share.
+    [[nodiscard]] std::int64_t bandscopeBlockAgeMs() const;
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz, and record the operator's current values
     // into the maps for the band being left. Called from the band-change path
