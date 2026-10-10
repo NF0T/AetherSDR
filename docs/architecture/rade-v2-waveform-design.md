@@ -208,7 +208,7 @@ because §10 discovered them across eleven separate probe sessions and an implem
 have to reconstruct the list by reading all of it.
 
 **🔇 marks a SILENT failure** — no error, no non-zero reply, no crash. The command is accepted, or
-the code compiles and runs, and the result is simply wrong. **23 of the 42 rows are silent**, and
+the code compiles and runs, and the result is simply wrong. **26 of the 46 rows are silent**, and
 several would present during Phase 4 as *"the codec doesn't work"*, which is the most expensive
 possible time to find them. **Every 🔇 row wants a regression test**, because code review cannot
 catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
@@ -236,6 +236,9 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | X3 | Discard the ~1 s startup burst before measuring rate (it reads ~28 kHz) | wrong rate | §10.3 |
 | X4 | **No muting.** `audio_mute=0` with the slice in the waveform mode | — | §10.3 |
 | X5 | A waveform-mode slice contributes **exactly zero** to the monitor until we feed it | — | §10.6 |
+| X6 | 🔇 **The library's Rx AGC is ON by default** (`rade_c` ≥ `989770e7`). Any path that must declare "no AGC in the path" — Level 1 above all — has to call `rade_rx_set_agc(r, 0)` **explicitly** | the Level 1 signal-path declaration is simply false, with no error and, on a known-level file, **no change in the loss figure to hint at it** | §10.21 |
+| X7 | 🔇 **Do not pass NULL for `rade_rx()`'s `eoo_out`** until `freedv/rade_c#26` lands — even though `RadeAPIUse.md` tells V2 callers to, and we do at all three call sites | reported crash. Conditional (it has never fired for us), so it is a latent inherited hazard rather than a reproducible bug | `rade_c#26` |
+| X8 | 🔇 **A single NaN or Inf input sample permanently stops the V2 receiver** (`rade_c#26`, unmerged). Our RX ingests real radio audio through a resampler chain, so this is reachable | decode stops for the rest of the session with no error; looks exactly like a dead codec | `rade_c#26` |
 
 ### Emit — applies to BOTH directions
 
@@ -259,6 +262,7 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | T7 | **Upper sideband is correct** — `DIGU` puts our audio above the dial | — | §10.11 |
 | T8 | `TX_FAULT` / `TIMEOUT` / `STUCK_INPUT` all → `CANCEL`; needs an explicit cancel path | no recovery | §10.5 |
 | T9 | 🔇 **The 8→24 kHz TX resampler's FIR memory holds the tail of the EOO.** Use `ReqTransBand=45` (**8.6 ms** measured) — **not** the default (**297 ms** measured) — *and* `flush()` the resampler at end of over, *and* keep the §7.1 T3 drain running at least `latencySamples()` longer | far end never sees end-of-over; **nothing errors** | §7.1a below, `resampler_flush_test` |
+| T10 | 🔇 **Completing a deferred unkey must go through the captured `TransmitModel::PttRelease`**, not a bare `setTransmit(false)`. Capture it in the `PttOffHook` and call `release.release()`; fall back to `setTransmit(false)` only for an unkey that was never intercepted (hardware PTT, interlock) | the release owns **that over's** cancellation fence, so a bare `setTransmit(false)` can unkey a **NEWER** over that started while the V2 tail was still draining. Nothing reports it — the carrier simply drops mid-transmission | `TransmitModel.h`, V1's hook |
 
 ### Mode identity / GUI (Phase 3)
 
@@ -2465,17 +2469,154 @@ that half.
 everything else held fixed. Eight mechanisms had been eliminated one at a time before that, each on
 its own single-variable test, and the answer was a variable that no single-variable test had varied.
 
+### 10.21 The re-vendor — `rade_c@c8a3dc15`, 2026-10-10
+
+The V2 tree had been pinned at `5374c520` (2026-07-13) and was **47 commits behind**. This records
+what the refresh changed, because the API delta is **purely additive** — nothing removed, no
+signature altered, no source file added or removed (64 at both commits) — which means every risk
+in it is *behavioural*, and behavioural risk does not fail to compile.
+
+#### The local delta set was measured, not recalled
+
+Our `src/` was diffed against the upstream tarball, CRLF-normalised, **before and after** the copy.
+Both times:
+
+- **10 deleted** upstream test/tool programs we do not build
+- **0 added**
+- **exactly 1 modified: `rade_api.h`** — the Win32 static-link `RADE_EXPORT` gate
+
+That one modification does **not** textually collide with upstream's changes (ours is at lines
+~39–67, upstream's five hunks all start at line 76 or later), so re-applying it is mechanical
+rather than a merge. **Re-run that comparison as the control on any future re-vendor** — it is the
+only thing that proves a delta was not silently dropped. Model weights were verified byte-identical
+across the refresh, so model-level interop with current freedv-gui is preserved.
+
+#### Four behavioural changes, and what each forced
+
+**1. The Rx input AGC moved INTO the library, on by default.** `989770e7` ported
+`radae_v2.py`'s AGC; `3ec7453b` then replaced its memoryless per-block RMS with a **persistent IIR
+power estimate** (`AGC_ALPHA 0.99875`, τ ≈ 0.1 s). `src/core/RadeV2RxAgc.h` reproduced the
+*memoryless* form — the one upstream replaced — and is **deleted**: two cascaded ±20 dB normalisers
+is not twice as good, it moves the operating point. The engine, the loopback and the decode tool
+now share the library's AGC *by construction* rather than by sharing a header, which was the
+original point of sharing one.
+
+> **A silent correctness consequence worth its own line.** Level 1's signal-path declaration says
+> no AGC is in the path. With the library's AGC on by default, that declaration was **false the
+> moment we re-vendored**, and nothing would have said so — the loss figure was unaffected. The
+> loopback now calls `rade_rx_set_agc(rx, 0)` explicitly, so the declaration is *enforced* rather
+> than asserted, and `--rx-agc` switches the library's AGC on instead of a local copy of the idea.
+
+**2. The Tx SSB BPF, 300–2700 Hz, on by default** (`d5da802c`), applied to data **and** EOO through
+one persistent filter, because the model was trained under it. `RADE_NO_TX_BPF` opts out. This
+retires §7.1 T6. Measured against its own absence via `rade_v2_loopback --no-tx-bpf`:
+
+| config | loss | synced / decoded | SNR |
+|---|---|---|---|
+| BPF on (default) | **0.080** | 2473 / 1237 | 19.3 dB |
+| BPF off | 0.081 | 2474 / 1237 | 19.3 dB |
+| + our TX chain, BPF on | **0.080** | 2458 / 1229 | 19.3 dB |
+| + our TX chain, BPF off | 0.083 | 2458 / 1229 | 19.1 dB |
+
+It slightly **helps**, more so through our own TX chain — which is what "trained under this filter"
+predicts.
+
+> **A hypothesis of ours, retired by this measurement.** We had flagged that a ~101-tap FIR applied
+> in place would strand roughly half its length of EOO energy in filter memory at unkey — the same
+> shape as T9's resampler problem. It does not: the queued tail is unchanged at **3087 samples
+> (128.6 ms = 2880 EOO + 207 flushed resampler memory)** and sync and decode counts are identical
+> with the filter on or off. T9's arithmetic needs no change.
+
+**3. `timing_adj` was never enabled** in the version we had vendored — dead code (upstream #15),
+and the cause of upstream #8, where feature loss varied with where sync landed in the frame. It is
+now live. **4. A `limit_pitch` clamp** was added to the V2 decoder's feature path (#16). Both
+change decode behaviour, so a shift in Level 1 after a re-vendor is not automatically our
+regression — re-measure rather than tune.
+
+#### `rade_get_stats()` — new, and the observable we were missing
+
+Per-`rade_rx()` diagnostics: `sync`, `delta_hat`, `delta_hat_g`, `freq_offset`, **`gain`**,
+`snr_est`. Two uses:
+
+- It satisfies §7.1b's requirement that any RAD2 UI show **SNR beside sync** from a supported API
+  rather than a side channel.
+- `gain` is the direct observable for AGC state, and it settled a question an input-level sweep
+  could not: **exactly 1.0000 across all 2487 steps with the AGC off**, mean 1.0197 (0.96–1.09)
+  with it on.
+
+> **Method note, because the failed attempt is instructive.** The first control tried was
+> attenuating the input WAV by −20 and −30 dB, expecting the AGC to rescue it. Loss went 0.104 and
+> 0.562 with the AGC on or off, near-identically — the control did not discriminate. The reason is
+> that the attenuation hit the **speech** stage, while the AGC acts on **modem** samples whose
+> amplitude the modulator sets regardless of speech level. There was no level error to correct;
+> quiet speech simply encodes worse. **Wrong stage, not a wrong conclusion** — and the library's
+> own `gain` field answered in one run what the sweep could not answer at all.
+
+#### Level 1 after the re-vendor
+
+Upstream `wav/all.wav`, `loss.py --clip_start 100 --clip_end 300` against `radae` main:
+
+| config | loss |
+|---|---|
+| library AGC off — **the declared Level 1 path** | **0.080** |
+| library AGC on (`--rx-agc`) | 0.080 |
+| our TX chain inserted | 0.080 |
+| previous recorded baseline | 0.081 |
+
+Pass threshold 0.0902. `rx: 2487 steps, 1237 decoded, 2473 synced, SNR 19.3 dB`.
+
+Worth contrasting: **our memoryless AGC used to move this figure 0.081 → 0.092**, i.e. it actively
+hurt on a known-level file, which is why it had to stay out of the Level 1 path. Upstream's IIR AGC
+leaves it at 0.080 either way, because on a loopback whose modem level is already correct it has
+nothing to correct.
+
+#### Open upstream items this pin inherits
+
+- **`drowe67/radae#81` (EOO tuning, open)** — proposes revisiting the detection threshold and
+  possibly the number of pilot symbols. The 128.6 ms tail above is therefore current, not settled.
+- **`freedv/rade_c#26` (open, unmerged)** — six offered fixes, two of which are on our path:
+  `rade_rx()` crashing when `eoo_out` is **NULL**, which is what `RadeAPIUse.md` tells V2 callers to
+  do and what we pass at all three of our call sites; and **a single NaN or Inf input sample
+  permanently stopping the V2 receiver**, which matters because our RX ingests real radio audio
+  through a resampler chain. Neither has bitten us in practice, so the crash is conditional — but
+  both are inherited hazards rather than hypotheticals. See §7.1 R-rows.
+- **`freedv/rade_c#24` (open)** — the macOS build break that upstream's new three-OS CI caught.
+  Fixed by PR #25 (merged), but the issue is still open; see §18.
+
+We deliberately did **not** wait for #26. Waiting for an unmerged issue, then the next one, is an
+unbounded hold, and `c8a3dc15` is the SHA the whole ecosystem is building against.
+
 ## 11. Fidelity & Licensing
 
-**Fidelity.** The waveform *transport* is 24 kHz float — equal to internal RADEv1 (§8, 1a). The
-only degradation is the radio's ~2.8 kHz monitor round-trip (§8, 1b), which we avoid by rendering
-locally. Net: RADEv2-in-process delivers **full-bandwidth** decoded speech, matching V1 and beating
-the off-box container (which is stuck routing decoded audio back through the capped monitor).
+**Fidelity — CORRECTED 2026-10-10.** This paragraph was a leftover from the superseded
+local-render design and was wrong twice. The waveform *transport* is 24 kHz float, equal to
+internal RADEv1 (§8, 1a) — that part holds. But the "~2.8 kHz monitor round-trip" was
+**refuted** by §10.7: the return path is flat to at least 8 kHz and is not shaped by the
+registered `rx_filter`; the apparent cap was ordinary SSB slice audio measured on a stream our
+injection never reached (§10.6 T1). And we do **not** "avoid it by rendering locally" — §9.1 and
+§16 Q1 decided **option B, the waveform return path**, precisely because local render *is* the
+parallel audio side-channel §2 sets out to remove. Net: RADEv2-in-process delivers
+full-bandwidth decoded speech through the radio's own audio path, so slice volume and mute work
+and other clients hear it for free.
 
-**Licensing.** RADE codec is BSD (`rade_api.h`). The Flex waveform provider protocol is a public
-interface; we implement it **clean-room** against the public `waveform-sdk` and AetherSDR's own
-VITA-49 stack, so no GPL-3.0 `smartsdr-dsp` code is linked into the AetherSDR binary. The V2 vendor
-bump updates `THIRD_PARTY_LICENSES` with full provenance.
+**Licensing.** Two vendored trees, both **BSD-2-Clause**, both linked rather than
+read-for-protocol:
+
+- `third_party/radae_v2` — the codec, `freedv/rade_c@c8a3dc15` (`rade_api.h`). One local delta:
+  the Win32 static-link `RADE_EXPORT` gate (§10.21).
+- `third_party/radae_v2_text` — the callsign/text channel, `tmiw/freedv-backend@radev2-dev`,
+  Copyright (c) 2026 Mooneer Salem. **All eight `pipeline/` files are byte-identical to upstream**,
+  hash-verified at vendor time. The single addition is a ~50-line `util/logging/ulog.h` shim: the
+  tree **mirrors upstream's directory shape** so `rade_text.cpp`'s
+  `#include "../util/logging/ulog.h"` resolves to the shim with no edit to vendored source, which
+  is what keeps the next re-vendor a straight copy. The shim maps upstream's two used macros onto
+  the `aether.radev2.text` Qt logging category rather than vendoring ~1000 lines of logging
+  framework to serve six call sites.
+
+The Flex waveform provider protocol is a public interface; we implement it **clean-room** against
+the public `waveform-sdk` and AetherSDR's own VITA-49 stack, so no GPL-3.0 `smartsdr-dsp` code is
+linked into the AetherSDR binary. Both vendor drops update `THIRD_PARTY_LICENSES` with full
+provenance, and each tree carries its own `AETHER_VENDORING.md`.
 
 ## 12. Multi-backend forward-compatibility
 
