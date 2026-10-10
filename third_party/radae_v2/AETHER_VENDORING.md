@@ -1,12 +1,58 @@
-# Vendoring: RADE V2 (radae_nopy)
+# Vendoring: RADE V2 (rade_c)
 
-- **Upstream:** https://github.com/drowe67/radae_nopy
-- **Branch:** `dr-radev2`
-- **Commit:** `5374c52013aaded4264b605ba8abdafdef872f43` (2026-07-14, David Rowe)
+- **Upstream:** https://github.com/freedv/rade_c  — **the repo MOVED**; see below
+- **Branch:** `main`
+- **Commit:** `c8a3dc156045cae2cd251e1a4be0c304c9ddf2f9` (2026-10-07)
 - **Licence:** BSD-2-Clause (see `LICENSE`)
 - **API guide:** `RadeAPIUse.md`, shipped by upstream.
 
-Vendored 2026-07-28 for RFC `docs/architecture/rade-v2-waveform-design.md` stage 6.
+Originally vendored 2026-07-28 from `drowe67/radae_nopy@dr-radev2` for RFC
+`docs/architecture/rade-v2-waveform-design.md` stage 6. **Re-vendored 2026-10-10.**
+
+## The upstream repo moved (2026-07-13)
+
+The C port is now **`freedv/rade_c`** under the FreeDV organisation.
+`drowe67/radae_nopy` is dormant — its `dr-radev2` branch is frozen at `5374c520`,
+which is exactly what we had vendored, and that commit is also `rade_c`'s history
+seed. So the move is continuous: no re-baselining was needed, only a content
+refresh. `drowe67/radae`'s README now points at `rade_c` for "deployment and
+distribution".
+
+**`c8a3dc15` is the commit FreeDV's own test builds compile** — freedv-backend's
+`cmake/BuildRADE.cmake` tracks `rade_c` `main`. Matching it is what makes us
+interoperable with the beta freedv-gui 3.0 used by the RADE V2 test campaign.
+Model weights are unchanged since 2026-05-02 and were verified byte-identical
+across this re-vendor, so interop is preserved at the model level.
+
+### What the 2026-10-10 refresh brought in (47 upstream commits, 14 files)
+
+- **Rx input AGC, on by default** (`989770e7`, refined to an IIR power estimate in
+  `3ec7453b`). This supersedes our own `src/core/RadeV2RxAgc.h`, which reproduced
+  the *memoryless* shape upstream replaced; that header is deleted. Disable with
+  `rade_rx_set_agc(r, 0)` — which the Level 1 loopback now does explicitly, so the
+  verification report's "no AGC in the path" declaration is enforced rather than
+  merely asserted.
+- **Tx SSB BPF 300–2700 Hz, on by default**, applied to data and EOO through one
+  persistent filter (`d5da802c`). The model was trained under this filter. Opt out
+  with the new `RADE_NO_TX_BPF` flag.
+- **`timing_adj` was never enabled** in the version we had vendored — dead code
+  (`f1d3a684`, upstream issue #15). It is now on, which is also the fix for
+  upstream #8 (loss varying with where sync lands in the frame).
+- **`limit_pitch` clamp** added to the V2 decoder feature path (`00d03329`, #16).
+- **BPF and V1 rx phase renormalisation** (`5cb24369`, `a2d77e85`, #14) — the
+  long-run magnitude drift that made SNR read −18…−20 dB while still in sync.
+  This tree gets the fix for free; `third_party/radae` (V1) needs it applied
+  separately.
+- **`rade_get_stats()`** — per-step sync/timing/frequency-offset/**AGC gain**/SNR.
+- **`RADE_INT16_SCALE`**, and EOO comments corrected: `rade_tx_eoo()` and
+  `rade_n_tx_eoo_out()` are documented "V1 and V2" (they always worked for V2 —
+  our own reading of `rade_api.c` had established that before upstream fixed the
+  comment).
+
+The API delta is **purely additive**: nothing removed, no signature changed, and
+no source files added or removed (64 at both commits). Our `RADE_V2_SOURCES` list
+in the top-level `CMakeLists.txt` therefore needed no edit — **the risk in this
+refresh is entirely behavioural, which is the kind that does not fail to compile.**
 
 ## Why this is a SEPARATE tree from `third_party/radae`
 
@@ -40,6 +86,16 @@ acceptable on the development branch and disappears when V1 is deleted.
 
 Kept deliberately minimal. Anything here must be re-applied on the next
 re-vendor.
+
+> **The set below was MEASURED, not recalled, at the 2026-10-10 re-vendor** — our
+> `src/` was diffed against the upstream tarball (CRLF-normalised) before and
+> after. Result both times: **10 deleted tool files, 0 added, exactly 1 modified
+> (`rade_api.h`)**. Re-run that comparison as the control on any future re-vendor;
+> it is the only thing that proves a delta was not silently dropped.
+>
+> The `rade_api.h` delta also does **not** textually collide with upstream's
+> changes — ours sits at lines ~39–67, upstream's hunks all start at line 76 or
+> later — so re-applying it is mechanical rather than a merge.
 
 1. **Upstream test/tool programs removed** — not built by AetherSDR:
    `rade_ber_test.c`, `rade_bpf_test.c`, `rade_dec_v2_test.c`,
