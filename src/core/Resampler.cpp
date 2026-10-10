@@ -10,7 +10,7 @@ Resampler::Resampler(double srcRate, double dstRate, int maxBlockSamples, double
     : m_srcRate(srcRate)
     , m_dstRate(dstRate)
     , m_maxBlockSamples(maxBlockSamples)
-    , m_reqTransBand(reqTransBand)
+
     , m_resampler(std::make_unique<r8b::CDSPResampler24>(srcRate, dstRate, maxBlockSamples, reqTransBand))
     , m_groupDelayInputFrames(m_resampler->getInLenBeforeOutPos(0))
 {
@@ -61,17 +61,6 @@ QByteArray Resampler::flush()
     return result;
 }
 
-void Resampler::reset()
-{
-    // r8b has no state-clearing call that also re-establishes the prewarmed
-    // condition, so rebuild. Cheap next to what it prevents, and it guarantees
-    // the new stream starts from exactly the constructor's state rather than
-    // from something that merely resembles it.
-    m_resampler = std::make_unique<r8b::CDSPResampler24>(
-        m_srcRate, m_dstRate, m_maxBlockSamples, m_reqTransBand);
-    m_flushed = false;
-    prewarm();
-}
 
 QByteArray Resampler::process(const float* in, int numSamples)
 {
@@ -225,6 +214,7 @@ QByteArray Resampler::processStereoToStereo(const float* stereoIn, int numStereo
 void Resampler::reset()
 {
     m_resampler->clear();
+    m_flushed = false;
     prewarm();
 }
 
