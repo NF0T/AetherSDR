@@ -633,7 +633,7 @@ else()
     endif()
 endif()
 
-# ─── RADE V2 (radae_nopy@dr-radev2) ─────────────────────────────────────────
+# ─── RADE V2 (freedv/rade_c@main) ─────────────────────────────────────────
 # Unified V1+V2 library; V2 is selected at runtime with RADE_MODE_V2 (0x10).
 # See third_party/radae_v2/AETHER_VENDORING.md for provenance and local deltas.
 set(RADE_V2_DIR ${CMAKE_SOURCE_DIR}/third_party/radae_v2)
@@ -696,9 +696,34 @@ if(ENABLE_RADE_V2 AND EXISTS "${RADE_V2_DIR}/src/rade_api.h")
         COMPILE_FLAGS "${RADE_WARN_FLAG} -DIS_BUILDING_RADE_API=1 -DRADE_PYTHON_FREE=1"
         INCLUDE_DIRECTORIES "${RADE_V2_DIR}/src"
     )
+    # The V2 callsign/text channel. A SEPARATE vendored tree because it comes
+    # from a different upstream (tmiw/freedv-backend, the shared backend
+    # freedv-gui builds on) than the codec, and moves on its own schedule.
+    # BSD-2-Clause. See third_party/radae_v2_text/AETHER_VENDORING.md.
+    #
+    # Warnings suppressed on the same grounds as the codec: third-party source
+    # we re-vendor wholesale, so a warning is noise we cannot act on without
+    # forking it.
+    #
+    # The include path is the tree ROOT as well as pipeline/, because
+    # rade_text.cpp does #include "../util/logging/ulog.h" relative to itself.
+    # Mirroring upstream's directory shape is what keeps the vendored sources
+    # byte-identical and makes the next re-vendor a straight copy.
+    set(RADE_V2_TEXT_DIR ${CMAKE_SOURCE_DIR}/third_party/radae_v2_text)
+    set(RADE_V2_TEXT_SOURCES
+        ${RADE_V2_TEXT_DIR}/pipeline/rade_text.cpp
+        ${RADE_V2_TEXT_DIR}/pipeline/ldpc_encode.cpp
+        ${RADE_V2_TEXT_DIR}/pipeline/ldpc_decode.cpp
+    )
+    set_source_files_properties(${RADE_V2_TEXT_SOURCES} PROPERTIES
+        COMPILE_FLAGS "${RADE_WARN_FLAG}"
+        INCLUDE_DIRECTORIES "${RADE_V2_TEXT_DIR};${RADE_V2_TEXT_DIR}/pipeline"
+    )
+    list(APPEND RADE_SOURCES ${RADE_V2_TEXT_SOURCES})
+
     set(RADE_FOUND TRUE)
     set(RADE_V2_FOUND TRUE)
-    message(STATUS "RADE V2 enabled (radae_nopy@dr-radev2, vendored Opus snapshot)")
+    message(STATUS "RADE V2 enabled (freedv/rade_c + freedv-backend LDPC text channel)")
 elseif(ENABLE_RADE_V2)
     set(RADE_V2_FOUND FALSE)
     message(WARNING "ENABLE_RADE_V2=ON but no source at ${RADE_V2_DIR}. "
@@ -1285,7 +1310,6 @@ set(CORE_SOURCES
     src/core/NnrFilter.cpp
     src/core/RADEEngine.cpp
     src/core/RADEV2Engine.cpp                # RADE V2 codec core (ENABLE_RADE_V2)
-    src/core/RadeV2TextChannel.cpp           # RADE V2 inline-data framing (§9.2)
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
     src/core/SupportBundle.cpp
@@ -3532,6 +3556,10 @@ if(RADE_V2_FOUND)
     # from the same vendored snapshot.
     target_compile_definitions(aethercore PUBLIC HAVE_RADE_V2 HAVE_OPUS IS_BUILDING_RADE_API=1)
     target_include_directories(aethercore PRIVATE ${RADE_V2_DIR}/src)
+    # rade_text.h, the V2 callsign channel's public API (vendored from
+    # freedv-backend). PRIVATE: only RADEV2Engine.cpp needs it, and keeping it
+    # off the interface stops it leaking into every consumer of aethercore.
+    target_include_directories(aethercore PRIVATE ${RADE_V2_TEXT_DIR}/pipeline)
     if(WIN32)
         target_link_libraries(aethercore PRIVATE opus)
     else()

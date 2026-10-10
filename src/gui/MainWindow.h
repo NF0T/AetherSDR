@@ -2245,6 +2245,13 @@ private:
     int  m_radeV2SliceId{-1};
     bool m_radeV2TxActive{false};
     bool m_radeV2UnkeyPending{false};
+    // The deferred release captured when PttOffHook intercepts an unkey. It
+    // owns the cancellation fence for THAT over, so completing the unkey must
+    // go through it rather than calling setTransmit(false) — a bare
+    // setTransmit(false) would also unkey a NEWER over that started while the
+    // V2 tail was still draining. Empty when the unkey was not intercepted
+    // (hardware PTT, interlock), which Layer 2 handles separately.
+    TransmitModel::PttRelease m_radeV2PttRelease;
     QMetaObject::Connection m_radeV2MoxConn;
     QMetaObject::Connection m_radeV2ModeConn;
     // Registration is SEPARATE from activation, and the order is forced: the
