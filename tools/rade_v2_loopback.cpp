@@ -36,7 +36,7 @@
 #include <cstdlib>
 #include <QByteArray>
 #include "core/Resampler.h"
-#include "core/RadeV2RxAgc.h"
+
 
 extern "C" {
 #include "rade_api.h"
@@ -97,7 +97,8 @@ int main(int argc, char** argv) {
           "  --tx-chain          insert OUR real TX chain: .real, 8->24k at\n"
           "                      ReqTransBand=45, back to 8k (models the radio path)\n"
           "  --snr <dB>          inject AWGN at this wideband SNR\n"
-          "  --rx-agc            run the live path's RX AGC (RFC 10.20). OFF by\n"
+          "  --rx-agc            enable the LIBRARY's input AGC (rade_c has it on\n"
+          "                      by default; this tool forces it off). OFF by\n"
           "                      default: Level 1 declares no AGC in the path\n"
           "  --vocoder-ref <f>   also write FARGAN's output from the ORIGINAL\n"
           "                      features, with no modem at all\n"
@@ -128,6 +129,13 @@ int main(int argc, char** argv) {
         RADE_USE_C_ENCODER|RADE_USE_C_DECODER|RADE_MODE_V2|RADE_VERBOSE_0);
     struct rade* rx = rade_open(const_cast<char*>("dummy"),
         RADE_USE_C_ENCODER|RADE_USE_C_DECODER|RADE_MODE_V2|RADE_VERBOSE_0);
+
+    // The library's input AGC is ON by default (freedv/rade_c 989770e7). Level 1's
+    // signal-path declaration says no AGC is in the path, so it must be turned OFF
+    // explicitly — doing nothing silently makes that declaration false. --rx-agc
+    // now switches the LIBRARY's AGC on; it used to switch on a local copy of the
+    // same idea, which upstream has since superseded.
+    rade_rx_set_agc(rx, rxAgc ? 1 : 0);
     LPCNetEncState* enc = lpcnet_encoder_create();
     FARGANState fargan; fargan_init(&fargan); bool warmed=false;
 
@@ -213,6 +221,10 @@ int main(int argc, char** argv) {
     (void)featTx;   // filled above when --features-tx was given
     std::vector<short> out;
     size_t pos=0; int steps=0, decoded=0, syncBlocks=0; float snrSum=0; int snrN=0;
+    // rade_get_stats() (rade_c c8a3dc15) exposes the receiver's own view per step.
+    // gain is the AGC factor actually applied, so it is the direct observable for
+    // whether --rx-agc took effect: exactly 1.0 means the AGC is off.
+    double gainSum=0; int gainN=0; float gainMin=1e9f, gainMax=-1e9f;
     // §10.20 — the RX AGC, OFF BY DEFAULT AND DELIBERATELY SO.
     //
     // The live path (RADEV2Engine) and the real-capture decode tool always run
@@ -228,7 +240,7 @@ int main(int argc, char** argv) {
     // moves Level 1 from 0.081 (PASS) to 0.092 (FAIL). That is the right
     // trade on a real receive path — the same capture goes from 0 to 5
     // callsign frames — and the wrong one here.
-    std::vector<RADE_COMP> rxBlk;
+
     static_assert(sizeof(RADE_COMP) == 2 * sizeof(float),
                   "RADE_COMP must be two packed floats to alias as interleaved I/Q");
 
@@ -236,18 +248,16 @@ int main(int argc, char** argv) {
         int nin = rade_nin(rx);
         int hasEoo=0;
         RADE_COMP* rxPtr = &modem[pos];
-        if (rxAgc) {
-            rxBlk.assign(modem.begin() + qsizetype(pos),
-                         modem.begin() + qsizetype(pos) + nin);
-            const float agc = AetherSDR::RadeV2RxAgc::blockGainInterleaved(
-                reinterpret_cast<const float*>(rxBlk.data()), nin);
-            for (int k = 0; k < nin; ++k) { rxBlk[size_t(k)].real *= agc;
-                                            rxBlk[size_t(k)].imag *= agc; }
-            rxPtr = rxBlk.data();
-        }
         int nOut = rade_rx(rx, featOut.data(), &hasEoo, nullptr, rxPtr);
         pos += size_t(nin); steps++;
         if (rade_sync(rx)) { syncBlocks++; snrSum += float(rade_snrdB_3k_est(rx)); snrN++; }
+        {
+            struct rade_stats st;
+            rade_get_stats(rx, &st);
+            gainSum += st.gain; gainN++;
+            if (st.gain < gainMin) gainMin = st.gain;
+            if (st.gain > gainMax) gainMax = st.gain;
+        }
         if (nOut > 0) {
             decoded++;
             // Decoder output, before FARGAN. This is the other half of what
@@ -271,6 +281,9 @@ int main(int argc, char** argv) {
     }
     printf("rx: %d steps, %d decoded, %d synced, SNR %.1f dB\n",
            steps, decoded, syncBlocks, snrN? snrSum/snrN : 0.0f);
+    printf("rx agc: %s, gain mean %.4f min %.4f max %.4f\n",
+           rxAgc ? "ON" : "off (forced)",
+           gainN? gainSum/gainN : 0.0, gainN? gainMin : 0.0f, gainN? gainMax : 0.0f);
     printf("out: %zu samples = %.2f s\n", out.size(), double(out.size())/16000.0);
     writeWav16(outPath, out, 16000);
 
