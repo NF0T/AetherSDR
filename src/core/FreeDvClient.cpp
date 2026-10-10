@@ -578,11 +578,24 @@ void FreeDvClient::reportFreqChange(double freqMhz)
     });
 }
 
+void FreeDvClient::setReportingMode(const QString& mode)
+{
+    if (mode.isEmpty()) return;   // an empty mode would publish an unlabelled spot
+    QMutexLocker lock(&m_reportingModeMutex);
+    m_reportingMode = mode;
+}
+
+QString FreeDvClient::reportingMode() const
+{
+    QMutexLocker lock(&m_reportingModeMutex);
+    return m_reportingMode;
+}
+
 void FreeDvClient::reportTxState(bool transmitting)
 {
     if (!m_reportingEnabled || !m_connected.load()) return;
     sendEvent("tx_report", QJsonObject{
-        {"mode",         QString("RADEV1")},
+        {"mode",         reportingMode()},
         {"transmitting", transmitting}
     });
 }
@@ -623,7 +636,7 @@ void FreeDvClient::updateRxCallsign(const QString& callsign)
     qCDebug(lcDxCluster) << "FreeDvClient: sending immediate rx_report for EOO callsign" << callsign;
     sendEvent("rx_report", QJsonObject{
         {"callsign", m_rxCallsign},
-        {"mode",     QString("RADEV1")},
+        {"mode",     reportingMode()},
         {"snr",      static_cast<int>(m_lastSnr)}
     });
 }
@@ -636,7 +649,7 @@ void FreeDvClient::onSnrTimer()
                          << m_rxCallsign << "' snr=" << m_lastSnr;
     sendEvent("rx_report", QJsonObject{
         {"callsign", m_rxCallsign},
-        {"mode",     QString("RADEV1")},
+        {"mode",     reportingMode()},
         {"snr",      static_cast<int>(m_lastSnr)}
     });
 }
