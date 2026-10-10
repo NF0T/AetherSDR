@@ -18,7 +18,20 @@ extern "C" {
 #include "lpcnet.h"
 #include "fargan.h"
 }
+// Already declares extern "C" itself, so it must NOT be nested in the block
+// above — upstream wrote it for C++ callers.
+#include "rade_text.h"
 #endif
+
+// Declared by the ulog shim in third_party/radae_v2_text/util/logging/ulog.h,
+// and defined here so every RADE V2 category is registered in one place.
+//
+// GLOBAL scope on purpose: the vendored rade_text.cpp is upstream code at
+// global scope, so its qCDebug() resolves ::lcRadeV2Text(). Defining this
+// inside namespace AetherSDR compiles here and then fails at link with
+// 'undefined reference to lcRadeV2Text()' from rade_text.cpp.obj. Our own
+// uses inside the namespace still find it by ordinary lookup.
+Q_LOGGING_CATEGORY(lcRadeV2Text, "aether.radev2.text")
 
 namespace AetherSDR {
 
@@ -100,7 +113,16 @@ bool RADEV2Engine::start() {
 
     // Symbols buffered from a previous session cannot align with this one's
     // bit stream, and a frame straddling the two would be pure fabrication.
-    m_textChannel.reset();
+    if (!m_textChannel) {
+        m_textChannel = rade_text_create();
+        if (m_textChannel) {
+            rade_text_set_rx_callback(m_textChannel, &RADEV2Engine::onTextRx, this);
+        } else {
+            qCWarning(lcRadeV2Text) << "rade_text_create() failed — no callsign"
+                                       " channel this session";
+        }
+    }
+    if (m_textChannel) rade_text_rx_reset(m_textChannel);
 
     // AETHER_RADE_V2_TX_PEAK_DBFS: target peak level for the transmitted modem
     // audio, in dBFS. Unset or 0 = unity, which is the correct default — see
@@ -174,6 +196,11 @@ void RADEV2Engine::stop() {
     m_rade = nullptr;
     rade_finalize();
 
+    if (m_textChannel) {
+        rade_text_destroy(m_textChannel);
+        m_textChannel = nullptr;
+    }
+
     m_rxDownI.reset();
     m_rxDownQ.reset();
     m_rxUp16to24.reset();
@@ -185,7 +212,7 @@ void RADEV2Engine::stop() {
     m_tailDone = false;
     m_farganWarmedUp = false;
     m_synced = false;
-    m_textChannel.reset();
+    if (m_textChannel) rade_text_rx_reset(m_textChannel);
     // Catches an RX-only session, which never reaches the end-of-over path.
     RADE_V2_TAP_RX_FLUSH();
 
@@ -294,12 +321,10 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
             // repeats and desynchronise the bit stream against the sender's.
             const float symbol = rade_rx_get_data_symbol(m_rade);
             emit dataSymbolReceived(symbol);
-            if (const auto decoded = m_textChannel.pushSymbol(symbol)) {
-                qCDebug(lcRadeV2Codec) << "rx text" << decoded->text
-                                  << "confidence" << decoded->confidence
-                                  << (decoded->inverted ? "(inverted)" : "");
-                emit textDecoded(decoded->text, decoded->confidence);
-            }
+            // Upstream's framer calls back on a CRC-valid LDPC decode; see
+            // onTextRx(). The raw signal above is deliberately kept alongside
+            // it — raw symbols are what you want when framing misbehaves.
+            if (m_textChannel) rade_text_rx_symbol(m_textChannel, symbol);
         }
 
         while (int(m_rxFeatAccum.size()) >= kFeaturesPerFrame) {
@@ -373,7 +398,12 @@ void RADEV2Engine::beginTx() {
     m_txSpeech16k.clear();
     m_txFeatAccum.clear();
     m_txOut24k.clear();
-    m_txDataBitPos = 0;
+    // No TX-side text reset here, deliberately. rade_text exposes
+    // rade_text_rx_reset() but nothing for TX: the block cycle runs
+    // continuously and is only re-seeded by rade_text_generate_tx_string().
+    // freedv-gui does the same, and matching it matters more than restarting
+    // the cycle per over would — a receiver joining mid-over relies on copies
+    // being back-to-back, which restarting would not improve.
     m_stats.txTailSamples = 0;
 
     // One tap set per over: cleared here, written when the tail is out.
@@ -443,14 +473,13 @@ void RADEV2Engine::encodePendingFeatures(bool drain) {
         std::copy(m_txFeatAccum.begin(), m_txFeatAccum.begin() + take, featIn.begin());
         m_txFeatAccum.erase(m_txFeatAccum.begin(), m_txFeatAccum.begin() + take);
 
-        // §9.2 — one inline BPSK bit per step, cycled. The PLACEMENT is the
-        // part that matters and is fixed: per step, immediately before the
-        // encode. The bit-to-symbol mapping and the framing above it are
-        // provisional until the V2 ecosystem's convention is settled.
-        if (!m_txDataBits.empty()) {
-            const bool bit = m_txDataBits[m_txDataBitPos];
-            m_txDataBitPos = (m_txDataBitPos + 1) % m_txDataBits.size();
-            rade_tx_set_data_symbol(m_rade, bit ? 1.0f : -1.0f);
+        // §9.2 — one inline BPSK symbol per step, immediately before the encode.
+        // The placement is fixed by rade_api.h; the framing above it is now
+        // upstream's LDPC(112,56) scheme rather than our interim one, so this is
+        // the wire format freedv-gui transmits. rade_text cycles its own block
+        // sequence internally and returns +/-1.0 directly.
+        if (m_textChannel) {
+            rade_tx_set_data_symbol(m_rade, rade_text_tx_next_symbol(m_textChannel));
         }
 
         const int n = rade_tx(m_rade, txOut.data(), featIn.data());
@@ -706,17 +735,51 @@ void RADEV2Engine::cancelTx() {
     }
 }
 
-void RADEV2Engine::setTxCallsign(const QString& callsign) {
-    m_txDataBitPos = 0;
-    m_txDataBits   = RadeV2TextChannel::encode(callsign);
+void RADEV2Engine::onTextRx(void* /*rt*/, const char* text, int length, void* state) {
+    auto* self = static_cast<RADEV2Engine*>(state);
+    if (!self || !text || length <= 0) return;
 
-    // The cycling in encodePendingFeatures() is unchanged: it walks these bits
-    // and wraps, so consecutive copies are back-to-back with no gap, which is
-    // what lets a receiver joining mid-over pick up the next one.
-    qCDebug(lcRadeV2Codec) << "tx text" << RadeV2TextChannel::sanitise(callsign)
-                      << "—" << m_txDataBits.size() << "bits ="
-                      << double(m_txDataBits.size()) / 25.0
-                      << "s per copy at 25 bit/s (framing provisional, §9.2)";
+    const QString decoded = QString::fromLatin1(text, length);
+
+    // Upstream fires this on every CRC-valid copy, repeats included —
+    // de-duplication is the consumer's policy, not the protocol's. A repeat is
+    // also real evidence the link is still up, so it is not noise.
+    qCDebug(lcRadeV2Text) << "rx text" << decoded;
+
+    // A CRC-8-validated LDPC(112,56) codeword, accepted only when belief
+    // propagation converged AND the codeword won its rotation sweep uniquely.
+    // That is a far stronger oracle than rade_sync(), which §7.1b showed stays
+    // lit through a sideband error — so this is the decode-confidence signal
+    // RFC §9.3 gate (c) was waiting for. Confidence is reported as 1.0 because
+    // upstream only calls back on frames that already passed every check; it is
+    // not a soft measure any more, and inventing a fractional one would be
+    // worse than saying so.
+    emit self->textDecoded(decoded, 1.0f);
+}
+
+void RADEV2Engine::setTxCallsign(const QString& callsign) {
+    if (!m_textChannel) {
+        m_textChannel = rade_text_create();
+        if (m_textChannel)
+            rade_text_set_rx_callback(m_textChannel, &RADEV2Engine::onTextRx, this);
+    }
+    if (!m_textChannel) return;
+
+    // Upstream's alphabet is 0-9 A-Z and '/' only, max 32 characters, and it
+    // drops anything else. Passing the raw string is correct: doing our own
+    // sanitising first would only diverge from what the far end expects.
+    const QByteArray utf8 = callsign.toUtf8();
+    rade_text_generate_tx_string(m_textChannel, utf8.constData(), int(utf8.size()));
+
+    // Block count is ceil(chars/8), each block an LDPC(112,56) codeword at one
+    // symbol per ~40 ms step = 4.48 s per block. Upstream cycles the blocks
+    // internally, so consecutive copies stay back-to-back and a receiver
+    // joining mid-over picks up the next one.
+    const int chars  = int(utf8.size() < 32 ? utf8.size() : 32);
+    const int blocks = chars > 0 ? (chars + 7) / 8 : 1;
+    qCDebug(lcRadeV2Text) << "tx text" << callsign << "—" << blocks
+                          << "LDPC(112,56) block(s)," << blocks * 4.48
+                          << "s per full cycle at 25 bit/s";
 }
 
 #else   // !HAVE_RADE_V2 — feature enabled, codec not vendored
