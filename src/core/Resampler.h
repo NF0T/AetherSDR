@@ -54,11 +54,6 @@ public:
     // but subtly wrong" is worse than a hard stop.
     QByteArray flush();
 
-    // Return to a clean, prewarmed state. Discards all filter memory, so any
-    // un-flushed tail is lost by definition. Call between overs, or after
-    // flush() to reuse the instance.
-    void reset();
-
     // True once flush() has been called and reset() has not.
     bool isFlushed() const { return m_flushed; }
 
@@ -78,6 +73,10 @@ public:
 
     // Discard streaming state and consume startup latency again. Call between
     // independent streams, never from the realtime process callback.
+    //
+    // Also clears the flushed state, so this is the one way to make an
+    // instance usable again after the TERMINAL flush() above. Discards all
+    // filter memory, so any un-flushed tail is lost by definition.
     void reset();
 
     // Finish one finite stream. Feeds enough silence to expose the delayed
@@ -99,7 +98,7 @@ private:
     double m_srcRate;
     double m_dstRate;
     int    m_maxBlockSamples;
-    double m_reqTransBand;         // retained so reset() can rebuild identically
+
     std::unique_ptr<r8b::CDSPResampler24> m_resampler;
     int m_groupDelayInputFrames{0};
     std::vector<double> m_inBuf;   // float32 → double conversion buffer
