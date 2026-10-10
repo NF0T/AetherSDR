@@ -83,16 +83,30 @@ samples (6 × `pend_cp` pilot symbols) = **120 ms at 8 kHz** — and the receive
 end-of-transmission detector (`eoo_smooth`, threshold `TEOO`, `eoo_flag` in `rade_rx_v2.c`). It
 carries **no data bits**, unlike V1's. See §9.2 for what this means for PTT.
 
-### 3.3 The V2 C port exists
-The V2 C port lives in **`drowe67/radae_nopy`**, branch `dr-radev2` (not `drowe67/radae`).
+### 3.3 The V2 C port exists — and has MOVED to the FreeDV organisation
+The V2 C port is **`freedv/rade_c`**, branch `main`. It began as `drowe67/radae_nopy@dr-radev2`,
+which is now **dormant** — frozen at `5374c520`, the commit `rade_c`'s own history starts from, so
+the move is continuous rather than a fork. `drowe67/radae`'s README now points at `rade_c` for
+*"deployment and distribution"*.
+
 `rade_api.h` is unified: one opaque `struct rade *` holds both V1 and V2 state; `RADE_MODE_V2
-= 0x10` OR'd into `rade_open()` selects V2. V1 and V2 compile side by side (~108 MB combined
-weight source). We already vendor the V1 C port at `third_party/radae`; the V2 bump replaces it
-from `dr-radev2`.
+= 0x10` OR'd into `rade_open()` selects V2.
+
+**V1 is NOT replaced.** V2 is vendored as a SECOND tree, `third_party/radae_v2`, and selecting it
+deselects V1 at configure time — both define `rade_open`, `rade_tx`, `rade_rx`, so linking them
+together is a duplicate-symbol error rather than a tunable. ~108 MB of combined weight source is
+the price, accepted on a development branch; V1 is removed later as a clean subtraction, never as
+a side effect of adding V2. An earlier draft of this section said the V2 bump "replaces"
+`third_party/radae`; doing that would have deleted V1's callsign subsystem with no compile error
+until link time.
+
+**Pinned at `c8a3dc15` (2026-10-07), deliberately:** that is the commit FreeDV's own test builds
+compile, since freedv-backend's `BuildRADE.cmake` tracks `rade_c` `main`. Matching it is what
+makes us interoperable with the beta freedv-gui 3.0 the RADE V2 test campaign runs. See §10.21.
 
 ## 4. Protocol authority (Constitution Principle I)
 
-- **RADE codec:** `drowe67/radae_nopy` (`rade_api.h`, `RADE_MODE_V2`) — BSD-licensed; vendored
+- **RADE codec:** `freedv/rade_c` (`rade_api.h`, `RADE_MODE_V2`) — BSD-licensed; vendored
   with provenance (the `crdv` clean-room provenance in the D-Star work is the template).
 - **Flex Waveform API:** FlexRadio's public `waveform-sdk` and the documented `waveform`/VITA-49
   wire protocol. We implement a **clean-room** provider against that public protocol; we do **not**
@@ -184,7 +198,8 @@ All new code is gated behind a compile flag **`ENABLE_RADE_V2`** (off by default
 | `RADEV2Engine` | `src/core/` (`libaethercore`) | Worker-thread QObject; codec core with the transport-agnostic seam |
 | `RAD2` mode | `DigitalVoiceModeRegistry` | New `DigitalVoiceModeId::RadeV2` + descriptor (`radioMode "RAD2"`, `underlyingMode "DIGU"` — see §10.1; no `DIGL` variant) |
 | GUI wiring | `src/gui/` | New parallel `activateRADEV2()`; V1's `activateRADE()` untouched |
-| Vendored codec | `third_party/radae` | Re-vendored from `radae_nopy@dr-radev2` (Phase 4; vendor **last**) |
+| Vendored codec | `third_party/radae_v2` | `freedv/rade_c@c8a3dc15`, side by side with V1's `third_party/radae` (§10.21) |
+| Vendored text channel | `third_party/radae_v2_text` | `tmiw/freedv-backend@radev2-dev` — FreeDV's LDPC(112,56) callsign framing (§9.2) |
 
 ## 7.1 Implementation constraints — the measured must-honours
 
@@ -240,7 +255,7 @@ catch them: a reviewer reading `imag = b` has no way to know it should be `-b`.
 | T3 | 🔇 **T1+T2 ⇒ the 120 ms EOO tail needs SYNTHESIZED buffers.** Holding PTT alone emits nothing | far end loses end-of-over detection; **a PTT-duration test passes straight through this** | §10.5, §9.2 |
 | T4 | The radio **holds TX through an underrun** (power sags, carrier stays) | — | §10.9 |
 | T5 | TX path is **linear, no ALC, no compression**; linear above drive ≈0.35 | — | §10.9, §10.10 |
-| T6 | 🔇 **Band-limiting must happen in our own TX chain.** The V2 modulator does no shaping at all and `tx_filter` is ignored | unsuppressed sinc sidelobes | §10.1, §10.10 |
+| T6 | ✅ **RETIRED 2026-10-10 — upstream now band-limits.** `rade_c` ships a 300–2700 Hz Tx SSB BPF applied to data **and** EOO, **on by default** (`RADE_NO_TX_BPF` opts out), because the model was trained under it. The radio's `tx_filter` is still accepted-and-ignored (§10.10) and the radio's own global TX filter (`lo=100 hi=2900`) still brackets the modem, so nothing is left for us to implement. Measured on-vs-off in §10.21 | — | §10.21, §10.10 |
 | T7 | **Upper sideband is correct** — `DIGU` puts our audio above the dial | — | §10.11 |
 | T8 | `TX_FAULT` / `TIMEOUT` / `STUCK_INPUT` all → `CANCEL`; needs an explicit cancel path | no recovery | §10.5 |
 | T9 | 🔇 **The 8→24 kHz TX resampler's FIR memory holds the tail of the EOO.** Use `ReqTransBand=45` (**8.6 ms** measured) — **not** the default (**297 ms** measured) — *and* `flush()` the resampler at end of over, *and* keep the §7.1 T3 drain running at least `latencySamples()` longer | far end never sees end-of-over; **nothing errors** | §7.1a below, `resampler_flush_test` |
@@ -280,23 +295,43 @@ and carries nothing.
 | D3 | The channel is **not a separate carrier**: the symbol rides as the **21st input feature** through the autoencoder's learned latent, and RX recovers it from the *decoder's* output as a **soft** value | — | `rade_tx_v2.c:79`, `rade_rx_v2.c:297` |
 | D4 | Exactly **25 bit/s** — one symbol per step, `RADE_V2_FRAMES_PER_STEP` (4) × 10 ms | — | `rade_v2_constants.h:10` |
 
-> **D3 is the one with design consequences.** Because the data rides inside the same learned
-> representation as the voice, **the data channel's robustness is coupled to the voice channel's** —
-> a callsign is unlikely to survive conditions where the audio is already breaking up. That argues
-> *against* elaborate FEC layered on top and *for* repetition plus a cheap integrity check, which is
-> what §9.2's interim framing does. It also means the soft decision comes free, and it is worth
-> using: magnitude is a per-bit confidence measure for correlation and for soft combining.
+> **D3 is the one with design consequences, and this RFC got them BACKWARDS. Corrected
+> 2026-10-10.** The mechanism in the table is right: the symbol rides as the 21st input feature
+> through the autoencoder's learned latent, and RX recovers a *soft* reconstruction rather than the
+> bit that went in. The soft decision therefore comes free and is worth using — magnitude is a
+> per-bit confidence measure for correlation and for soft combining.
 >
-> Bench measurement (`rade_v2_engine_test`): the callsign survives the autoencoder at confidence
-> 1.0 on a clean signal, with **3 of ~4 available copies validating**, so the channel is not
-> lossless even at 20 dB SNR on a noise-free bench.
+> **What was wrong was the conclusion drawn from it.** Earlier drafts argued that because the data
+> shares the latent with the voice, its robustness is coupled to the voice channel's, so a callsign
+> is unlikely to survive conditions where audio is already breaking up — and therefore that the
+> design should prefer *repetition plus a cheap integrity check* over *elaborate FEC layered on
+> top*. Three things have since undone that:
 >
-> **⚠ ON AIR IT IS FAR WORSE — measured 2026-08-02, and this invalidates a planning assumption.**
-> See §10.14. The raw symbol error rate on a real HF path is **~15–16 %**, at which a 60-bit
-> uncoded frame passes CRC roughly **3 × 10⁻⁵** of the time. **The §9.2 framing as built will
-> essentially never decode over a path like that.** The "repetition plus a cheap integrity check"
-> argument was reasoning from the coupling in D3, not from a measurement; the measurement now
-> exists and disagrees.
+> 1. **The coupling claim itself was measured and refuted.** §10.18 found voice fully intelligible
+>    on a path where the data channel was failing, which is the opposite of coupled degradation.
+>    §10.18's own text already says *"this does confirm §7.1 D3 is wrong"*; this block simply had
+>    not been updated to agree with it.
+> 2. **The measurement that made the case look urgent is void.** The ~15–16 % symbol error rate
+>    this block used to cite from §10.14 was taken through the RX level defect later found in
+>    §10.20 — the receiver was being fed 12 dB low and nothing normalised it. §10.18 invalidated
+>    that evidence base explicitly. **No off-air data-channel error rate we hold is currently
+>    trustworthy**, so neither "the framing will never decode" nor any replacement figure can be
+>    asserted from it.
+> 3. **Upstream chose the opposite and measured the gain.** FreeDV's framing is LDPC(112,56) *plus*
+>    receive combining across repeats — FEC and repetition, not one instead of the other — and
+>    ≥90 % decode of a one-block callsign improves from ≈−1 dB to **≈−6 dB** (AWGN) and +2 dB to
+>    **≈−4.8 dB** (MPP). We adopted it (§9.2).
+>
+> **The generalisable error, worth keeping:** a design argument was derived from a mechanism
+> ("they share a latent, so they must degrade together") and then treated as settled without being
+> measured. When the measurement arrived it disagreed, and when a *second* measurement arrived it
+> turned out the first had been taken on a broken instrument. The mechanism was real throughout;
+> the inference from it was not.
+>
+> Bench measurement that still stands (`rade_v2_engine_test`, loopback, library AGC off): the
+> callsign survives the autoencoder and decodes with **coded BER 0.000** while **raw BER against
+> the un-derotated reference is 0.491** — i.e. the FEC is doing real work even on a clean bench, not
+> merely insuring against a bad channel.
 
 ### Environment
 
@@ -671,10 +706,10 @@ The far-end callsign rides RADE's **own inline data channel** — `rade_tx_set_d
 RADE decoder; the Flex `byte_stream` (below) is local-only and cannot carry over-the-air data. The
 two are different layers, not competing options.
 
-The channel is **raw** — no framing, sync, FEC, or CRC. The upstream V2 test streams MSB-first
-ASCII bits, **cycles the message continuously**, and brute-force-searches for it on RX. So the
-*application* owns the text protocol (serialize the callsign; add sync/CRC/FEC as desired; repeat it
-during the over so a late-joining or re-syncing RX catches the next copy).
+**The C API's channel is raw** — `rade_api.h` offers one sticky float out and one soft float back,
+with no framing, sync, FEC or CRC, and `rade_c`'s own test merely streams MSB-first ASCII and
+brute-force-searches for it on RX. **The protocol above it is not ours to invent, though:** FreeDV
+publishes one, and we now implement it — see below.
 
 **PTT release — improved, but not free.** Because the callsign is continuous and inline, there is
 no need to *drain and assemble* a data-bearing EOO burst, which is what made V1's end-of-over
@@ -685,63 +720,94 @@ drain — roughly an order of magnitude better than V1, not zero. An earlier dra
 claimed "no end-of-over burst" and "near-immediate" PTT release; that was wrong, and the TX design
 must not assume it.
 
-**Open (Phase 4): is V2's EOO reachable through the public API?** `rade_tx_v2_eoo()` exists
-internally, but the public wrapper `rade_tx_eoo()` in `rade_api.h:134` is marked *"V1 only"*. Whether
-the vendored public surface exposes a V2 EOO path — and if not, whether we need one or the modem
-emits it internally — must be settled when we vendor.
+**CLOSED — V2's EOO is reachable, and always was.** `rade_tx_eoo()` carried a `// V1 only`
+comment while `rade_api.c` dispatched on `RADE_MODE_V2` underneath it; reading the dispatch settled
+it before upstream did. Upstream has since corrected the header (`cb04c432`): `rade_tx_eoo()` is
+documented *"Works for both V1 and V2"*, `rade_n_tx_eoo_out()` *"V1 and V2"*, `rade_n_eoo_bits()`
+*"V1 only; returns 0 for V2"*, and `has_eoo_out` is set in both modes.
 
-#### The interim framing — IMPLEMENTED, and built to be deleted
+**Measured through it:** the queued tail is 3087 samples at 24 kHz = **128.6 ms** (2880 of EOO +
+207 of flushed resampler memory). ⚠ Upstream expects to retune the EOO (`drowe67/radae#81`, open),
+so treat 128.6 ms as current rather than settled.
 
-`src/core/RadeV2TextChannel.{h,cpp}` (`rade_v2_text_channel_test`). Provisional in the strict sense:
-it exists so the channel can be exercised end to end before the ecosystem convention lands, and the
-whole protocol is confined to one file so replacing it is a deletion rather than an excavation.
+#### ADOPTED: FreeDV's LDPC(112,56) framing (was: our interim scheme)
 
-```
-┌────────────┬─────┬─────┬──────────────┬─────────┐
-│  Barker-13 │ ver │ len │  N × 6 bits  │ CRC-16  │
-│    sync    │  3  │  4  │   payload    │         │
-└────────────┴─────┴─────┴──────────────┴─────────┘
-     13        3     4        6N            16      = 36 + 6N bits
-```
+**The interim framing is deleted.** `src/core/RadeV2TextChannel.{h,cpp}` and its 18-test suite are
+gone, exactly as this section promised: the whole protocol was confined to one file so replacing it
+would be a deletion rather than an excavation, and that is how it went.
 
-**2.4 s** per copy for `NF0T`, **4.8 s** for a 14-character worst case, repeating back-to-back so a
-receiver joining mid-over catches the next one. Alphabet is 39 values (`A–Z 0–9 / -` and space);
-codes 39–63 are unused and therefore **invalid on receive**, a free integrity check beneath the CRC.
+What replaced it is **FreeDV's own convention**, vendored at `third_party/radae_v2_text` from
+`tmiw/freedv-backend@radev2-dev` (BSD-2-Clause) and specified in that repo's
+`docs/reporting-protocol.md` §1. This is the format the beta freedv-gui 3.0 transmits, so the
+callsign channel is now interoperable rather than merely functional.
 
-Five decisions, each of which a reviewer would otherwise reasonably question:
+| | upstream (adopted) | our deleted interim scheme |
+|---|---|---|
+| FEC | **LDPC(112,56)**, `HRA_56_56` | none |
+| Sync | **none** — sweeps all 112 rotations; accepts on convergence ≤ 10 iterations **+** CRC **+** unique winner of the sweep | Barker-13 |
+| Integrity | CRC-8, poly `0x1D`, over characters **and** framing bits | CRC-16/CCITT-FALSE, bitwise |
+| Payload, 56 b | CRC-8 (8), last_block (1), block_index (2), 8 chars base-38 (42), reserved (3) | ver (3), len (4), N×6 bits |
+| Alphabet | 38: null, `0-9`, `A-Z`, `/` — **no space, no hyphen** | 39, including space and `-` |
+| Length | 1–4 blocks, **max 32 chars**, reassembled out of order | 0–15 chars |
+| Interleave | `(37·i) mod 112` | none |
+| One block on air | 112 bits = **4.48 s** | `NF0T` 60 bits = 2.4 s |
 
-1. **CRC-16, not CRC-8, and the 0.32 s it costs is the point.** CRC-8 admits ~1/256 of corrupted
-   frames that clear the sync gate. This field gets *displayed*, and publishing a bit error as
-   somebody else's callsign is the precise harm §9.3 defers FreeDV Reporter over.
-2. **The CRC is computed bitwise over the field bit-string, not over bytes.** The frame is 3+4+6N
-   bits and is not byte-aligned, so a byte-oriented CRC needs a padding convention — and an
-   undocumented padding convention is what makes a second implementation disagree with the first.
-3. **Detection normalises by the stream's mean magnitude; confidence deliberately does not.** Per D3
-   the RX value is a learned *reconstruction*, not a ±1 signal, so a fixed correlation threshold
-   would track the decoder's output level rather than sync quality. But the *transmitted* symbol is
-   exactly ±1.0, so raw magnitude is an absolute quality measure — normalising it too would report
-   ~1.0 for every frame and say nothing.
-4. **The sign of the Barker correlation is data, not noise.** BPSK carries a 180° ambiguity;
-   `|corr|` detects and `sign(corr)` corrects, so an inverted stream decodes rather than producing
-   garbage the CRC then rejects.
-5. **Nothing is consumed on a failed candidate.** Every frame length that could end at the current
-   symbol is tried, and the length field must agree with the length assumed. A "sync, then take the
-   next N bits" reader desynchronises permanently on a false Barker inside payload data.
+**Why adopt rather than keep ours**, beyond the obvious interop argument:
 
-**The correlation threshold is a placeholder** (0.70) and must be re-derived from real captures —
-it depends on how the decoder reconstructs the 21st feature under real channel conditions, which
-nothing has measured. `rade_v2_decode_wav --dump-symbols` exists to supply that evidence.
+1. **The over-the-air format is stable even though the receiver is not.** Upstream's PR #67
+   reworked the entire receive side (+1406/−219) and states *"There is no over-the-air change, so
+   it works with existing transmitters."* The wire is settled; the churn sits behind it.
+2. **The LDPC code is bit-for-bit one we already shipped** — verified, not assumed. Upstream stores
+   a dense `[56][112]` matrix; `third_party/radae/src/HRA_56_56.c` stores the sparse
+   `H_rows`/`H_cols` form. Reconstructing ours to dense gives an **identical data half** (columns
+   0–55, 168 ones each); upstream's extra 111 ones are columns 56–111, confirmed to be exactly the
+   dual-diagonal accumulator our sparse form leaves implicit.
+3. **Receive combining we would not have reproduced.** Soft symbols are summed modulo the cycle
+   length so every repeat adds SNR, with 0.7× decay so a changed callsign ages out. Upstream
+   measured ≥90 % decode of a one-block callsign improving from ≈−1 dB to **≈−6 dB** (AWGN) and
+   +2 dB to **≈−4.8 dB** (MPP).
 
-The `version` field is what keeps our frames and upstream's eventual ones **distinguishable rather
-than mutually corrupting**: a version we do not implement is rejected outright, never best-effort
-parsed.
+**Point 3 also reverses this RFC's own earlier reasoning** — see the correction in §7.1 D3.
 
-**Interop dependency (flag).** For callsigns to interoperate with other RADE V2 stations
-(FreeDV-GUI, the container), our app-level framing on this channel **must match the RADE V2
-ecosystem convention.** That convention is **not** in the C port (`radae_nopy` exposes only the raw
-symbol API + a bare test); it lives in FreeDV-GUI's integration and may not be finalized while V2 is
-in development. We **adopt upstream's scheme at vendor time (Phase 4)** and do not invent an
-incompatible one; until it stabilizes our framing is provisional.
+**What the interim scheme got right**, recorded because it is why the replacement is better rather
+than merely different: CRC-16 over CRC-8 on the grounds that a *displayed* field must not publish
+bit errors as callsigns; a bitwise CRC because a non-byte-aligned frame otherwise needs a padding
+convention, and an undocumented padding convention is what makes a second implementation disagree
+with the first; signed correlation so BPSK's 180° ambiguity is *corrected* rather than assumed
+away; and consuming nothing on a failed candidate so a false sync inside payload data cannot
+desynchronise the reader permanently.
+
+Upstream satisfies the last two **structurally** — its rotation sweep resolves polarity and
+alignment together, and a failed candidate consumes nothing because every rotation is tried
+independently. It chose CRC-8 and spends the saved bits on FEC instead, which point 3's
+measurements justify: a wrong callsign is far likelier to arrive through an uncoded channel at
+realistic SNR than through CRC-8's 1-in-256 false-accept on a codeword that also had to converge
+and win its sweep.
+
+**Integration notes that bite:**
+
+- `rade_text_rx_reset()` **must** be called on sync loss (PR #67 requires it) — position within the
+  TX cycle is unknown afterwards. `RADEV2Engine` does it on start and stop.
+- There is **no TX-side reset.** The block cycle runs continuously and is re-seeded only by
+  `rade_text_generate_tx_string()`. `beginTx()` deliberately does **not** restart it: freedv-gui
+  behaves the same way, and a receiver joining mid-over depends on copies being back-to-back.
+- `textDecoded()` reports **confidence 1.0**. Upstream only calls back on a codeword that
+  converged, passed CRC-8 and won its sweep uniquely, so no soft measure survives to report; a
+  fabricated fractional one would be worse than saying so. The raw `dataSymbolReceived(float)`
+  signal is **kept** — raw symbols are what you want when framing misbehaves.
+- The alphabet excludes space and hyphen, and callsigns truncate at 32 characters. Any GUI or
+  settings validation keyed to the old 39-value alphabet needs re-checking.
+
+**Verified end to end through the codec** (`rade_v2_engine_test`): a 112-bit codeword for `NF0T`,
+**raw BER 0.491** against the un-derotated reference, **coded BER 0.000**, decode converged,
+`decodedStr: NF0T`. The ≈0.5 raw figure is upstream's own diagnostic taken before derotation and
+polarity resolution — the coded figure is the one that matters.
+
+**Residual dependency (flag).** The framing lives on a **dev branch**: `radev2-dev`, 60 commits
+ahead of freedv-backend `main`, whose PR into `main` is still marked *WIP — DO NOT MERGE*. The wire
+format is stable (point 1) but the implementation is not, so re-vendor against a pinned SHA and
+re-verify. `rade_text` is **not** part of `rade_c` — it is a separate upstream on its own cadence,
+which is why it is a separate vendored tree with its own `AETHER_VENDORING.md`.
 
 **The Flex `byte_stream_in/out`** (returned by `waveform create`, fw 4.2.20; absent from
 `rade_api.h`) is a *separate, local* radio↔client data channel — not over-the-air. It is **not
@@ -768,20 +834,28 @@ and V2 doesn't" reads like an oversight, and it is a decision.
 **Why V2 cannot simply reuse it.** Four things differ, and three of them are correctness issues
 rather than plumbing:
 
-**1. The far-end callsign is no longer trustworthy.** V1 decodes it from the EOO frame's
-LDPC-coded text channel, with a CRC — if it decodes, it is right. V2 has no `rade_text` at all
-(upstream dropped the subsystem). The callsign rides the inline BPSK data channel described in
-§9.2: **raw, with no sync, no CRC and no FEC**, and our application framing is explicitly
-provisional until the ecosystem settles it. A V2 `rx_report` built on that would publish
-**bit-error garbage as station callsigns** onto a shared public map. That is worse than silence:
-it invents spots for stations that were never there, and it does so under our name.
+**1. ✅ RESOLVED 2026-10-10 — the far-end callsign IS now trustworthy.** This was the strongest
+objection and it no longer holds. The claim that *"V2 has no `rade_text` at all (upstream dropped
+the subsystem)"* was true of `rade_c` and **false of the ecosystem**: FreeDV's `rade_text` lives
+in freedv-backend, and we now vendor and use it (§9.2). A decoded callsign is an **LDPC(112,56)
+codeword that converged, passed CRC-8 and won its rotation sweep uniquely** — strictly stronger
+evidence than V1's EOO CRC, which this section accepted as sufficient (*"if it decodes, it is
+right"*). The "bit-error garbage as station callsigns" risk is retired at its source.
 
-**2. `mode` is an ecosystem string, not ours to coin.** V1 sends the literal `"RADEV1"`. The V2
-equivalent has to be whatever FreeDV Reporter and FreeDV-GUI agree on — the same dependency, on the
-same upstream, as §9.2's framing. Inventing one now means either being alone on the map under a
-mode nobody recognises, or colliding with the real one later.
+**2. ✅ LARGELY RESOLVED — the string is `"RADEV2"`, and it is now a parameter, not a literal.**
+freedv-gui's V2 branch returns `"RADEV2"` for both `tx_report` and `rx_report` (`ms-rade-v2`,
+`freedv_interface.cpp`). That is **implementation rather than published spec** — FreeDV's own
+reporting-protocol doc still shows `"RADEV1"` in its examples — so it is recorded rather than
+treated as ratified. `FreeDvClient` previously hardcoded `"RADEV1"` at all three report sites; it
+now has `setReportingMode()` / `reportingMode()`, defaulting to `RADEV1`, which is what every
+current caller means. Reporter has **no enumeration** — it groups the public map by whatever string
+a client sends — so matching the ecosystem exactly is the entire requirement.
 
-**3. Sync is not a sufficient gate for reporting.** V1 gates `rx_report` on sync. §7.1b measured
+**3. Sync is not a sufficient gate for reporting — but a better oracle now exists.** A
+CRC-8-validated LDPC codeword (§9.2) is far stronger decode evidence than `sync`, so the gate this
+section asks for is now **constructible**: stage A on sync + an SNR floor + a short dwell, stage B
+when a callsign validates. What remains is deriving the SNR floor from real decodes rather than
+picking a number. The original reasoning, which still stands: V1 gates `rx_report` on sync. §7.1b measured
 that a conjugated or mistuned V2 signal **still acquires and stays acquired**, and §10.13 saw it in
 the field: shifted 30–140 Hz off frequency the receiver produced *more* synced blocks than at the
 correct offset (489 vs 394) while mean SNR collapsed to ~7 dB. Ported unchanged, that gate would
@@ -927,7 +1001,7 @@ out of baseline scope.
 
 ### 10.1 `RAD2` registration parameters (§16 Q3)
 
-Derived from the V2 OFDM source at `radae_nopy@5374c52` (`dr-radev2`). **V1 is the wrong proxy
+Derived from the V2 OFDM source (then `radae_nopy@5374c52`, now `freedv/rade_c`). **V1 is the wrong proxy
 for any of this** — V1's modem is wider and carries pilots.
 
 | Quantity | Value | Source |
@@ -965,7 +1039,7 @@ The real justification for a moderate filter is AGC/ADC headroom and adjacent-si
 **not** modem SNR.
 
 **⚠ This reasoning is RX-ONLY. It does NOT transfer to `tx_filter` — the transmit case is the
-opposite.** Verified in the V2 source at `radae_nopy@5374c52`:
+opposite.** Verified in the V2 source (then `radae_nopy@5374c52`, now `freedv/rade_c`):
 
 | | RX | TX |
 |---|---|---|
@@ -2313,8 +2387,17 @@ than guessed.
 
 ### 10.20a FIXED — RX AGC, with the reference receiver's constants
 
-`src/core/RadeV2RxAgc.h`, used by **both** `RADEV2Engine` and
-`rade_v2_decode_wav`. From `radae_v2.py`, `RADEv2Receiver._compute_gain`:
+> ⚠ **SUPERSEDED 2026-10-10 — this file no longer exists.** `src/core/RadeV2RxAgc.h` is deleted.
+> Upstream ported the same AGC **into the library** (`989770e7`, on by default) and then replaced
+> its memoryless per-block RMS with a **persistent IIR power estimate** (`3ec7453b`,
+> `AGC_ALPHA 0.99875`, τ ≈ 0.1 s). Our header reproduced the *memoryless* form — the one upstream
+> replaced — so it was dropped rather than carried forward: two cascaded ±20 dB normalisers is not
+> twice as good, it moves the operating point. Control it with `rade_rx_set_agc(r, enable)`.
+> **The finding below is unaffected and was confirmed by upstream arriving at the same fix
+> independently.** See §10.21 for what changed and for the Level 1 consequence.
+
+The original fix, retained because it is the record of the constants and why they are those
+constants. From `radae_v2.py`, `RADEv2Receiver._compute_gain`:
 
 ```
 agc_target = 10^(-3/20)            # "PAPR (~3 dB) below peak of 1.0"
@@ -2487,10 +2570,20 @@ before the transport is written rather than after.
     missing reset into a second-occurrence bug.
   - *X2* the I/Q sign, guarded by SNR separation rather than by sync — see §7.1b for why sync
     cannot do the job.
-- **The inline-data framing — LANDED (`rade_v2_text_channel_test`, 18 tests), five
-  mutation-checked.** Dropping the CRC check, dropping `sign(corr)`, dropping the version check,
-  dropping the alphabet range check, and removing the magnitude normalisation each break exactly
-  one test and nothing else.
+- **The inline-data framing — ⛔ TEST REMOVED 2026-10-10 with the code it tested.**
+  `rade_v2_text_channel_test` (18 tests, five mutation-checked) covered
+  `src/core/RadeV2TextChannel`, deleted now that we use FreeDV's framing (§9.2). The framing itself
+  is upstream's and is tested upstream; what we test now is our **integration** of it, in
+  `rade_v2_engine_test`, which drives `rade_text` on both sides and asserts the callsign survives
+  the autoencoder end to end (coded BER 0.000, `decodedStr: NF0T`).
+  - **Coverage genuinely lost, stated plainly:** those guards exercised the framing against ideal
+    ±1 symbols with no codec in the path, and nothing we own replaces that. If a future re-vendor
+    silently changed the wire format, our integration test would still pass — both sides change
+    together. The thing that would catch it is an interop run against a real freedv-gui station,
+    i.e. §14's OTA item.
+  - The former test was deliberately **outside** the `ENABLE_RADE_V2` gate, so it was the one
+    piece of this work the existing cross-platform CI jobs compiled and ran. Losing it removes that
+    incidental macOS/Linux coverage, which makes the cross-platform question more urgent, not less.
   - The corruption test asserts **no *wrong* text**, not merely no output. Those are different
     claims, and the second is the one that matters: every payload bit is flipped in turn across
     47 runs and the assertion is that zero frames decode to anything other than the transmitted
@@ -2664,21 +2757,31 @@ than on us (§9.3).**
    ids are not honoured. And the A/B this question was waiting on is **cheaper than thought and
    needs no codec**: the ~2.8 kHz cap is now disputed (§10.6 T1), so re-running the 1b sweep on
    the honoured id is the immediate next measurement, not a Phase 4/5 one.
-2. **Callsign/text transport — CLARIFIED (see §9.2): not an either/or.** OTA callsign uses RADE's
-   `data_symbol` channel (the only OTA path; ~25 bit/s raw BPSK, app-framed, repeated inline). The
-   Flex `byte_stream` is a separate *local* channel, deferred (optional future SmartSDR/other-client
-   text surfacing). **Remaining open:** the app-level framing (serialize/sync/CRC/FEC) must match the
-   RADE V2 ecosystem convention for interop — adopt upstream's at vendor time (Phase 4); it may not
-   be finalized yet, so our framing is provisional until then. **Also open:** whether V2's 120 ms
-   pilot-only EOO frame is reachable through the public API (`rade_tx_eoo()` is marked "V1 only"
-   while `rade_tx_v2_eoo()` exists internally) — settle at vendor time (§9.2).
+2. **Callsign/text transport — ✅ CLOSED 2026-10-10.** OTA callsign uses RADE's `data_symbol`
+   channel (the only OTA path, ~25 bit/s BPSK); the Flex `byte_stream` is a separate *local*
+   channel, still deferred as an optional future SmartSDR/other-client text surface.
+   **The framing is settled: we adopted FreeDV's** — LDPC(112,56) + CRC-8, base-38, ≤32 chars,
+   vendored from freedv-backend `radev2-dev` (§9.2). Interop is by construction rather than by
+   convergence, and our interim scheme is deleted. **The EOO sub-question is closed too:**
+   `rade_tx_eoo()` always worked for V2 — the `// V1 only` comment was wrong and upstream has
+   corrected it — and the tail measures 128.6 ms.
+   **Residual, not blocking:** the framing lives on a dev branch whose PR into freedv-backend
+   `main` is still *WIP — DO NOT MERGE*, so re-vendor against a pinned SHA; and `drowe67/radae#81`
+   may retune the EOO.
 3. **`RAD2` `underlying_mode` + `rx_filter` — CLOSED by derivation (see §10.1).**
    `underlying_mode=DIGU` (data variant, per D-Star's `DFM`-not-`FM` pattern; carries the
    1500 Hz dial convention), **upper sideband on every band, no `DIGL`**; `rx_filter
    low_cut=800 high_cut=2200`. The premise of the original question was wrong: tightening the
    filter does **not** improve modem SNR — the modem band-passes itself at 975 Hz and a narrow
    upstream filter biases the *reported* SNR high. **Remaining open:** (a) the DIGU-on-all-bands
-   convention is our belief, awaiting an authoritative RADE V2 citation; ~~(b) `digu_offset`
+   convention **now has its authoritative citation** — freedv-gui PR **#1397**, merged to
+   `v3.0-dev` 2026-06-19, states in `USER_MANUAL.md`: *"FreeDV has standardized on upper
+   sideband for RADEV2, regardless of the location in the band"*, with **DIGU/USB-D as the
+   default mode** and plain USB only as the fallback for radios without data modes. Both halves
+   of our choice are therefore upstream policy, not inference. ⚠ Watch freedv-gui **#1410**
+   (centre frequencies, open against `v3.0-dev`): per §10.11 `digu_offset` does not shift
+   transmitted RF placement, so a PLT move there is a dial/reporting change for us rather than a
+   waveform one; ~~(b) `digu_offset`
    semantics~~ **CLOSED** — `DIGU` accepted (§10.2), `rx_filter [800, 2200]` measured good on
    hardware (§10.3), and `digu_offset` resolved as the width-centring frequency rather than a
    shift of anything (§10.3 item 7); (c) Phase 4/5 optimises the width against real decode
@@ -2742,18 +2845,28 @@ than on us (§9.3).**
    makes *last writer win* deterministically, which is right for clearing our own stale registration
    after an abrupt reconnect and actively wrong for coexisting with another client. `RadioCapabilities`
    now declares `hasMultiClientSessions` (Flex ✅), which is a usable input to that decision.
-7. **FreeDV Reporter integration — OPEN, deliberately deferred to Phase 5 (see §9.3).** V1 reports
-   to the public map; V2 must not until (a) the callsign framing convention is published (Q2), (b)
-   the Reporter `mode` string for V2 is agreed, and (c) a decode-confidence gate stronger than
-   `sync` is defined (§7.1b, §10.13). The blocking concern is not effort but **data quality on a
-   shared network**: V2's callsign channel is raw and unframed, so reporting it today would publish
-   bit errors as other people's callsigns. Station presence, `freq_change` and `tx_report` are
-   mode-agnostic and reusable; `rx_report` is the part that must wait.
+7. **FreeDV Reporter integration — still OPEN, but now by POLICY rather than by capability
+   (see §9.3).** All three original technical gates have moved:
+   **(a) framing published** — ✅ met, and adopted (§9.2); **(b) the `mode` string** — ✅ `"RADEV2"`
+   de facto, and `FreeDvClient` is parameterised instead of hardcoding a literal; **(c) a
+   decode-confidence gate stronger than `sync`** — ✅ constructible now, since a CRC-8-validated
+   LDPC codeword that won its rotation sweep is strictly better evidence than V1's EOO CRC, which
+   this RFC already accepted. What is left is choosing an SNR floor for the sync-only stage from
+   real decodes.
+   **What now blocks it is not technical.** Publishing V2 spots puts them on a **shared public
+   map** while FreeDV's own status notice still says on-air V2 use is not recommended outside their
+   test campaign. That is an operator decision, not a default, so **nothing wires V2 into
+   `FreeDvClient` today** and V2 reports nothing rather than reporting as V1. Station presence,
+   `freq_change` and `tx_report` remain mode-agnostic and reusable, including the tune/ATU guard
+   (#2173); `rx_report` is the part that waits on that decision.
 
 ## 17. References
 
 - `docs/architecture/digital-voice-thumbdv-waveform.md` — D-Star waveform (closest pattern).
 - `docs/architecture/aetherd-iradiobackend-design.md` — the backend seam.
-- `drowe67/radae_nopy` (`dr-radev2`) — the V2 C port and `rade_api.h`.
+- `freedv/rade_c` (`main`) — the V2 C port and `rade_api.h`. Formerly
+  `drowe67/radae_nopy@dr-radev2`, now dormant.
+- `tmiw/freedv-backend` (`radev2-dev`) — the V2 callsign/text channel, specified in that repo's
+  `docs/reporting-protocol.md` §1.
 - FlexRadio public `waveform-sdk` — the waveform protocol authority.
 - Phase 0 spike results (internal memory: `radev2-phase0-findings`).
