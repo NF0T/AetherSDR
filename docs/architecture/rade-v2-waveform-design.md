@@ -2581,7 +2581,7 @@ nothing to correct.
   through a resampler chain. Neither has bitten us in practice, so the crash is conditional — but
   both are inherited hazards rather than hypotheticals. See §7.1 R-rows.
 - **`freedv/rade_c#24` (open)** — the macOS build break that upstream's new three-OS CI caught.
-  Fixed by PR #25 (merged), but the issue is still open; see §18.
+  Fixed by PR #25 (merged), but the issue is still open; see §17.
 
 We deliberately did **not** wait for #26. Waiting for an unmerged issue, then the next one, is an
 unbounded hold, and `c8a3dc15` is the SHA the whole ecosystem is building against.
@@ -2724,7 +2724,7 @@ before the transport is written rather than after.
     i.e. §14's OTA item.
   - The former test was deliberately **outside** the `ENABLE_RADE_V2` gate, so it was the one
     piece of this work the existing cross-platform CI jobs compiled and ran. Losing it removes that
-    incidental macOS/Linux coverage, which makes the cross-platform question more urgent, not less.
+    incidental macOS/Linux coverage, which makes §17's cross-platform question more urgent, not less.
   - The corruption test asserts **no *wrong* text**, not merely no output. Those are different
     claims, and the second is the one that matters: every payload bit is flipped in turn across
     47 runs and the assertion is that zero frames decode to anything other than the transmitted
@@ -3001,7 +3001,90 @@ than on us (§9.3).**
    `freq_change` and `tx_report` remain mode-agnostic and reusable, including the tune/ATU guard
    (#2173); `rx_report` is the part that waits on that decision.
 
-## 17. References
+## 17. Cross-platform impact
+
+> **⚠ THIS SECTION DOES NOT YET SATISFY ITS OWN GATE.** `GOVERNANCE.md` requires an `[RFC]` issue
+> body to carry a **Cross-platform impact** section, and this RFC had none — that absence is what
+> blocks posting. What follows is the honest current state, written so the remaining work is
+> concrete. It is **not** a claim that the work is done: the central fact below is a negative, and
+> it is stated first on purpose.
+
+### The fact that matters
+
+**`ENABLE_RADE_V2` has never been compiled on macOS or Linux. Not once.**
+
+- `CMakeLists.txt` defaults it **OFF**, and **no CI job sets it** — re-verified against the
+  workflows, where the only `ENABLE_RADE` hit anywhere is `system-libs-canary.yml` passing
+  `-DENABLE_RADE=OFF`.
+- By contrast `ENABLE_RADE` (V1) defaults **ON**, so **V1 has full cross-platform CI coverage and
+  V2 has none.** That asymmetry is exactly what makes the gap easy to miss: it is natural to assume
+  V2 inherits V1's coverage, and it does not.
+- So the answer to *"does this build on macOS and Linux"* is **unknown**, not *yes*.
+
+⚠ **This got worse, not better, with recent work.** `rade_v2_text_channel_test` used to sit
+deliberately *outside* the `ENABLE_RADE_V2` gate — pure bit manipulation, no codec, no platform
+dependency — so the existing cross-platform jobs compiled and ran it, and it was the one piece of
+this work with macOS/Linux evidence. Adopting FreeDV's framing (§9.2) deleted it. Nothing of ours
+is now exercised off Windows.
+
+### What IS verified, and on what
+
+| Target | Evidence | Scope |
+|---|---|---|
+| Windows / MinGW (Qt 6.12, GCC 13.1) | `AetherSDR.exe` links; 7/7 V2 tests; Level 1 loss **0.080** | **ours**, the full `ENABLE_RADE_V2` build |
+| Linux x86 | upstream `rade_c` CI: full ctests on the reference platform | **the library only**, not our integration |
+| Windows cross-compile | upstream `win_loss_check.sh`: Linux↔Windows equivalence, loss **0.081 vs 0.081**, RX features max diff 0.0029 | the library only |
+| macOS (arm64) | upstream `rade_c` CI: build + V2 loss check at threshold **0.088** | the library only |
+| Linux ARM | upstream `rade_c` CI: sanity tier | the library only |
+
+Upstream built that three-OS matrix in `rade_c` PR #25 (merged 2026-10-07). It is useful to us in
+two ways: the **library** is now known to build and decode on all three, and `win_loss_check.sh` is
+a ready-made pattern for numeric cross-platform equivalence that we can copy rather than invent.
+
+### The gate's premise is now DEMONSTRATED, not merely prudent
+
+The first thing upstream's new matrix caught was a **macOS-only link failure in the library we
+vendor**: `src/CMakeLists.txt` passed `-Wl,--whole-archive … -Wl,--no-whole-archive` around
+`libopus.a`, which GNU `ld` accepts and Apple's `ld` rejects outright
+(`ld: unknown options: --whole-archive`). `freedv/rade_c#24`.
+
+Two things follow, and they are the argument for this section existing:
+
+1. **A Windows-verified build of `rade_c` is not evidence of a macOS one.** The same source, the
+   same commit, the same compiler family — and a different linker refused it.
+2. **The failure mode was a linker flag.** No amount of Windows testing, and no amount of reading
+   the C, would have surfaced it. That is the shape of risk this section has to cover: not
+   algorithmic portability but **toolchain** portability.
+
+### Questions this section must answer, and their current state
+
+| # | Question | State |
+|---|---|---|
+| 1 | Does `third_party/radae_v2` build under clang (macOS) and gcc (Linux)? | **Unknown for our build.** Upstream's matrix says the library does, post-#25. Ours adds the Win32 `RADE_EXPORT` delta, which is `_WIN32`-guarded and so should be inert elsewhere — *should*, untested. |
+| 2 | Is the extra Opus nnet patch portable? | **Unknown.** V2 needs `MAX_CONV_INPUTS_ALL` 1536→2048, applied post-extract via `OPUS_EXTRA_PATCH_COMMAND` → `PatchOpusForV2.cmake`. That script was written as a guarded CMake string replacement *specifically* to avoid needing a POSIX shell and a `patch` binary, so it is the portable shape — but it has only ever run on Windows. Upstream ships the same change as `opus-nnet.c.diff` and applies it with `sh -c "patch …"`, which is the non-portable shape we avoided. |
+| 3 | Is the big-endian VITA-49 handling correct on every target? | **Unknown.** X1/E4 specify big-endian wire format and it has only ever run little-endian. All our targets are little-endian in practice, so the byte-swap paths are untested rather than suspect. |
+| 4 | Any platform difference in the UDP bind? | **Unknown.** R1 requires the port bound *before* registration (`udpport` is sent last); socket lifetime and bind semantics want checking per platform. |
+| 5 | Packaging weight | ~108 MB of dual V1+V2 weight source during the overlap, against Flathub / AppImage / macOS `.dmg` / Windows installer limits. Unmeasured. |
+| 6 | What is platform-bound versus radio-bound? | **Answerable now, and worth stating carefully** because a reviewer will conflate them. The provider is **Flex-protocol-bound by design** (§7.2a) — that is a *radio* constraint and is the whole point. Nothing in it is *platform*-bound. The genuinely platform-bound pieces are the two vendored trees' toolchain assumptions (#1–#2), the VITA-49 endianness (#3) and the socket behaviour (#4). |
+| 7 | **NEW:** does the vendored text channel build off Windows? | **Unknown, and it is new surface.** `third_party/radae_v2_text` adds three C++ translation units plus a Qt-logging shim, and the `Q_LOGGING_CATEGORY`-at-global-scope requirement (§9.2) was itself a linker-visible subtlety on MinGW. Treat it as untested, not as inheriting the codec's answer. |
+
+### How this gets resolved
+
+1. Add a **V2-enabled CI job on the fork** — as a **separate** matrix entry, never by flipping the
+   existing jobs. `ENABLE_RADE_V2=ON` **forces `ENABLE_RADE=OFF`**, so flipping them would silently
+   trade V1's cross-platform coverage for V2's rather than adding to it.
+2. Fix whatever it turns up.
+3. Rewrite this section **from the CI evidence**, replacing the Unknowns above with results.
+4. Consider copying upstream's `win_loss_check.sh` pattern: a numeric loss-equivalence check across
+   platforms is a far stronger statement than "it compiled".
+5. Only then open the `[RFC]` issue — and only after that, the implementation PR.
+   `GOVERNANCE.md`: *"Do not open a PR until the RFC issue is approved."*
+
+This is fork-only work and must not ship in the upstream PR unless the flag is meant to be on in CI
+by then. Phase 5 flips it on by default; before that, a V2-enabled CI job is a deliberate addition
+to propose, not a side effect.
+
+## 18. References
 
 - `docs/architecture/digital-voice-thumbdv-waveform.md` — D-Star waveform (closest pattern).
 - `docs/architecture/aetherd-iradiobackend-design.md` — the backend seam.
