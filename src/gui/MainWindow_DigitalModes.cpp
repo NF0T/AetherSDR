@@ -693,9 +693,13 @@ void MainWindow::activateRADEV2(int sliceId)
     //
     // Layer 1 — PttOffHook fires BEFORE setMox(false), so the carrier is still
     // up while the tail drains.
-    m_radioModel.transmitModel().setPttOffHook([this]() {
+    m_radioModel.transmitModel().setPttOffHook(
+            [this](TransmitModel::PttRelease release) {
         if (m_radeV2UnkeyPending) return;
         m_radeV2UnkeyPending = true;
+        // Captured, not reconstructed later: the release carries the fence for
+        // this specific over (TransmitModel.h's own warning).
+        m_radeV2PttRelease = std::move(release);
         QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
             m_radeV2Engine->endTx();
         }, Qt::QueuedConnection);
@@ -710,7 +714,19 @@ void MainWindow::activateRADEV2(int sliceId)
         if (!m_radeV2UnkeyPending) return;
         m_radeV2UnkeyPending = false;
         m_radeV2TxActive = false;
-        m_radioModel.setTransmit(false);
+
+        // Prefer the captured release: it is fenced to the over whose tail just
+        // drained, so it is a no-op if that over has already been superseded.
+        // setTransmit(false) is the fallback for an unkey that was never
+        // intercepted — Layer 3's hardware-PTT and interlock paths, which
+        // provide no release.
+        const TransmitModel::PttRelease release = m_radeV2PttRelease;
+        m_radeV2PttRelease = {};
+        if (release.current()) {
+            release.release();
+        } else if (!release.isCurrent) {
+            m_radioModel.setTransmit(false);
+        }
     });
 
     // Layer 3 — MOX edges. Key: reset the codec for a new over (§7.1 T9's

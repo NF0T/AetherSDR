@@ -8730,7 +8730,7 @@ if(RADE_V2_FOUND)
     # 8.6 ms of it, and flush()'s terminality — skip the reset() in beginTx()
     # and the FIRST over is perfect while every one after it is silent.
     add_executable(rade_v2_engine_test tests/rade_v2_engine_test.cpp)
-    target_include_directories(rade_v2_engine_test PRIVATE src ${RADE_V2_DIR}/src)
+    target_include_directories(rade_v2_engine_test PRIVATE src ${RADE_V2_DIR}/src ${RADE_V2_TEXT_DIR}/pipeline)
     target_link_libraries(rade_v2_engine_test PRIVATE aethercore Qt6::Core Qt6::Test)
     set_target_properties(rade_v2_engine_test PROPERTIES AUTOMOC ON)
     add_test(NAME rade_v2_engine_test COMMAND rade_v2_engine_test)
@@ -8768,7 +8768,7 @@ if(RADE_V2_FOUND)
     # Not a test: it takes a file and reports, so it is built but never run by
     # ctest.
     add_executable(rade_v2_decode_wav tools/rade_v2_decode_wav.cpp)
-    target_include_directories(rade_v2_decode_wav PRIVATE src ${RADE_V2_DIR}/src)
+    target_include_directories(rade_v2_decode_wav PRIVATE src ${RADE_V2_DIR}/src ${RADE_V2_TEXT_DIR}/pipeline)
     target_link_libraries(rade_v2_decode_wav PRIVATE aethercore Qt6::Core)
 
     # Bench counterpart to the decoder: real speech through our own chain with
@@ -8776,7 +8776,7 @@ if(RADE_V2_FOUND)
     # which is the question an OTA failure cannot distinguish on its own.
     # Also not a test — it takes a file and reports.
     add_executable(rade_v2_loopback tools/rade_v2_loopback.cpp)
-    target_include_directories(rade_v2_loopback PRIVATE src ${RADE_V2_DIR}/src)
+    target_include_directories(rade_v2_loopback PRIVATE src ${RADE_V2_DIR}/src ${RADE_V2_TEXT_DIR}/pipeline)
     target_link_libraries(rade_v2_loopback PRIVATE aethercore Qt6::Core)
 endif()
 
@@ -8797,11 +8797,6 @@ add_test(NAME resampler_flush_test COMMAND resampler_flush_test)
 # rest of RADE V2 does not have: coverage from the existing cross-platform CI
 # jobs, none of which set ENABLE_RADE_V2. Its caller in RADEV2Engine stays
 # gated.
-add_executable(rade_v2_text_channel_test tests/rade_v2_text_channel_test.cpp)
-target_include_directories(rade_v2_text_channel_test PRIVATE src)
-target_link_libraries(rade_v2_text_channel_test PRIVATE aethercore Qt6::Core Qt6::Test)
-set_target_properties(rade_v2_text_channel_test PROPERTIES AUTOMOC ON)
-add_test(NAME rade_v2_text_channel_test COMMAND rade_v2_text_channel_test)
 
 # The bench WAV taps' ring buffer (src/core/RadeV2Tap.h).
 #
@@ -8811,7 +8806,6 @@ add_test(NAME rade_v2_text_channel_test COMMAND rade_v2_text_channel_test)
 # taps shipped a most-vexing-parse that only appeared once the flag was on.
 #
 # Header-only over Qt, no codec and no aethercore, so like
-# rade_v2_text_channel_test it runs in the existing cross-platform CI jobs —
 # none of which set ENABLE_RADE_V2.
 add_executable(rade_v2_tap_test tests/rade_v2_tap_test.cpp)
 target_include_directories(rade_v2_tap_test PRIVATE src)
