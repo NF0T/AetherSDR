@@ -57,7 +57,7 @@
 
 #include <QString>
 
-#include "core/RadeV2TextChannel.h"
+
 
 
 extern "C" {
@@ -65,8 +65,10 @@ extern "C" {
 #include "lpcnet.h"
 #include "fargan.h"
 }
+// Declares extern "C" itself; must not nest inside the block above.
+#include "rade_text.h"
 
-using AetherSDR::RadeV2TextChannel;
+
 
 namespace {
 
@@ -185,8 +187,6 @@ bool writeWavMono16(const char* path, const std::vector<float>& x, int rate) {
 struct TextHit {
     double  t = 0.0;
     QString text;
-    float   confidence = 0.0f;
-    bool    inverted = false;
 };
 
 struct Result {
@@ -229,7 +229,22 @@ Result decode(const std::vector<float>& x, int rate, double shiftHz, bool verbos
     std::vector<float> features(static_cast<size_t>(nFeat));
     std::vector<RADE_COMP> in(size_t(rade_nin_max(rade)));
 
-    RadeV2TextChannel textChannel;
+    // Upstream's framer is a C object with a callback, so the hits land in this
+    // sink and are drained after each step. Static-free: the state pointer is
+    // how rade_text hands us back our own context.
+    struct TextSink { std::vector<QString> pending; } sink;
+    rade_text_t textChannel = rade_text_create();
+    if (!textChannel) {
+        // Returning the empty Result rather than exiting: this function is also
+        // used by the offset sweep, where one failed candidate must not abort
+        // the whole run.
+        fprintf(stderr, "rade_text_create() failed — no text decode this pass\n");
+        return r;
+    }
+    rade_text_set_rx_callback(textChannel,
+        [](rade_text_t, const char* t, int len, void* st) {
+            static_cast<TextSink*>(st)->pending.push_back(QString::fromLatin1(t, len));
+        }, &sink);
 
     FARGANState fargan;
     bool farganWarmedUp = false;
@@ -286,13 +301,14 @@ Result decode(const std::vector<float>& x, int rate, double shiftHz, bool verbos
             const float symbol = rade_rx_get_data_symbol(rade);
             r.rawSymbols++;
             if (wantSymbolDump) r.symbolDump.emplace_back(tSec, symbol);
-            if (const auto d = textChannel.pushSymbol(symbol)) {
-                r.texts.push_back(TextHit{tSec, d->text, d->confidence, d->inverted});
+            rade_text_rx_symbol(textChannel, symbol);
+            for (const auto& got : sink.pending) {
+                r.texts.push_back(TextHit{tSec, got});
                 if (verbose)
-                    printf("  %7.2f s  TEXT \"%s\"  conf %.2f%s\n", tSec,
-                           d->text.toUtf8().constData(), double(d->confidence),
-                           d->inverted ? "  [inverted]" : "");
+                    printf("  %7.2f s  TEXT \"%s\"\n", tSec,
+                           got.toUtf8().constData());
             }
+            sink.pending.clear();
 
             if (wantSpeech) {
                 featAccum.insert(featAccum.end(), features.begin(), features.begin() + nOut);
@@ -373,9 +389,11 @@ void reportTexts(const Result& r) {
     }
     for (const auto& [text, count] : seen)
         printf("      \"%s\"  ×%d\n", text.toUtf8().constData(), count);
-    printf("      first at %.2f s, confidence %.2f%s\n",
-           r.texts.front().t, double(r.texts.front().confidence),
-           r.texts.front().inverted ? " (polarity inverted)" : "");
+    // No confidence or polarity column. Upstream only calls back on a codeword
+    // that converged, passed CRC-8 and won its rotation sweep uniquely, and that
+    // sweep is also what resolves BPSK's 180-degree ambiguity internally. There
+    // is no soft measure left to report, and fabricating one would be worse.
+    printf("      first at %.2f s\n", r.texts.front().t);
 }
 
 }  // namespace
