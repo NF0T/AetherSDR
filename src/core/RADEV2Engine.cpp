@@ -9,7 +9,7 @@
 #include <QLoggingCategory>
 
 #include "core/RadeV2Tap.h"
-#include "core/RadeV2RxAgc.h"
+
 #include "core/Resampler.h"
 
 #ifdef HAVE_RADE_V2
@@ -266,16 +266,16 @@ void RADEV2Engine::onRxPassband(const std::vector<std::complex<float>>& block) {
     while (int(m_rxAccumI.size()) >= rade_nin(m_rade)) {
         const int nin = rade_nin(m_rade);
 
-        // §10.20 — rade_rx() is level-dependent and the C library does not
-        // normalise. Shared with the offline decode tool so the bench and the
-        // product cannot drift apart; see RadeV2RxAgc.h for why this exists
-        // and where the constants come from.
-        const float gain = RadeV2RxAgc::blockGain(
-            m_rxAccumI.data(), m_rxAccumQ.data(), nin);
-
+        // §10.20 — rade_rx() is level-dependent. It now normalises INTERNALLY:
+        // freedv/rade_c 989770e7 ported radae_v2.py's input AGC into the library,
+        // on by default, and 3ec7453b replaced its memoryless per-block RMS with a
+        // persistent IIR power estimate (AGC_ALPHA 0.99875, tau ~0.1 s). Our own
+        // RadeV2RxAgc reproduced the memoryless shape — the one upstream replaced —
+        // so it is deleted rather than carried forward. Two cascaded +/-20 dB
+        // normalisers is not twice as good; it moves the operating point.
         for (int k = 0; k < nin; ++k) {
-            rxIn[size_t(k)].real = m_rxAccumI[size_t(k)] * gain;
-            rxIn[size_t(k)].imag = m_rxAccumQ[size_t(k)] * gain;
+            rxIn[size_t(k)].real = m_rxAccumI[size_t(k)];
+            rxIn[size_t(k)].imag = m_rxAccumQ[size_t(k)];
         }
         m_rxAccumI.erase(m_rxAccumI.begin(), m_rxAccumI.begin() + nin);
         m_rxAccumQ.erase(m_rxAccumQ.begin(), m_rxAccumQ.begin() + nin);

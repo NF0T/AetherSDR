@@ -91,6 +91,15 @@ typedef struct {
     int   n_acq;          /* Number of acquisitions */
     int   hangover;       /* Hangover symbols before un-sync (default 75) */
 
+    /* Input AGC: normalises rx sample RMS to agc_target before buffering,
+       clipped to +/-20dB (0.1 to 10.0 gain). On by default. Gain is derived
+       from a persistent IIR-smoothed power estimate (agc_power), matching
+       radae_v2.py's _compute_gain(). */
+    int   agc_en;
+    float agc_target;
+    float agc_power;
+    float gain;            /* AGC gain applied to the current symbol */
+
     /* Timing / frequency tracking */
     float delta_hat;      /* IIR-smoothed timing offset */
     float delta_hat_g;    /* Instantaneous timing offset (argmax |Ry_smooth|) */
