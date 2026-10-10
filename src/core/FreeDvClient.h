@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QMutex>
 #include <QWebSocket>
 #include <QTimer>
 #include <QFile>
@@ -53,6 +54,21 @@ public:
     // from the GUI thread (the reporter dialog gates its message field on
     // it — #4231).
     bool isReportingEnabled() const { return m_reportingEnabled.load(); }
+
+    // The `mode` string this station publishes in tx_report / rx_report.
+    //
+    // FreeDV Reporter has no enumeration — it takes whatever string the client
+    // sends and groups the map by it, so this has to match what the rest of the
+    // ecosystem sends or our spots sort into a category of one. freedv-gui's V2
+    // branch returns "RADEV2" (ms-rade-v2, freedv_interface.cpp), which is
+    // implementation rather than published spec — their own protocol doc still
+    // shows "RADEV1" in its examples.
+    //
+    // Defaults to RADEV1, which is what every current caller means. This exists
+    // so the string stops being hardcoded in three places; it does NOT by itself
+    // make V2 report (see the note on reportTxState()).
+    void setReportingMode(const QString& mode);
+    QString reportingMode() const;
     QString myGrid() const { return m_myGrid; }
     QHash<QString, StationInfo> stations() const { return m_stations; }
 
@@ -85,6 +101,16 @@ public slots:
     void disableReporting();
 
     void reportFreqChange(double freqMhz);
+    // NOTE: nothing wires RADE **V2** into this client yet, deliberately.
+    // RFC §9.3 gates V2 reporting on three things. Two are now met: the
+    // framing is published and adopted (third_party/radae_v2_text), and a
+    // CRC-8-validated LDPC codeword is a far stronger decode-confidence
+    // signal than rade_sync(), which §7.1b showed stays lit through a
+    // sideband error. The third is not a technical gate: publishing V2 spots
+    // puts them on a SHARED PUBLIC map while FreeDV's own status notice still
+    // says on-air V2 use is not recommended outside their test campaign. That
+    // is the operator's call, not a default. Until then V2 reports nothing
+    // rather than reporting as V1.
     void reportTxState(bool transmitting);
     void updateMessage(const QString& message);
 
@@ -129,6 +155,9 @@ private:
 
     // Station reporting state
     std::atomic<bool> m_reportingEnabled{false};
+    // Guarded because reporting runs off a timer thread as well as the GUI.
+    mutable QMutex m_reportingModeMutex;
+    QString m_reportingMode{QStringLiteral("RADEV1")};
     bool    m_authNeedsRefresh{false};  // reconnect in progress for auth change
     QString m_myCallsign;
     QString m_myGrid;
