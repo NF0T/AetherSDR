@@ -58,7 +58,7 @@
 #include <QString>
 
 #include "core/RadeV2TextChannel.h"
-#include "core/RadeV2RxAgc.h"
+
 
 extern "C" {
 #include "rade_api.h"
@@ -257,22 +257,15 @@ Result decode(const std::vector<float>& x, int rate, double shiftHz, bool verbos
             }
         }
 
-        // §10.20 — the SAME AGC the engine runs, from the same header, so a
-        // capture that decodes here is one that would have decoded live. This
+        // §10.20 — the level normalisation that makes a low-level capture
+        // decodable now lives INSIDE rade_rx() and is on by default, so this
+        // tool and the engine share it by construction rather than by sharing
+        // a header. That shared-by-construction property is the point: this
         // tool spent a day reporting healthy sync and SNR on captures that
-        // produced babble, purely because the level was low and nothing
-        // normalised it.
-        {
-            static_assert(sizeof(RADE_COMP) == 2 * sizeof(float),
-                          "RADE_COMP must be two packed floats to alias as "
-                          "interleaved I/Q");
-            const float g = AetherSDR::RadeV2RxAgc::blockGainInterleaved(
-                reinterpret_cast<const float*>(in.data()), nin);
-            for (int k = 0; k < nin; ++k) {
-                in[size_t(k)].real *= g;
-                in[size_t(k)].imag *= g;
-            }
-        }
+        // produced babble, because the level was low and nothing normalised it.
+        static_assert(sizeof(RADE_COMP) == 2 * sizeof(float),
+                      "RADE_COMP must be two packed floats to alias as "
+                      "interleaved I/Q");
         const double tSec = double(pos) / double(rate);
         pos += size_t(nin);
 
