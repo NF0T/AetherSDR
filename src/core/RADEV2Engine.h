@@ -55,7 +55,6 @@
 #include <QObject>
 #include <QString>
 
-#include "core/RadeV2TextChannel.h"
 #include "core/RadeV2Tap.h"
 
 // Opaque here on purpose — the codec headers are C, and pulling opus/lpcnet
@@ -228,6 +227,12 @@ signals:
     void textDecoded(const QString& text, float confidence);
 
 private:
+    // rade_text's RX callback. static + void* state because upstream's API is
+    // C; it hands back the `this` given to rade_text_set_rx_callback(). Called
+    // on the engine's worker thread from inside rade_text_rx_symbol(), so it
+    // only emits — Qt queues the signal to whichever thread is connected.
+    static void onTextRx(void* rt, const char* text, int length, void* state);
+
     void encodePendingFeatures(bool drain);
     void queueModem(const float* modem8k, int count);
     void serveTick(int samples);
@@ -263,10 +268,17 @@ private:
 
     // TX carries a whole framed copy and cycles it; RX reassembles frames from
     // the soft symbol stream. Same protocol, opposite directions — see
-    // RadeV2TextChannel, which owns all of it.
-    std::vector<bool> m_txDataBits;
-    size_t            m_txDataBitPos = 0;
-    RadeV2TextChannel m_textChannel;
+    // The callsign/text channel is upstream's rade_text (LDPC(112,56), see
+    // third_party/radae_v2_text). It owns the bit stream in BOTH directions:
+    // TX bits come from rade_text_tx_next_symbol() one per step, and RX
+    // symbols go into rade_text_rx_symbol(), which calls back on a decode.
+    // So there is no local bit buffer or cycle position any more — the cycling
+    // and the mid-stream join are upstream's problem, and it solves them with
+    // receive combining we would not have reproduced.
+    //
+    // rade_text_t is a void* typedef, kept opaque here so the codec headers
+    // stay out of every TU that merely connects a signal.
+    void* m_textChannel = nullptr;
 
     bool  m_synced = false;
     float m_snrDb  = 0.0f;

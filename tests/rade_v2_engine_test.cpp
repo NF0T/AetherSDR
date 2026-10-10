@@ -30,7 +30,9 @@
 #include <QtTest>
 
 #include "core/RADEV2Engine.h"
-#include "core/RadeV2TextChannel.h"
+extern "C" {
+#include "rade_text.h"
+}
 #include "core/Resampler.h"
 
 extern "C" {
@@ -384,13 +386,20 @@ void RadeV2EngineTest::rxDecodesTheAnalyticSignalTheRadioSends() {
 }
 
 std::vector<std::complex<float>> RadeV2EngineTest::probeWithText(const QString& text) {
-    // Same construction as probe(), with one addition: the framed bits are
-    // cycled onto the inline data channel, one per step, exactly where
-    // RADEV2Engine puts them. Longer than probe() because the receiver spends
-    // its first steps acquiring, and those produce no symbols at all — a
-    // 60-bit frame needs 60 SUCCESSFUL steps after that.
-    const std::vector<bool> bits = AetherSDR::RadeV2TextChannel::encode(text);
-    size_t bitPos = 0;
+    // Same construction as probe(), with one addition: upstream's framer drives
+    // the inline data channel, one symbol per step, exactly where RADEV2Engine
+    // puts it. Using rade_text here rather than hand-rolling bits is the point:
+    // TX and RX then agree by construction, so this test fails if our
+    // INTEGRATION is wrong, not if our copy of the wire format has drifted.
+    //
+    // Longer than probe() because the receiver spends its first steps acquiring
+    // and those produce no symbols at all. Upstream's frame is an LDPC(112,56)
+    // codeword — 112 SUCCESSFUL steps per copy, nearly double the old 60-bit
+    // frame — so the run length is scaled to keep several copies on the air.
+    rade_text_t framer = rade_text_create();
+    Q_ASSERT(framer);
+    const QByteArray textUtf8 = text.toUtf8();
+    rade_text_generate_tx_string(framer, textUtf8.constData(), int(textUtf8.size()));
 
     struct rade* tx = rade_open(const_cast<char*>("dummy"), kV2Flags);
     Q_ASSERT(tx);
@@ -401,11 +410,10 @@ std::vector<std::complex<float>> RadeV2EngineTest::probeWithText(const QString& 
     std::vector<RADE_COMP> out(static_cast<size_t>(nTxOut));
     std::vector<float> i8k, q8k;
 
-    for (int f = 0; f < 300; ++f) {          // 300 × 40 ms = 12 s ≈ 5 copies
+    for (int f = 0; f < 560; ++f) {          // 560 × 40 ms = 22.4 s ≈ 5 copies
         for (int k = 0; k < nFeat; ++k)
             features[size_t(k)] = 0.35f * std::sin(0.05f * float(k + f * 7));
-        rade_tx_set_data_symbol(tx, bits[bitPos] ? 1.0f : -1.0f);
-        bitPos = (bitPos + 1) % bits.size();
+        rade_tx_set_data_symbol(tx, rade_text_tx_next_symbol(framer));
         const int n = rade_tx(tx, out.data(), features.data());
         for (int k = 0; k < n; ++k) {
             i8k.push_back(out[size_t(k)].real);
@@ -413,6 +421,7 @@ std::vector<std::complex<float>> RadeV2EngineTest::probeWithText(const QString& 
         }
     }
     rade_close(tx);
+    rade_text_destroy(framer);
 
     Resampler upI(RADEV2Engine::kModemRateHz, RADEV2Engine::kWaveformRateHz);
     Resampler upQ(RADEV2Engine::kModemRateHz, RADEV2Engine::kWaveformRateHz);
@@ -433,7 +442,7 @@ void RadeV2EngineTest::rxRecoversTheInlineCallsign() {
     // §9.2 end-to-end, and the only test that exercises the whole chain:
     // encode → rade_tx_set_data_symbol → the neural encoder → OFDM → 8→24 kHz
     // → the engine's 24→8 kHz front end → rade_rx → rade_rx_get_data_symbol
-    // → RadeV2TextChannel → textDecoded.
+    // → rade_text (upstream's LDPC(112,56) framer) → textDecoded.
     //
     // rade_v2_text_channel_test proves the FRAMING against ideal ±1 symbols.
     // This proves the framing survives the CODEC — which is not a given: the
