@@ -79,12 +79,13 @@ static void writeWav16(const char* p, const std::vector<short>& x, int rate) {
 int main(int argc, char** argv) {
     const char* inPath=nullptr; const char* outPath=nullptr; const char* refPath=nullptr;
     const char* featTxPath=nullptr; const char* featRxPath=nullptr;
-    bool txChain=false; double snrDb=-1000.0; bool rxAgc=false;
+    bool txChain=false; double snrDb=-1000.0; bool rxAgc=false; bool noTxBpf=false;
     for (int i=1;i<argc;++i) {
         const std::string a=argv[i];
         if (a=="--tx-chain") txChain=true;
         else if (a=="--snr" && i+1<argc) snrDb=atof(argv[++i]);
         else if (a=="--rx-agc") rxAgc=true;
+        else if (a=="--no-tx-bpf") noTxBpf=true;
         else if (a=="--vocoder-ref" && i+1<argc) refPath=argv[++i];
         else if (a=="--features-tx" && i+1<argc) featTxPath=argv[++i];
         else if (a=="--features-rx" && i+1<argc) featRxPath=argv[++i];
@@ -100,6 +101,8 @@ int main(int argc, char** argv) {
           "  --rx-agc            enable the LIBRARY's input AGC (rade_c has it on\n"
           "                      by default; this tool forces it off). OFF by\n"
           "                      default: Level 1 declares no AGC in the path\n"
+          "  --no-tx-bpf         disable the V2 Tx SSB BPF (300-2700 Hz, on by\n"
+          "                      default in rade_c; the model was trained with it)\n"
           "  --vocoder-ref <f>   also write FARGAN's output from the ORIGINAL\n"
           "                      features, with no modem at all\n"
           "  --features-tx <f>   raw float32 feature vectors AT THE ENCODER INPUT\n"
@@ -125,8 +128,14 @@ int main(int argc, char** argv) {
     printf("in: %zu samples @ %d Hz = %.2f s\n", in.size(), rate, double(in.size())/rate);
 
     rade_initialize();
-    struct rade* tx = rade_open(const_cast<char*>("dummy"),
-        RADE_USE_C_ENCODER|RADE_USE_C_DECODER|RADE_MODE_V2|RADE_VERBOSE_0);
+    // rade_c c8a3dc15 added a 300-2700 Hz SSB BPF to the V2 transmitter, applied
+    // to data AND the EOO frame through one persistent filter, ON by default --
+    // the model was trained under it. --no-tx-bpf sets RADE_NO_TX_BPF so the
+    // filter's effect can be measured against its own absence rather than
+    // reasoned about.
+    const int txFlags = RADE_USE_C_ENCODER|RADE_USE_C_DECODER|RADE_MODE_V2|RADE_VERBOSE_0
+                      | (noTxBpf ? RADE_NO_TX_BPF : 0);
+    struct rade* tx = rade_open(const_cast<char*>("dummy"), txFlags);
     struct rade* rx = rade_open(const_cast<char*>("dummy"),
         RADE_USE_C_ENCODER|RADE_USE_C_DECODER|RADE_MODE_V2|RADE_VERBOSE_0);
 
