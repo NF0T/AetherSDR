@@ -2535,6 +2535,7 @@ set_tests_properties(split_qsy_settings_test PROPERTIES TIMEOUT 30)
 add_executable(mode_filter_presets_test
     tests/mode_filter_presets_test.cpp
     src/gui/ModeFilterPresets.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(mode_filter_presets_test PRIVATE src)
 target_link_libraries(mode_filter_presets_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
