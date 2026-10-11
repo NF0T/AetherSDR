@@ -2115,6 +2115,7 @@ qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
 add_executable(mode_filter_presets_test
     tests/mode_filter_presets_test.cpp
     src/gui/ModeFilterPresets.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(mode_filter_presets_test PRIVATE src)
 target_link_libraries(mode_filter_presets_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
