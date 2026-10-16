@@ -85,6 +85,7 @@ private:
     QListWidget* m_fileList{nullptr};   // the opened file's firmware, as m_product
     QLabel* m_fileText{nullptr};
     QPushButton* m_installFile{nullptr};
+    bool m_installAfterDownload{false};   // Install pressed on a release to download
 
     QString m_jobDone;       // the success message for the running action
 };

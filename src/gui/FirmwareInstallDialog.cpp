@@ -69,6 +69,18 @@ bool needsButtons(const FirmwareInstallModel& fw, const FirmwareInstallModel::Ta
     return isStock(target) && !fw.takesCommands(target);
 }
 
+// The unit to act on after the download-mode alert, which says to put it in
+// download mode now: if the operator did, the one device found there.
+FirmwareInstallModel::Target afterAlert(FirmwareInstallModel& fw,
+                                        const FirmwareInstallModel::Target& target)
+{
+    fw.lookAgain();
+    const FirmwareInstallModel::Target now = fw.target();
+    return now.device == FirmwareInstallModel::Device::Bootloader && fw.loaderCount() == 1
+               ? now
+               : target;
+}
+
 QListWidgetItem* note(QListWidget* list, const QString& text)
 {
     auto* item = new QListWidgetItem(text, list);
@@ -306,8 +318,6 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
             QString problem;
             if (!m_fw->chooseStockFirmware(item->data(kFileRole).toString(), &problem))
                 m_step->setText(problem);
-        } else if (item && item->data(kDownloadRole).isValid()) {
-            m_fw->downloadStockRelease(item->data(kDownloadRole).toInt());
         }
         syncText();
     });
@@ -318,8 +328,12 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
             if (m_fileList->item(i)->data(kFileRole).toString() == path)
                 m_fileList->setCurrentRow(i);
         }
+        // Install pressed on it: carry on with the install.
+        if (std::exchange(m_installAfterDownload, false))
+            installStockFirmware();
     });
     connect(m_fw, &FirmwareInstallModel::stockDownloadFailed, this, [this](const QString& message) {
+        m_installAfterDownload = false;
         m_step->setText(message);
         syncText();
     });
@@ -333,8 +347,9 @@ FirmwareInstallDialog::FirmwareInstallDialog(Ctr2ProxyModel* model, QWidget* par
     connect(m_toBootloader, &QPushButton::clicked, this,
             [this] { restartInto(int(FirmwareInstallModel::Firmware::Bootloader)); });
     connect(m_cancel, &QPushButton::clicked, this, [this] {
-        m_fw->cancel();
+        // Before cancel(): a wait ends at once, and says so.
         m_step->setText(tr("Stopping…"));
+        m_fw->cancel();
     });
     connect(close, &QPushButton::clicked, this, &QWidget::close);
     connect(m_fw, &FirmwareInstallModel::releasesChanged, this, &FirmwareInstallDialog::syncLists);
@@ -486,8 +501,9 @@ void FirmwareInstallDialog::syncLists()
                              tr("CTR2-Max firmware %1  (lynovation.com)").arg(published[i].version),
                              {}, i});
         }
-        std::stable_sort(rows.begin(), rows.end(),
-                         [](const Row& a, const Row& b) { return a.version > b.version; });
+        std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+            return Ctr2MaxStockFirmware::newer(a.version, b.version);
+        });
         if (rows.isEmpty())
             note(m_fileList, tr("No firmware file opened"));
         for (const Row& r : std::as_const(rows)) {
@@ -520,7 +536,8 @@ void FirmwareInstallDialog::syncText()
         m_fileText->setText(
             (m_fw->downloadingStockRelease()
                  ? tr("Downloading %1 from lynovation.com…")
-                 : tr("%1 is on lynovation.com; choose it again to download it."))
+                 : tr("%1 is on lynovation.com: Install downloads it from there first, and keeps "
+                      "it."))
                 .arg(fileItem->text().section(QStringLiteral("  ("), 0, 0))
                 .toHtmlEscaped());
     } else if (!fileBackup.isEmpty()) {
@@ -621,12 +638,15 @@ void FirmwareInstallDialog::sync()
     offer(m_install, !running && any && (release || aetherBackup),
           running ? busy : !any ? noDevice : tr("Choose a release or a backup first."));
     const bool fileBackup = !selectedBackup(m_fileList).isEmpty();
-    // The kept firmware chosen, and not an earlier choice still loaded.
+    // The kept firmware chosen (not an earlier choice still loaded), a
+    // release to download first, or a backup; not while one downloads.
     const QListWidgetItem* fileItem = m_fileList->currentItem();
-    const bool file = (fileItem && fileItem->data(kFileRole).isValid()
-                       && fileItem->data(kFileRole).toString() == m_fw->stockFirmwarePath()
-                       && m_fw->haveStockFirmware())
-                      || fileBackup;
+    const bool downloading = m_fw->downloadingStockRelease();
+    const bool file = !downloading
+                      && ((fileItem && fileItem->data(kFileRole).isValid()
+                           && fileItem->data(kFileRole).toString() == m_fw->stockFirmwarePath()
+                           && m_fw->haveStockFirmware())
+                          || (fileItem && fileItem->data(kDownloadRole).isValid()) || fileBackup);
     offer(m_installFile, !running && file && any,
           running ? busy : !file ? tr("Open the firmware file first.") : noDevice);
     // The firmware it runs now is dimmed.
@@ -682,7 +702,7 @@ bool FirmwareInstallDialog::askDownloadMode(bool stock)
 
 void FirmwareInstallDialog::confirmRestore(const QString& path)
 {
-    const FirmwareInstallModel::Target target = m_fw->target();
+    FirmwareInstallModel::Target target = m_fw->target();
     ScopedChildWidget<QMessageBox> ask(QMessageBox::Warning, tr("Restore the backup?"),
                                        backupText(path), QMessageBox::Cancel, this);
     ask.get()->setInformativeText(
@@ -692,6 +712,7 @@ void FirmwareInstallDialog::confirmRestore(const QString& path)
     ask.get()->exec();
     if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
+    target = afterAlert(*m_fw, target);
     const QString done = tr("The backup is restored and the CTR2-Max is restarting.");
     m_step->setText(tr("Connecting…"));
     m_jobDone = done;
@@ -704,7 +725,7 @@ void FirmwareInstallDialog::onInstall()
 {
     // The device is the one shown now; the model refuses if it changes
     // while the questions below are open.
-    const FirmwareInstallModel::Target target = m_fw->target();
+    FirmwareInstallModel::Target target = m_fw->target();
     const QString backup = selectedBackup(m_product);
     if (!backup.isEmpty()) {
         confirmRestore(backup);
@@ -731,6 +752,7 @@ void FirmwareInstallDialog::onInstall()
     ask.get()->exec();
     if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
+    target = afterAlert(*m_fw, target);
     const QString done =
         tr("%1 %2 is installed and starting. The backup is in %3.").arg(product, version, folder);
     m_step->setText(tr("Connecting…"));
@@ -794,10 +816,18 @@ void FirmwareInstallDialog::onOpenFile()
 void FirmwareInstallDialog::installStockFirmware()
 {
     using Device = FirmwareInstallModel::Device;
-    const FirmwareInstallModel::Target target = m_fw->target();
+    FirmwareInstallModel::Target target = m_fw->target();
     const QString backup = selectedBackup(m_fileList);
     if (!backup.isEmpty()) {
         confirmRestore(backup);
+        return;
+    }
+    // A release on lynovation.com: download it, then carry on from here.
+    const QListWidgetItem* item = m_fileList->currentItem();
+    if (item && item->data(kDownloadRole).isValid()) {
+        m_installAfterDownload = true;
+        m_fw->downloadStockRelease(item->data(kDownloadRole).toInt());
+        syncText();
         return;
     }
     const QString name = m_fw->stockFirmwareName();
@@ -819,6 +849,7 @@ void FirmwareInstallDialog::installStockFirmware()
     ask.get()->exec();
     if (ask.get()->clickedButton() != go || !askDownloadMode(needsButtons(*m_fw, target)))
         return;
+    target = afterAlert(*m_fw, target);
     const QString done =
         tr("%1 is installed and starting. The backup is in %2.").arg(name, folder);
     m_step->setText(tr("Connecting…"));
@@ -832,16 +863,17 @@ void FirmwareInstallDialog::restartInto(int which)
 {
     using Firmware = FirmwareInstallModel::Firmware;
     const auto firmware = static_cast<Firmware>(which);
-    const FirmwareInstallModel::Target target = m_fw->target();
+    FirmwareInstallModel::Target target = m_fw->target();
     // From the stock firmware, download mode takes the unit's buttons: the
     // alert is all there is to it, and Status follows when it gets there.
     if (needsButtons(*m_fw, target) && firmware == Firmware::Bootloader) {
-        if (askDownloadMode(true))
-            m_step->setText(tr("Waiting for the CTR2-Max in download mode…"));
+        askDownloadMode(true);
+        m_step->clear();
         return;
     }
     if (firmware != Firmware::Bootloader && !askDownloadMode(needsButtons(*m_fw, target)))
         return;
+    target = afterAlert(*m_fw, target);
     const QString done = firmware == Firmware::AetherCtr2
                              ? tr("The CTR2-Max is restarting into AetherCTR2.")
                          : firmware == Firmware::Stock

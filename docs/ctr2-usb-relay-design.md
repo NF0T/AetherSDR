@@ -518,7 +518,9 @@ AetherSDR to fetch (`Ctr2MaxStockCatalog`):
 AetherSDR reads only a catalog signed by a Lynovation key built into it
 (`kBuiltInKeys` in `Ctr2MaxStockCatalog.cpp`; none yet), and fetches nothing
 without one. A downloaded .bin must be the size and SHA-256 the catalog
-gives. It is then installed, and kept, as a file opened by hand would be.
+gives, and the image's own version must be the one the catalog names. It is
+downloaded when the operator presses Install on it, then installed, and kept,
+as a file opened by hand would be.
 
 A build configured with `AETHER_FIRMWARE_DEV_OVERRIDES` (never a release)
 also reads two settings from the environment, so Lynovation can test its own

@@ -635,8 +635,12 @@ QString Ctr2ProxyModel::usbFirmwareVersion() const
 
 bool Ctr2ProxyModel::usbFirmwareCommands() const
 {
-    return m_probedPath == m_usbDevicePath
-           && (m_probedOffers & ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware));
+    // As usbFirmwareVersion(): from the relay's own port while it runs (the
+    // idle probe never opens a device the relay holds).
+    const quint32 firmware = ctr2hid::capabilityBit(ctr2hid::MessageType::Firmware);
+    if (usbActive() && isRunning())
+        return m_usb->offeredExtensions() & firmware;
+    return m_probedPath == m_usbDevicePath && (m_probedOffers & firmware);
 }
 
 bool Ctr2ProxyModel::firmwareUpdateRunning() const

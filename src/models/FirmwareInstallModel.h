@@ -93,11 +93,13 @@ public:
     int loaderCount() const { return m_loaderCount; }
     QString linkVersion() const;   // LinkFirmware: the version it runs
     Target target() const { return {m_device, m_port, m_mac, m_hidPath}; }
-    // A unit on its stock firmware that takes the link's FIRMWARE commands
-    // (Ctr2ProxyModel::usbFirmwareCommands()): it restarts into AetherCTR2 or
-    // download mode on request, as AetherCTR2 does, with no buttons. It must
-    // be the relay's selected device.
+    // A unit whose firmware takes the link's FIRMWARE commands
+    // (Ctr2ProxyModel::usbFirmwareCommands()): AetherCTR2, or stock firmware
+    // that offers them. It restarts into its other firmware or download mode
+    // on request, with no buttons. It must be the relay's selected device.
     bool takesCommands(const Target& target) const;
+    // Looks for the device again now, rather than at the next poll.
+    void lookAgain() { poll(); }
     bool busy() const;
 
     // Download mode. False, with *problem, if it cannot start, including when
@@ -170,9 +172,11 @@ public:
     bool restoreBackup(const Target& target, const QString& path, QString* problem);
     bool waitingForDownloadMode() const { return m_waiting; }
 
-    // The backups in backupFolder() of the connected device, newest first;
-    // of every device when its MAC is not known (its stock firmware does not
-    // report it). A restore checks the MAC itself.
+    // The connected device's backups, newest first: every .bin with its
+    // description (.json) beside it, in backupFolder() or the folder above
+    // it, where earlier versions suggested saving them; of every device when
+    // its MAC is not known (its stock firmware does not report it). A restore
+    // checks the file and the MAC itself.
     struct Backup {
         QString path;
         QString mac;      // "AA:BB:CC:DD:EE:FF"
@@ -251,6 +255,13 @@ private:
     Ctr2MaxStockDownloader* m_lynDownloader{nullptr};
     Ctr2MaxStockCatalog m_stockReleases;
     bool m_stockDownloadAsked{false};
+    struct KeptFile {   // a .bin in firmwareFolder(), as last read
+        qint64 size{-1};
+        QDateTime modified;
+        bool valid{false};
+        StoredFirmware firmware;
+    };
+    QHash<QString, KeptFile> m_keptFiles;
     Ctr2MaxStockFirmware m_stock;
     QString m_stockPath;          // the kept file it came from
     bool m_haveStock{false};

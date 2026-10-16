@@ -46,6 +46,10 @@ public:
     static bool read(const QByteArray& file, Ctr2MaxStockFirmware* out, QString* problem);
 
     QString version() const { return m_version; }   // "v1.01.03"; empty if not found
+    // Whether version a is newer than b: "v<major>.<minor>.<patch>[letter]"
+    // by number, a letter after none; a version not of that shape compares
+    // as text, and an empty one is older than any.
+    static bool newer(const QString& a, const QString& b);
     QByteArray app() const { return m_app; }
     // The whole flash image as published (the .bin), which read() takes back.
     QByteArray image() const { return m_image; }

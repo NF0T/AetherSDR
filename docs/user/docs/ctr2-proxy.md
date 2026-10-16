@@ -238,7 +238,9 @@ folder in your Documents folder, with a description beside it (`.json`, same
 name). The latest three of each unit are kept.
 
 The connected unit's backups are listed at the end of both tabs' lists, by
-date. Installing one restores it: the whole flash goes back exactly as it
+date, including any saved with **Back Up…** in earlier versions of AetherSDR
+(in the Documents folder itself), as long as each backup's `.json` is beside
+it. Installing one restores it: the whole flash goes back exactly as it
 was, both firmwares, the settings and the registration included, and anything
 since is lost. A backup restores only onto the unit it came from (matched by
 its MAC address), and only if the file is unchanged since it was made.
@@ -283,8 +285,8 @@ firmware, and restarts the CTR2-Max into it.
   back to an earlier version, choose it and press **Install…**.
 - **Releases from lynovation.com:** when Lynovation publishes its releases
   for AetherSDR, the tab also lists them, marked **(lynovation.com)**.
-  Choosing one downloads it from Lynovation's site, and it is then kept like
-  a file you opened.
+  **Install…** on one downloads it from Lynovation's site first; it is then
+  kept like a file you opened.
 - **No registration is needed** to update the CTR2-Max's own firmware.
 
 ## Reference

@@ -6,10 +6,9 @@
 #include <QString>
 #include <QUrl>
 
-class QNetworkAccessManager;
-class QNetworkReply;
-
 namespace AetherSDR {
+
+class CappedDownload;
 
 // The CTR2-Max's stock firmware as Lynovation publishes it for AetherSDR to
 // fetch: a catalog on Lynovation's site, signed with Lynovation's own
@@ -70,7 +69,7 @@ public:
     void fetchCatalog(const QUrl& url = Ctr2MaxStockCatalog::catalogUrl());
     void fetchRelease(const Ctr2MaxStockCatalog::Release& release);
     void cancel();
-    bool isBusy() const { return m_reply != nullptr; }
+    bool isBusy() const;
 
 signals:
     void catalogReady(const AetherSDR::Ctr2MaxStockCatalog& catalog);
@@ -83,18 +82,14 @@ signals:
 private:
     enum class Stage { Idle, Catalog, Signature, Release };
 
-    void get(const QUrl& url, Stage stage, qint64 limit);
-    void onFinished();
+    void onFinished(const QUrl& url, const QByteArray& body);
     void fail(const QString& message);
 
-    QNetworkAccessManager* m_nam;
-    QNetworkReply* m_reply{nullptr};
+    CappedDownload* m_download;
     Stage m_stage{Stage::Idle};
     QUrl m_catalogUrl;
     QByteArray m_catalog;
     Ctr2MaxStockCatalog::Release m_release;
-    qint64 m_limit{0};
-    QByteArray m_body;
 };
 
 } // namespace AetherSDR

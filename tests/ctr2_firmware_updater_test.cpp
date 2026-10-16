@@ -678,6 +678,53 @@ void testStockFirmwareCommands()
     run(plain, Firmware::AetherCtr2, &waited);
     check(waited && plain.restartedInto.isEmpty(),
           "stock firmware without them waits for download mode (the buttons), sending nothing");
+
+    // AetherCTR2 too is judged by its offer: firmware without the commands
+    // gets the buttons, not a command it would not answer.
+    stockInfo.product = QStringLiteral("AetherCTR2");
+    stockInfo.serial = QStringLiteral("B81F3FC45888");
+    Device old;
+    old.offersFirmware = false;
+    run(old, Firmware::Stock, &waited);
+    check(waited && old.restartedInto.isEmpty(),
+          "AetherCTR2 without the commands waits for the buttons, sending nothing");
+    stockInfo.product = QStringLiteral("ESP32S3_DEV");
+    stockInfo.serial.clear();
+
+    // A request whose device cannot be opened fails at once: reported, and
+    // not left waiting for download mode behind the failure.
+    {
+        Device dev;
+        dev.reportsVersion = false;
+        int opens = 0;
+        Ctr2ProxyModel relay;
+        relay.setUsbBackend(
+            [stockInfo] { return QList<Ctr2HidPort::DeviceInfo>{stockInfo}; },
+            [](const Ctr2HidPort::DeviceInfo&, QString*) -> Ctr2HidPort* { return nullptr; },
+            [&dev, &opens](const Ctr2HidPort::DeviceInfo&, quint32 caps,
+                           QString* error) -> Ctr2HidPort* {
+                if (++opens > 1) {   // the version probe opens it; the request cannot
+                    *error = QStringLiteral("Permission denied");
+                    return nullptr;
+                }
+                return new SimPort(&dev, caps);
+            });
+        relay.setTransport(Ctr2ProxyModel::Transport::Usb);
+        relay.setUsbDevicePath(stockInfo.path);
+        waitUntil([&dev] { return dev.opens > 0; });
+        waitUntil([] { return false; }, 100);
+        FirmwareInstallModel model(&relay);
+        model.setDeviceSources([] { return QList<FirmwareInstallModel::Loader>(); },
+                               [stockInfo] { return QList<Ctr2HidPort::DeviceInfo>{stockInfo}; });
+        bool failed = false;
+        QObject::connect(&model, &FirmwareInstallModel::finished, &model,
+                         [&](bool o, const QString&) { failed = !o; });
+        QString problem;
+        model.restoreBackup(model.target(), QStringLiteral("/nonexistent.bin"), &problem);
+        waitUntil([&failed] { return failed; }, 1000);
+        check(failed && !model.waitingForDownloadMode() && !model.busy(),
+              "a restart that fails at once is reported, and nothing is left waiting");
+    }
 }
 
 int main(int argc, char** argv)

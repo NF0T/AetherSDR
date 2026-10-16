@@ -10,6 +10,7 @@
 
 #include "Ctr2MaxRegistrationFixtures.h"
 #include "core/Ctr2MaxStockCatalog.h"
+#include "core/EspFirmwareCatalog.h"
 #include "core/Ctr2MaxRegistration.h"
 #include "core/Ctr2MaxStockFirmware.h"
 #include "core/EspFirmwareInstaller.h"
@@ -453,6 +454,22 @@ void testWindowFlow()
     check(cancelled && cancelMessage.contains(QStringLiteral("Nothing was written")),
           "and says so, so the window leaves its waiting state");
 
+    // The operator follows the alert at once: the window still holds the
+    // stock firmware's target when the unit is already in download mode.
+    const FirmwareInstallModel::Target stale = model.target();
+    devices->hid.clear();
+    devices->loaders = {{QStringLiteral("ttyACM0"), QStringLiteral("B8:1F:3F:C4:58:88")}};
+    model.setDeviceSources([devices] { return devices->loaders; },
+                           [devices] { return devices->hid; });
+    check(model.installStockFirmware(stale, &problem) && model.waitingForDownloadMode(),
+          "an install confirmed on the stock firmware is not refused once the unit is in "
+          "download mode");
+    model.cancel();
+    devices->loaders.clear();
+    devices->hid = {{QStringLiteral("hid"), 0x303A, 0x1001, {}, QStringLiteral("ESP32S3_DEV"),
+                     {}}};
+    model.setDeviceSources([devices] { return devices->loaders; },
+                           [devices] { return devices->hid; });
     check(model.installStockFirmware(model.target(), &problem), "waiting again");
     devices->hid.clear();
     devices->loaders = {{QStringLiteral("ttyACM0"), QStringLiteral("B8:1F:3F:C4:58:88")}};
@@ -581,12 +598,16 @@ void testReleaseAndRestore()
               && opens == 0,
           "an AetherCTR2 install on a stock unit waits for download mode");
     devices->hid.clear();
-    devices->loaders = {{QStringLiteral("ttyACM0"), QStringLiteral("B8:1F:3F:C4:58:88")}};
+    // The serial port may report the MAC in lower case: the same unit.
+    devices->loaders = {{QStringLiteral("ttyACM0"), QStringLiteral("b8:1f:3f:c4:58:88")}};
     look();
+    check(model.deviceMac() == QStringLiteral("B8:1F:3F:C4:58:88"),
+          "a MAC the port reports in lower case is taken as the unit's (HID's are upper case)");
     look();   // the next poll
     bool ok = false;
     QString message;
-    check(waitFinished(model, &ok, &message) && ok, "then installs by itself");
+    check(waitFinished(model, &ok, &message) && ok,
+          "then installs by itself, whatever the case of the MAC the port reports");
     if (!ok)
         std::fprintf(stderr, "  %s\n", qPrintable(message));
     check(flash->flash.mid(0x410000, image.size()) == image && startsSlot(*flash, 3) == 1,
@@ -597,6 +618,33 @@ void testReleaseAndRestore()
     check(listed.size() == 1 && listed.first().path == model.lastBackupPath()
               && listed.first().mac == QStringLiteral("B8:1F:3F:C4:58:88"),
           "the backup is listed for this unit");
+    // Backups saved by hand with Back Up in earlier versions: in the folder
+    // above (Documents), named by date, and under any name in the folder.
+    {
+        const QString made = model.lastBackupPath();
+        const QDir above(QFileInfo(FirmwareInstallModel::backupFolder()).path());
+        const QString old = above.filePath(QStringLiteral("flash-backup-B81F3FC45888-2026-10-01.bin"));
+        const QString named = QDir(FirmwareInstallModel::backupFolder())
+                                  .filePath(QStringLiteral("before the update.bin"));
+        QFile::copy(made, old);
+        QFile::copy(made + ".json", old + ".json");
+        QFile::copy(made, named);
+        QFile::copy(made + ".json", named + ".json");
+        QFile::copy(made, above.filePath(QStringLiteral("no-description.bin")));
+        const QList<FirmwareInstallModel::Backup> all = model.backups();
+        const auto has = [&](const QString& path) {
+            return std::any_of(all.cbegin(), all.cend(),
+                               [&](const FirmwareInstallModel::Backup& b) { return b.path == path; });
+        };
+        check(all.size() == 3 && has(old) && has(named),
+              "backups saved by hand earlier are listed, whatever their name; a .bin without "
+              "its description is not");
+        QFile::remove(old);
+        QFile::remove(old + ".json");
+        QFile::remove(named);
+        QFile::remove(named + ".json");
+        QFile::remove(above.filePath(QStringLiteral("no-description.bin")));
+    }
     devices->loaders = {{QStringLiteral("ttyACM0"), QStringLiteral("AA:AA:AA:AA:AA:AA")}};
     look();
     check(model.backups().isEmpty(), "and not for another unit");
@@ -615,6 +663,18 @@ void testReleaseAndRestore()
     check(waitFinished(model, &ok, &message) && !ok && flash->flash == unregistered,
           "the AetherCTR2 install is refused, and nothing is written");
     FirmwareInstallModel::setBackupFolderForTesting({});
+}
+
+void testVersionOrder()
+{
+    using F = Ctr2MaxStockFirmware;
+    check(F::newer("v10.00.00", "v9.99.99"), "versions compare by number, not as text");
+    check(F::newer("v1.02.00n", "v1.02.00l") && F::newer("v1.02.00l", "v1.01.03"),
+          "a later letter and a later minor version are newer");
+    check(F::newer("v1.02.00a", "v1.02.00") && !F::newer("v1.02.00", "v1.02.00a"),
+          "a letter is newer than none");
+    check(F::newer("v1.00.00", "") && !F::newer("", "v1.00.00"), "an unnamed version is oldest");
+    check(!F::newer("v1.02.00n", "v1.02.00n"), "a version is not newer than itself");
 }
 
 // Each Lynovation file opened is kept, one copy per version, so an earlier
@@ -873,6 +933,40 @@ void testLynovationCatalog()
     check(model.storedFirmware().size() == 1 && model.storedFirmware()[0].version == "v1.02.00m",
           "and kept, to go back to later");
 
+    // A list entry whose file is another version is refused, nothing kept.
+    {
+        QJsonObject wrongProduct = product;
+        wrongProduct["releases"] = QJsonArray{release("v1.02.00x", "CTR2-Max_v10200n.bin", n)};
+        const QByteArray wrongJson =
+            QJsonDocument(QJsonObject{{"format", 1}, {"products", QJsonArray{wrongProduct}}}).toJson();
+        const QString wrongPath = site.filePath(QStringLiteral("wrong.json"));
+        writeFile(wrongPath, wrongJson);
+        writeFile(wrongPath + QStringLiteral(".sig"), lynovation.sign(wrongJson));
+        Ctr2MaxStockCatalog::setCatalogUrlForTesting(QUrl::fromLocalFile(wrongPath));
+        FirmwareInstallModel mislabeled(nullptr);
+        mislabeled.begin();
+        t.restart();
+        while (mislabeled.stockReleases().isEmpty() && t.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QString why;
+        QObject::connect(&mislabeled, &FirmwareInstallModel::stockDownloadFailed, &mislabeled,
+                         [&](const QString& message) { why = message; });
+        const int keptBefore = mislabeled.storedFirmware().size();
+        mislabeled.downloadStockRelease(0);
+        t.restart();
+        while (why.isEmpty() && t.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        check(why.contains(QStringLiteral("v1.02.00x")) && why.contains(QStringLiteral("v1.02.00n"))
+                  && mislabeled.storedFirmware().size() == keptBefore,
+              "a file that is not the version the list names is refused, and not kept");
+        Ctr2MaxStockCatalog::setCatalogUrlForTesting(base);
+    }
+
+    // A kept file removed from the folder is gone from the list next time.
+    QFile::remove(keptPath);
+    model.begin();
+    check(model.storedFirmware().isEmpty(), "a kept file removed by hand leaves the list");
+
     // No trusted key: the window fetches nothing.
     Ctr2MaxStockCatalog::setTrustedKeysForTesting({});
     FirmwareInstallModel unkeyed(nullptr);
@@ -891,6 +985,11 @@ void testLynovationCatalog()
 int main(int argc, char** argv)
 {
     QStandardPaths::setTestModeEnabled(true);
+    // The AetherCTR2 release list a model fetches when it begins: a file that
+    // is not there, so no test reaches the network.
+    QTemporaryDir nowhere;
+    EspFirmwareCatalog::setCatalogUrlForTesting(
+        QUrl::fromLocalFile(nowhere.filePath(QStringLiteral("none/catalog.json"))));
     QCoreApplication app(argc, argv);
     testReadFile();
     testInstallKeepsEverythingElse();
@@ -899,6 +998,7 @@ int main(int argc, char** argv)
     testReleaseAndRestore();
     testFirmwareStore();
     testRestartInto();
+    testVersionOrder();
     testLynovationCatalog();
     if (g_failures)
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

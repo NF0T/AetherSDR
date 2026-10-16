@@ -51,8 +51,20 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
             [this](const Ctr2MaxStockCatalog::Release& release, const QByteArray& image) {
                 Ctr2MaxStockFirmware firmware;
                 QString problem, kept;
-                if (!Ctr2MaxStockFirmware::read(image, &firmware, &problem)
-                    || !keepFirmware(firmware, release.file.fileName(), &kept, &problem)
+                if (!Ctr2MaxStockFirmware::read(image, &firmware, &problem)) {
+                    emit stockDownloadFailed(problem);
+                    return;
+                }
+                // The firmware is the version the signed list names.
+                if (firmware.version() != release.version) {
+                    emit stockDownloadFailed(
+                        tr("Lynovation's list names %1, but the file it points to is %2.")
+                            .arg(release.version,
+                                 firmware.version().isEmpty() ? tr("unnamed")
+                                                              : firmware.version()));
+                    return;
+                }
+                if (!keepFirmware(firmware, release.file.fileName(), &kept, &problem)
                     || !chooseStockFirmware(kept, &problem)) {
                     emit stockDownloadFailed(problem);
                     return;
@@ -72,7 +84,7 @@ FirmwareInstallModel::FirmwareInstallModel(Ctr2ProxyModel* relay, QObject* paren
         QList<Loader> out;
 #ifdef HAVE_SERIALPORT
         for (const EspFlasher::Device& d : EspFlasher::listDevices())
-            out.append({d.portName, d.serialNumber});
+            out.append({d.portName, d.serialNumber.toUpper()});   // as HID's: upper case
 #endif
         return out;
     };
@@ -228,7 +240,7 @@ void FirmwareInstallModel::poll()
     if (!found.isEmpty()) {
         device = Device::Bootloader;
         port = found.first().port;
-        mac = found.first().mac;
+        mac = found.first().mac.toUpper();   // HID serials are upper case
         loaders = found.size();
     } else if (m_hid) {
         // A CTR2-Max running firmware: AetherCTR2, installed beside the
@@ -394,7 +406,8 @@ bool FirmwareInstallModel::canInstallOverLink(QString* problem) const
 
 bool FirmwareInstallModel::takesCommands(const Target& target) const
 {
-    return target.device == Device::Stock && m_relay && !target.hidPath.isEmpty()
+    return (target.device == Device::LinkFirmware || target.device == Device::Stock) && m_relay
+           && !target.hidPath.isEmpty()
            && m_relay->usbDevicePath() == target.hidPath && m_relay->usbFirmwareCommands();
 }
 
@@ -453,8 +466,7 @@ bool FirmwareInstallModel::restart(const Target& target, bool bootloader, QStrin
         *problem = tr("Wait for the current step to finish.");
         return false;
     }
-    // AetherCTR2, or stock firmware that takes the same commands.
-    if (!m_relay || (target.device != Device::LinkFirmware && !takesCommands(target))
+    if (!m_relay || target.device == Device::None || target.device == Device::Bootloader
         || !stillTarget(target, problem)) {
         if (problem->isEmpty())
             *problem = tr("The CTR2-Max's firmware does not restart on request.");
@@ -462,6 +474,12 @@ bool FirmwareInstallModel::restart(const Target& target, bool bootloader, QStrin
     }
     if (!relayHolds(target, problem))
         return false;
+    // Firmware that takes the link's commands: AetherCTR2, or stock
+    // firmware that offers them.
+    if (!takesCommands(target)) {
+        *problem = tr("The CTR2-Max's firmware does not restart on request.");
+        return false;
+    }
     m_linkRunning = true;
     if (!m_relay->restartUsbDevice(bootloader ? Ctr2FirmwareUpdater::Restart::Bootloader
                                               : Ctr2FirmwareUpdater::Restart::OtherFirmware,
@@ -528,21 +546,32 @@ QString FirmwareInstallModel::firmwareFolder()
 
 void FirmwareInstallModel::loadStoredFirmware()
 {
+    // Each kept .bin is read once, then known by its size and time: opening
+    // the window or another file does not read them all again.
     m_stored.clear();
-    QList<QPair<QString, StoredFirmware>> found;   // version, firmware
     const QDir dir(firmwareFolder());
-    for (const QString& name : dir.entryList({QStringLiteral("*.bin")}, QDir::Files)) {
-        Ctr2MaxStockFirmware firmware;
-        QString ignored;
-        if (readFirmware(dir.filePath(name), &firmware, &ignored))
-            found.append({firmware.version(),
-                          {dir.filePath(name), nameOf(firmware, name), firmware.version()}});
+    QHash<QString, KeptFile> seen;
+    for (const QFileInfo& info : dir.entryInfoList({QStringLiteral("*.bin")}, QDir::Files)) {
+        KeptFile kept = m_keptFiles.value(info.filePath());
+        if (kept.size != info.size() || kept.modified != info.lastModified()) {
+            Ctr2MaxStockFirmware firmware;
+            QString ignored;
+            kept = {info.size(), info.lastModified(), false, {}};
+            if (readFirmware(info.filePath(), &firmware, &ignored)) {
+                kept.valid = true;
+                kept.firmware = {info.filePath(), nameOf(firmware, info.fileName()),
+                                 firmware.version()};
+            }
+        }
+        seen.insert(info.filePath(), kept);
+        if (kept.valid)
+            m_stored.append(kept.firmware);
     }
-    // Newest version first ("v1.02.00n" after "v1.02.00l", "v1.01.03").
-    std::stable_sort(found.begin(), found.end(),
-                     [](const auto& a, const auto& b) { return a.first > b.first; });
-    for (const auto& f : std::as_const(found))
-        m_stored.append(f.second);
+    m_keptFiles = seen;
+    std::stable_sort(m_stored.begin(), m_stored.end(),
+                     [](const StoredFirmware& a, const StoredFirmware& b) {
+                         return Ctr2MaxStockFirmware::newer(a.version, b.version);
+                     });
 }
 
 bool FirmwareInstallModel::openStockFirmware(const QString& path, QString* problem)
@@ -630,33 +659,28 @@ bool FirmwareInstallModel::whenInDownloadMode(const Target& target, Start start,
         *problem = tr("Wait for the current step to finish.");
         return false;
     }
-    if (!stillTarget(target, problem))
-        return false;
-    switch (target.device) {
-    case Device::Bootloader:
-        return start(target, problem);
-    case Device::LinkFirmware:
-        // AetherCTR2 restarts into download mode on request; the wait
-        // begins once it has been asked.
-        if (!restart(target, true, problem))
-            return false;
-        emit stepChanged(tr("Restarting the CTR2-Max into download mode…"));
-        break;
-    case Device::Stock:
-        if (takesCommands(target)) {   // as AetherCTR2
-            if (!restart(target, true, problem))
-                return false;
-            emit stepChanged(tr("Restarting the CTR2-Max into download mode…"));
-            break;
-        }
-        // Its stock firmware cannot be asked to: the buttons do it. It does
-        // not report its MAC, so the action goes to the one device found in
-        // download mode, and the job names it before writing.
-        emit stepChanged(tr("Waiting for the CTR2-Max in download mode…"));
-        break;
-    case Device::None:
+    if (target.device == Device::None) {
         *problem = tr("Connect the CTR2-Max with a USB cable.");
         return false;
+    }
+    // Firmware that takes the link's commands is asked to restart into
+    // download mode; other firmware needs the unit's buttons, which the
+    // window asks for. Waiting for those, the device found may already be
+    // passing through a restart: the action goes to the one device found in
+    // download mode, and the job names it before writing.
+    const bool buttons = target.device != Device::Bootloader && !takesCommands(target);
+    if (!buttons && !stillTarget(target, problem))
+        return false;
+    if (target.device == Device::Bootloader)
+        return start(target, problem);
+    if (!buttons) {
+        if (!restart(target, true, problem))
+            return false;
+        if (!m_linkRunning)
+            return true;   // the request failed at once, and said so
+        emit stepChanged(tr("Restarting the CTR2-Max into download mode…"));
+    } else {
+        emit stepChanged(tr("Waiting for the CTR2-Max in download mode…"));
     }
     m_waiting = true;
     m_waitStart = std::move(start);
@@ -704,9 +728,10 @@ bool FirmwareInstallModel::restartInto(const Target& target, Firmware firmware, 
         *problem = tr("The CTR2-Max already runs it.");
         return false;
     }
-    // AetherCTR2, and stock firmware that takes the link's commands, restart
-    // on request: into the other firmware (SWITCH) or download mode.
-    if (target.device == Device::LinkFirmware || takesCommands(target))
+    // Firmware that takes the link's commands (AetherCTR2, and stock
+    // firmware offering them) restarts on request: into the other firmware
+    // (SWITCH) or download mode.
+    if (takesCommands(target))
         return restart(target, firmware == Firmware::Bootloader, problem);
     if (firmware == Firmware::Bootloader) {
         *problem = tr("Put the CTR2-Max in download mode with its BOOT and RESET buttons.");
@@ -743,7 +768,7 @@ bool FirmwareInstallModel::restoreBackup(const Target& target, const QString& pa
 void FirmwareInstallModel::startWhenInDownloadMode()
 {
     if (!m_waiting || working() || m_device != Device::Bootloader || m_loaderCount != 1
-        || (!m_waitMac.isEmpty() && m_mac != m_waitMac)) {
+        || (!m_waitMac.isEmpty() && m_mac.compare(m_waitMac, Qt::CaseInsensitive) != 0)) {
         m_waitSeen = 0;
         return;
     }
@@ -784,22 +809,29 @@ bool FirmwareInstallModel::startInstall(const Target& target,
 
 QList<FirmwareInstallModel::Backup> FirmwareInstallModel::backups() const
 {
-    // Only the backups made here, by name: flash-backup-<MAC>-<date>-<time>.bin.
-    static const QRegularExpression made(
-        QStringLiteral("^flash-backup-([0-9A-F]{12})-(\\d{8}-\\d{6})\\.bin$"));
-    const QString want = QString(m_mac).remove(QLatin1Char(':'));
+    // Every backup with its description beside it (<backup>.json, which
+    // names the device): those made here, and those saved by hand with Back
+    // Up in earlier versions, which suggested the Documents folder itself.
+    // A restore checks the file against its description, and the device.
+    const QString want = m_mac.toUpper();
     QList<Backup> out;
-    const QDir dir(backupFolder());
-    for (const QString& name : dir.entryList({QStringLiteral("flash-backup-*.bin")}, QDir::Files,
-                                             QDir::Name | QDir::Reversed)) {
-        const QRegularExpressionMatch m = made.match(name);
-        if (!m.hasMatch() || (!want.isEmpty() && m.captured(1) != want)
-            || !QFile::exists(dir.filePath(name + QStringLiteral(".json"))))
-            continue;
-        const QString mac = QString::fromLatin1(
-            QByteArray::fromHex(m.captured(1).toLatin1()).toHex(':')).toUpper();
-        out.append({dir.filePath(name), mac,
-                    QDateTime::fromString(m.captured(2), QStringLiteral("yyyyMMdd-HHmmss"))});
+    QStringList seen;
+    const QDir folder(backupFolder());
+    for (const QDir& dir : {folder, QDir(QFileInfo(folder.path()).path())}) {
+        for (const QFileInfo& file : dir.entryInfoList({QStringLiteral("*.bin")}, QDir::Files)) {
+            const QString path = file.absoluteFilePath();
+            if (seen.contains(path) || !QFile::exists(path + QStringLiteral(".json")))
+                continue;
+            seen.append(path);
+            EspFirmwareJob::BackupInfo info;
+            QString ignored;
+            if (!EspFirmwareJob::readBackupInfo(path, &info, &ignored))
+                continue;
+            const QString mac = QString::fromLatin1(info.mac.toHex(':')).toUpper();
+            if (!want.isEmpty() && mac != want)
+                continue;
+            out.append({path, mac, file.lastModified()});
+        }
     }
     // Newest first, across devices too.
     std::stable_sort(out.begin(), out.end(),

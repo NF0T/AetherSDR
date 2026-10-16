@@ -241,6 +241,23 @@ bool Ctr2MaxStockFirmware::read(const QByteArray& file, Ctr2MaxStockFirmware* ou
     return true;
 }
 
+bool Ctr2MaxStockFirmware::newer(const QString& a, const QString& b)
+{
+    static const QRegularExpression kShape(QStringLiteral("^v(\\d+)\\.(\\d+)\\.(\\d+)([a-z]?)$"));
+    if (a.isEmpty() || b.isEmpty())
+        return !a.isEmpty() && b.isEmpty();
+    const QRegularExpressionMatch ma = kShape.match(a);
+    const QRegularExpressionMatch mb = kShape.match(b);
+    if (!ma.hasMatch() || !mb.hasMatch())
+        return a > b;
+    for (int i = 1; i <= 3; ++i) {
+        const int x = ma.captured(i).toInt(), y = mb.captured(i).toInt();
+        if (x != y)
+            return x > y;
+    }
+    return ma.captured(4) > mb.captured(4);
+}
+
 bool Ctr2MaxStockFirmware::plan(const QByteArray& unitTable, quint32 flashSize,
                                 EspFirmwareManifest* manifest, QHash<QString, QByteArray>* files,
                                 QString* problem) const
