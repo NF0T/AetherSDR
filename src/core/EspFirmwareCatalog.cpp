@@ -181,17 +181,23 @@ bool EspFirmwareCatalog::unpack(const QByteArray& package, QHash<QString, QByteA
 
 bool EspFirmwareCatalog::verify(const QByteArray& manifest, const QByteArray& signature)
 {
+    return verifyWith(trustedKeys(), manifest, signature);
+}
+
+bool EspFirmwareCatalog::verifyWith(const QList<QByteArray>& keys, const QByteArray& message,
+                                    const QByteArray& signature)
+{
     QByteArray sig = signature;
     if (sig.size() != 64)
         sig = QByteArray::fromBase64(signature.trimmed());
     if (sig.size() != 64)
         return false;
-    for (const QByteArray& key : trustedKeys()) {
+    for (const QByteArray& key : keys) {
         if (key.size() == 32
             && crypto_ed25519_check(reinterpret_cast<const uint8_t*>(sig.constData()),
                                     reinterpret_cast<const uint8_t*>(key.constData()),
-                                    reinterpret_cast<const uint8_t*>(manifest.constData()),
-                                    static_cast<size_t>(manifest.size()))
+                                    reinterpret_cast<const uint8_t*>(message.constData()),
+                                    static_cast<size_t>(message.size()))
                    == 0)
             return true;
     }

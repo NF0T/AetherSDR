@@ -59,6 +59,10 @@ struct EspFirmwareCatalog {
     // Whether signature (64 bytes, or their base64) is a trusted key's
     // Ed25519 signature of manifest.
     static bool verify(const QByteArray& manifest, const QByteArray& signature);
+    // Whether signature (64 bytes, or their base64) is an Ed25519 signature
+    // of message by one of keys (32 bytes each).
+    static bool verifyWith(const QList<QByteArray>& keys, const QByteArray& message,
+                           const QByteArray& signature);
     // The firmware-release public keys (32 bytes each): those built in. A
     // build configured with AETHER_FIRMWARE_DEV_OVERRIDES also trusts any
     // given as hex in AETHER_FIRMWARE_TRUST_KEYS (comma-separated), for
