@@ -242,7 +242,7 @@ option(AETHER_HL2_TX_TXA
 # firmware from aethersdr.com signed by a key built into it.
 option(AETHER_FIRMWARE_DEV_OVERRIDES
        "Honor the AETHER_FIRMWARE_CATALOG and AETHER_FIRMWARE_TRUST_KEYS environment overrides (testing only)"
-       OFF)
+       ON)   # Lynovation test build only: never merged
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
