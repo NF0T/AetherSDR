@@ -690,11 +690,23 @@ void MainWindow::activateRADEV2(int sliceId)
     // and returns before the Opus voice path. V2 wants exactly that and
     // nothing else — the modulated audio goes out our own waveform stream, so
     // sendModemTxAudio()/dax_tx is never involved.
+    // Restore client-side mic gain for RADE. The radio's mic input is unused in
+    // RADE mode so PcMicGain applies regardless of the current mic_selection.
+    {
+        const int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
+        m_audio->setPcMicGain(gain);
+    }
+
+    // Start mic capture if not already running
+    if (!m_audio->isTxStreaming()) {
+        audioStartTx(m_radioModel.radioAddress(), 4991);
+    }
+
     m_audio->setRadeMode(true);
     connect(m_audio, &AudioEngine::txRawPcmReady,
             m_radeV2Engine, &RADEV2Engine::feedTxAudio, Qt::QueuedConnection);
 
-    // ─── PTT ───────────────────────────────────────────────────────────────
+    // ─── PTT & TxCoordinator authority ────────────────────────────────────
     //
     // The contract from §7.1 T3: after the operator unkeys, the ~120 ms EOO
     // tail still has to go out, and it cannot ride the normal pump because the
@@ -711,6 +723,11 @@ void MainWindow::activateRADEV2(int sliceId)
         // Captured, not reconstructed later: the release carries the fence for
         // this specific over (TransmitModel.h's own warning).
         m_radeV2PttRelease = std::move(release);
+        if (m_audio) {
+            QMetaObject::invokeMethod(m_audio, [audio = m_audio] {
+                audio->setRawMicrophoneContext({});
+            }, Qt::QueuedConnection);
+        }
         QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
             m_radeV2Engine->endTx();
         }, Qt::QueuedConnection);
@@ -726,6 +743,12 @@ void MainWindow::activateRADEV2(int sliceId)
         m_radeV2UnkeyPending = false;
         m_radeV2TxActive = false;
 
+        if (m_audio) {
+            QMetaObject::invokeMethod(m_audio, [audio = m_audio] {
+                audio->setRawMicrophoneContext({});
+            }, Qt::QueuedConnection);
+        }
+
         // Prefer the captured release: it is fenced to the over whose tail just
         // drained, so it is a no-op if that over has already been superseded.
         // setTransmit(false) is the fallback for an unkey that was never
@@ -740,22 +763,45 @@ void MainWindow::activateRADEV2(int sliceId)
         }
     });
 
-    // Layer 3 — MOX edges. Key: reset the codec for a new over (§7.1 T9's
+    // Layer 3 — MOX edges and PTT intent. Key: acquire media authority from
+    // TxCoordinator (#5659) and reset the codec for a new over (§7.1 T9's
     // fourth obligation lives inside beginTx() — flush() is terminal, so the
     // resampler must be reset or the SECOND over is silent). Unkey without an
     // interception (hardware PTT, interlock) still has to drain the tail.
+    const TxCoordinator::Producer radeV2Producer = m_radioModel.registerTxProducer(m_radeV2Engine);
+    const auto beginOver = [this, radeV2Producer] {
+        if (!m_radeV2Engine || !m_radeV2Transport) return;
+        if (m_radeV2TxActive && !m_radeV2UnkeyPending) return;
+
+        m_radeV2TxActive = true;
+        m_radeV2UnkeyPending = false;
+        m_radeV2Transport->beginTx();
+
+        const TxCoordinator::Context context = m_radioModel.captureTxMedia(radeV2Producer);
+        if (m_audio) {
+            QMetaObject::invokeMethod(m_audio, [audio = m_audio, context] {
+                audio->setRawMicrophoneContext(context);
+            }, Qt::QueuedConnection);
+        }
+
+        QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
+            m_radeV2Engine->beginTx();
+        }, Qt::QueuedConnection);
+    };
+
+    m_radeV2PttIntentConn = connect(&m_radioModel, &RadioModel::localTransmitEngaged, this, beginOver);
     m_radeV2MoxConn = connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-                              this, [this](bool tx) {
+                              this, [this, beginOver](bool tx) {
         if (!m_radeV2Engine || !m_radeV2Transport) return;
         if (tx) {
-            m_radeV2TxActive = true;
-            m_radeV2UnkeyPending = false;
-            m_radeV2Transport->beginTx();
-            QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
-                m_radeV2Engine->beginTx();
-            }, Qt::QueuedConnection);
+            beginOver();
         } else if (!m_radeV2UnkeyPending && m_radeV2TxActive) {
             m_radeV2UnkeyPending = true;
+            if (m_audio) {
+                QMetaObject::invokeMethod(m_audio, [audio = m_audio] {
+                    audio->setRawMicrophoneContext({});
+                }, Qt::QueuedConnection);
+            }
             QMetaObject::invokeMethod(m_radeV2Engine, [this]() {
                 m_radeV2Engine->endTx();
             }, Qt::QueuedConnection);
@@ -849,12 +895,23 @@ void MainWindow::deactivateRADEV2()
     }
 
     m_radioModel.transmitModel().clearPttOffHook();
+    disconnect(m_radeV2PttIntentConn);
     disconnect(m_radeV2MoxConn);
     disconnect(m_radeV2ModeConn);
     m_radeV2UnkeyPending = false;
     m_radeV2TxActive = false;
 
+    // For hardware mics, reset to full gain — the radio controls hardware levels.
+    // PC mic keeps its PcMicGain so SSB sessions are unaffected.
+    if (m_radioModel.transmitModel().micSelection() != "PC") {
+        m_audio->setPcMicGain(100);
+        if (m_audio->isTxStreaming()) {
+            audioStopTx();
+        }
+    }
+
     if (m_audio) {
+        m_audio->setRawMicrophoneContext({});
         m_audio->setRadeMode(false);
         if (m_radeV2Engine)
             disconnect(m_audio, &AudioEngine::txRawPcmReady, m_radeV2Engine, nullptr);
