@@ -2313,6 +2313,7 @@ private:
     // V2 tail was still draining. Empty when the unkey was not intercepted
     // (hardware PTT, interlock), which Layer 2 handles separately.
     TransmitModel::PttRelease m_radeV2PttRelease;
+    QMetaObject::Connection m_radeV2PttIntentConn;
     QMetaObject::Connection m_radeV2MoxConn;
     QMetaObject::Connection m_radeV2ModeConn;
     // Registration is SEPARATE from activation, and the order is forced: the
